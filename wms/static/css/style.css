@@ -51,6 +51,37 @@ body {
 .badge-status-open { background-color: #6c757d; }
 .badge-status-stored { background-color: #0d6efd; }
 
+/* ---- Мобильный экран ---- */
+
+/* Широкие таблицы не должны ломать верстку на телефоне — скроллим по горизонтали */
+@media (max-width: 767.98px) {
+  .card .table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Крупнее тап-зоны на маленьком экране */
+  .btn {
+    min-height: 38px;
+  }
+
+  h3 {
+    font-size: 1.35rem;
+  }
+}
+
+/* Кнопка камеры рядом с полем сканирования — не должна сжиматься */
+[data-camera-scan-target] {
+  flex: 0 0 auto;
+}
+
+#cameraScanReader video {
+  width: 100% !important;
+  border-radius: .375rem;
+}
+
 /* ---- Печать этикеток 58x40мм ---- */
 @page {
   size: 58mm 40mm;

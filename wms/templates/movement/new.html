@@ -12,7 +12,10 @@
     <form method="post">
       <div class="mb-3">
         <label class="form-label">Короб (отсканируйте или введите номер)</label>
-        <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg" required autofocus>
+        <div class="d-flex gap-2">
+          <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg" required autofocus>
+          <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#boxNumberInput" title="Сканировать камерой">📷</button>
+        </div>
         <div id="boxInfo" class="small text-muted mt-1"></div>
       </div>
       <div class="mb-3">
@@ -25,7 +28,10 @@
       </div>
       <div class="mb-3">
         <label class="form-label">Ячейка назначения (отсканируйте / введите код, необязательно)</label>
-        <input type="text" name="to_cell_code" class="form-control">
+        <div class="d-flex gap-2">
+          <input type="text" name="to_cell_code" id="toCellCodeInput" class="form-control">
+          <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#toCellCodeInput" title="Сканировать камерой">📷</button>
+        </div>
       </div>
       <button type="submit" class="btn btn-primary">Переместить</button>
     </form>

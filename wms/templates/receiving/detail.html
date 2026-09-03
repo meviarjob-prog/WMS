@@ -25,7 +25,10 @@
   <div class="col-md-5">
     <div class="card p-3">
       <h5>Сканировать штрихкод товара</h5>
-      <input type="text" id="scanInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод и нажмите Enter" autofocus>
+      <div class="d-flex gap-2">
+        <input type="text" id="scanInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод и нажмите Enter" autofocus>
+        <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#scanInput" title="Сканировать камерой телефона">📷</button>
+      </div>
       <div id="scanResult" class="small mt-2"></div>
     </div>
   </div>
@@ -129,7 +132,8 @@
 
     {% if doc.status == 'draft' and not box.cell %}
     <form method="post" action="{{ url_for('receiving.place_box', doc_id=doc.id, box_id=box.id) }}" class="d-flex gap-2">
-      <input type="text" name="cell_code" class="form-control form-control-sm" placeholder="Отсканируйте / введите код ячейки" style="max-width:280px" required>
+      <input type="text" id="cellCodeInput{{ box.id }}" name="cell_code" class="form-control form-control-sm" placeholder="Отсканируйте / введите код ячейки" style="max-width:280px" required>
+      <button type="button" class="btn btn-sm btn-outline-primary" data-camera-scan-target="#cellCodeInput{{ box.id }}" title="Сканировать камерой">📷</button>
       <button type="submit" class="btn btn-sm btn-primary">Разместить в ячейке</button>
     </form>
     {% endif %}
