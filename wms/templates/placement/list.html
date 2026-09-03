@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Размещение{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h3 class="mb-0">Размещение товара</h3>
+  <a class="btn btn-primary" href="{{ url_for('placement.new_document') }}">➕ Новое размещение</a>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Неразмещенный остаток по складам</h5>
+      <p class="text-muted small">Принятый товар, который еще не упакован в короба и не расставлен по ячейкам.</p>
+      <table class="table table-sm">
+        <thead><tr><th>Склад</th><th>Товар</th><th>Кол-во</th></tr></thead>
+        <tbody>
+        {% for row in stock_rows %}
+          <tr>
+            <td>{{ row.warehouse.name }}</td>
+            <td>{{ row.nomenclature.name }}</td>
+            <td>{{ row.qty }} {{ row.nomenclature.unit }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="text-muted">Неразмещенных остатков нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Короба без ячейки</h5>
+      <p class="text-muted small">Уже упакованы, но не расставлены (например, приехали перемещением). Разместите сразу здесь.</p>
+      <table class="table table-sm">
+        <thead><tr><th>Короб</th><th>Склад</th><th>Разместить</th></tr></thead>
+        <tbody>
+        {% for box in open_boxes %}
+          <tr>
+            <td>{{ box.box_number }}</td>
+            <td>{{ box.warehouse.name }}</td>
+            <td>
+              <form method="post" action="{{ url_for('placement.place_box_standalone', box_id=box.id) }}" class="d-flex gap-1">
+                <input type="hidden" name="next" value="{{ url_for('placement.list_documents') }}">
+                <input type="text" name="cell_code" class="form-control form-control-sm" placeholder="Код ячейки" required style="max-width:140px">
+                <button type="submit" class="btn btn-sm btn-outline-primary">OK</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="text-muted">Все короба размещены</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card p-3">
+  <h5>Документы размещения</h5>
+  <table class="table">
+    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
+    <tbody>
+    {% for d in documents %}
+      <tr>
+        <td>{{ d.number }}</td>
+        <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ d.warehouse.name }}</td>
+        <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
+        <td>
+          <a href="{{ url_for('placement.detail', doc_id=d.id) }}">Открыть</a>
+          · <a href="{{ url_for('placement.export_document', doc_id=d.id) }}">Excel</a>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">Документов еще нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

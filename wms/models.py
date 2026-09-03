@@ -61,6 +61,45 @@ class Nomenclature(db.Model):
         return f"<Nomenclature {self.sku} {self.name}>"
 
 
+class UnplacedStock(db.Model):
+    """Остаток принятого, но еще не размещенного в коробах/ячейках товара
+    по складу в целом (без привязки к конкретному документу приемки)."""
+
+    __tablename__ = "unplaced_stock"
+
+    id = db.Column(db.Integer, primary_key=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
+    qty = db.Column(db.Float, nullable=False, default=0)
+
+    warehouse = db.relationship("Warehouse")
+    nomenclature = db.relationship("Nomenclature")
+
+    __table_args__ = (
+        db.UniqueConstraint("warehouse_id", "nomenclature_id", name="uq_unplaced_wh_item"),
+    )
+
+    @staticmethod
+    def add(warehouse_id, nomenclature_id, qty):
+        row = UnplacedStock.query.filter_by(
+            warehouse_id=warehouse_id, nomenclature_id=nomenclature_id
+        ).first()
+        if row is None:
+            row = UnplacedStock(
+                warehouse_id=warehouse_id, nomenclature_id=nomenclature_id, qty=0
+            )
+            db.session.add(row)
+        row.qty += qty
+        return row
+
+    @staticmethod
+    def available(warehouse_id, nomenclature_id):
+        row = UnplacedStock.query.filter_by(
+            warehouse_id=warehouse_id, nomenclature_id=nomenclature_id
+        ).first()
+        return row.qty if row else 0
+
+
 class Box(db.Model):
     __tablename__ = "boxes"
 
@@ -68,8 +107,8 @@ class Box(db.Model):
     box_number = db.Column(db.String(30), unique=True, nullable=False)
     warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"), nullable=True)
-    receiving_document_id = db.Column(
-        db.Integer, db.ForeignKey("receiving_documents.id"), nullable=True
+    placement_document_id = db.Column(
+        db.Integer, db.ForeignKey("placement_documents.id"), nullable=True
     )
     status = db.Column(db.String(20), nullable=False, default="open")  # open | stored
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -98,6 +137,10 @@ class BoxItem(db.Model):
 
 
 class ReceivingDocument(db.Model):
+    """Приемка товара — только количество по позициям, без коробов и ячеек.
+    Размещение принятого товара в короба/ячейки выполняется отдельной
+    операцией «Размещение» (см. PlacementDocument)."""
+
     __tablename__ = "receiving_documents"
 
     id = db.Column(db.Integer, primary_key=True)
@@ -111,10 +154,6 @@ class ReceivingDocument(db.Model):
     warehouse = db.relationship("Warehouse")
     lines = db.relationship(
         "ReceivingLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
-    )
-    boxes = db.relationship(
-        "Box", backref="receiving_document", lazy="dynamic",
-        foreign_keys="Box.receiving_document_id",
     )
 
     def total_qty(self):
@@ -130,6 +169,46 @@ class ReceivingLine(db.Model):
     )
     nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
     qty = db.Column(db.Float, nullable=False, default=0)
+
+    nomenclature = db.relationship("Nomenclature")
+
+
+class PlacementDocument(db.Model):
+    """Размещение товара: берет общий неразмещенный остаток по складу,
+    упаковывает в короба и расставляет короба по ячейкам. Не привязано к
+    конкретному документу приемки."""
+
+    __tablename__ = "placement_documents"
+
+    id = db.Column(db.Integer, primary_key=True)
+    number = db.Column(db.String(30), unique=True, nullable=False)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+
+    warehouse = db.relationship("Warehouse")
+    lines = db.relationship(
+        "PlacementLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
+    )
+    boxes = db.relationship(
+        "Box", backref="placement_document", lazy="dynamic",
+        foreign_keys="Box.placement_document_id",
+    )
+
+
+class PlacementLine(db.Model):
+    """Позиция размещения: часть неразмещенного остатка, взятая под упаковку
+    в короб. box_id проставляется в момент упаковки в конкретный короб."""
+
+    __tablename__ = "placement_lines"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(
+        db.Integer, db.ForeignKey("placement_documents.id"), nullable=False
+    )
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
+    qty = db.Column(db.Float, nullable=False, default=0)
     box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=True)
 
     nomenclature = db.relationship("Nomenclature")
@@ -137,21 +216,42 @@ class ReceivingLine(db.Model):
 
 
 class MovementDocument(db.Model):
+    """Перемещение — список коробов, едущих на один склад назначения.
+    Короба сканируются и добавляются в список по одному; весь товар внутри
+    короба переезжает вместе с ним."""
+
     __tablename__ = "movement_documents"
 
     id = db.Column(db.Integer, primary_key=True)
     number = db.Column(db.String(30), unique=True, nullable=False)
+    to_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+
+    to_warehouse = db.relationship("Warehouse")
+    lines = db.relationship(
+        "MovementLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
+    )
+
+
+class MovementLine(db.Model):
+    """Один отсканированный короб в списке перемещения. from_* — снимок
+    расположения короба на момент сканирования, to_cell_id — ячейка
+    назначения на складе документа (можно указать сразу или позже, до
+    завершения документа)."""
+
+    __tablename__ = "movement_lines"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("movement_documents.id"), nullable=False)
     box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=False)
 
     from_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"))
     from_cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"))
-    to_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     to_cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"))
-
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     box = db.relationship("Box")
     from_warehouse = db.relationship("Warehouse", foreign_keys=[from_warehouse_id])
-    to_warehouse = db.relationship("Warehouse", foreign_keys=[to_warehouse_id])
     from_cell = db.relationship("Cell", foreign_keys=[from_cell_id])
     to_cell = db.relationship("Cell", foreign_keys=[to_cell_id])

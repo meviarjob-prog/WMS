@@ -1,7 +1,9 @@
+from datetime import datetime
+
 from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
 
 from ..extensions import db
-from ..models import Box, Cell, MovementDocument, Warehouse
+from ..models import Box, Cell, MovementDocument, MovementLine, Warehouse
 from ..utils.excel_io import export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
@@ -16,55 +18,136 @@ def list_documents():
 
 
 @bp.route("/new", methods=["GET", "POST"])
-def new_movement():
-    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
-
+def new_document():
     if request.method == "GET":
+        warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
         return render_template("movement/new.html", warehouses=warehouses)
 
-    box_number = request.form.get("box_number", "").strip()
     to_warehouse_id = request.form.get("to_warehouse_id", type=int)
-    to_cell_code = request.form.get("to_cell_code", "").strip()
-
-    box = Box.query.filter_by(box_number=box_number).first()
-    if not box:
-        flash(f"Короб '{box_number}' не найден", "danger")
-        return render_template("movement/new.html", warehouses=warehouses)
-
     if not to_warehouse_id:
         flash("Выберите склад назначения", "danger")
-        return render_template("movement/new.html", warehouses=warehouses)
+        return redirect(url_for("movement.new_document"))
 
-    to_cell = None
-    if to_cell_code:
-        to_cell = Cell.query.filter_by(warehouse_id=to_warehouse_id, code=to_cell_code).first()
-        if not to_cell:
-            flash(f"Ячейка '{to_cell_code}' не найдена на выбранном складе", "danger")
-            return render_template("movement/new.html", warehouses=warehouses)
-
-    doc = MovementDocument(
-        number=next_number("movement"),
-        box_id=box.id,
-        from_warehouse_id=box.warehouse_id,
-        from_cell_id=box.cell_id,
-        to_warehouse_id=to_warehouse_id,
-        to_cell_id=to_cell.id if to_cell else None,
-    )
+    doc = MovementDocument(number=next_number("movement"), to_warehouse_id=to_warehouse_id)
     db.session.add(doc)
-
-    box.warehouse_id = to_warehouse_id
-    box.cell_id = to_cell.id if to_cell else None
-    box.status = "stored" if to_cell else "open"
-
     db.session.commit()
-    flash(f"Перемещение {doc.number} выполнено", "success")
+    flash(f"Список перемещения {doc.number} создан — сканируйте короба", "success")
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
 @bp.route("/<int:doc_id>")
 def detail(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)
-    return render_template("movement/detail.html", doc=doc)
+    lines = doc.lines.order_by(MovementLine.id.asc()).all()
+    return render_template("movement/detail.html", doc=doc, lines=lines)
+
+
+@bp.route("/<int:doc_id>/boxes/add", methods=["POST"])
+def add_box(doc_id):
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status != "draft":
+        flash("Документ уже завершен", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    box_number = request.form.get("box_number", "").strip()
+    box = Box.query.filter_by(box_number=box_number).first()
+    if not box:
+        flash(f"Короб '{box_number}' не найден", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if box.warehouse_id == doc.to_warehouse_id:
+        flash(
+            f"Короб {box.box_number} уже на складе «{doc.to_warehouse.name}». "
+            f"Для перестановки внутри склада используйте «Размещение».",
+            "danger",
+        )
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if doc.lines.filter_by(box_id=box.id).first():
+        flash(f"Короб {box.box_number} уже в этом списке", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    line = MovementLine(
+        document_id=doc.id,
+        box_id=box.id,
+        from_warehouse_id=box.warehouse_id,
+        from_cell_id=box.cell_id,
+    )
+    db.session.add(line)
+    db.session.commit()
+    flash(f"Короб {box.box_number} добавлен в список перемещения", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+@bp.route("/<int:doc_id>/lines/<int:line_id>/delete", methods=["POST"])
+def delete_line(doc_id, line_id):
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status != "draft":
+        flash("Документ уже завершен", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc_id))
+
+    line = MovementLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
+    db.session.delete(line)
+    db.session.commit()
+    return redirect(url_for("movement.detail", doc_id=doc_id))
+
+
+@bp.route("/<int:doc_id>/lines/<int:line_id>/set-cell", methods=["POST"])
+def set_cell(doc_id, line_id):
+    doc = MovementDocument.query.get_or_404(doc_id)
+    line = MovementLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
+
+    cell_code = request.form.get("cell_code", "").strip()
+    if not cell_code:
+        line.to_cell_id = None
+        db.session.commit()
+        return redirect(url_for("movement.detail", doc_id=doc_id))
+
+    cell = Cell.query.filter_by(warehouse_id=doc.to_warehouse_id, code=cell_code).first()
+    if not cell:
+        flash(f"Ячейка '{cell_code}' не найдена на складе «{doc.to_warehouse.name}»", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc_id))
+
+    line.to_cell_id = cell.id
+    db.session.commit()
+    flash(f"Короб {line.box.box_number}: ячейка назначения — {cell.code}", "success")
+    return redirect(url_for("movement.detail", doc_id=doc_id))
+
+
+@bp.route("/<int:doc_id>/complete", methods=["POST"])
+def complete(doc_id):
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status != "draft":
+        flash("Документ уже завершен", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if doc.lines.count() == 0:
+        flash("В списке нет коробов", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    for line in doc.lines:
+        box = line.box
+        box.warehouse_id = doc.to_warehouse_id
+        box.cell_id = line.to_cell_id
+        box.status = "stored" if line.to_cell_id else "open"
+
+    doc.status = "completed"
+    doc.completed_at = datetime.utcnow()
+    db.session.commit()
+    flash(f"Перемещение {doc.number} завершено — {doc.lines.count()} короб(ов)", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+@bp.route("/<int:doc_id>/export.xlsx")
+def export_document(doc_id):
+    doc = MovementDocument.query.get_or_404(doc_id)
+    data = export_movement_to_excel([doc])
+    fname = f"{doc.number}_{timestamp_for_filename()}.xlsx"
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": content_disposition(fname)},
+    )
 
 
 @bp.route("/export.xlsx")

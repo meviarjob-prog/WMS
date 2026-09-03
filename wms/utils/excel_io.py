@@ -130,8 +130,6 @@ RECEIVING_HEADERS = [
     "Наименование",
     "Кол-во",
     "Ед. изм.",
-    "Короб",
-    "Ячейка",
 ]
 
 
@@ -157,6 +155,50 @@ def export_receiving_to_excel(documents) -> bytes:
                     line.nomenclature.name if line.nomenclature else "",
                     line.qty,
                     line.nomenclature.unit if line.nomenclature else "",
+                ]
+            )
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+PLACEMENT_HEADERS = [
+    "Номер документа",
+    "Дата",
+    "Склад",
+    "Статус",
+    "Артикул",
+    "Штрихкод",
+    "Наименование",
+    "Кол-во",
+    "Ед. изм.",
+    "Короб",
+    "Ячейка",
+]
+
+
+def export_placement_to_excel(documents) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Размещение"
+    _style_header(ws, PLACEMENT_HEADERS)
+
+    status_map = {"draft": "Черновик", "completed": "Завершен"}
+
+    for doc in documents:
+        for line in doc.lines:
+            ws.append(
+                [
+                    doc.number,
+                    doc.created_at.strftime("%Y-%m-%d %H:%M") if doc.created_at else "",
+                    doc.warehouse.name if doc.warehouse else "",
+                    status_map.get(doc.status, doc.status),
+                    line.nomenclature.sku if line.nomenclature else "",
+                    line.nomenclature.barcode if line.nomenclature else "",
+                    line.nomenclature.name if line.nomenclature else "",
+                    line.qty,
+                    line.nomenclature.unit if line.nomenclature else "",
                     line.box.box_number if line.box else "",
                     line.box.cell.code if (line.box and line.box.cell) else "",
                 ]
@@ -170,7 +212,13 @@ def export_receiving_to_excel(documents) -> bytes:
 MOVEMENT_HEADERS = [
     "Номер документа",
     "Дата",
+    "Статус",
     "Короб",
+    "Артикул",
+    "Штрихкод",
+    "Наименование",
+    "Кол-во",
+    "Ед. изм.",
     "Склад-источник",
     "Ячейка-источник",
     "Склад-назначение",
@@ -179,23 +227,37 @@ MOVEMENT_HEADERS = [
 
 
 def export_movement_to_excel(documents) -> bytes:
+    """Одна строка на каждый товар в каждом коробе документа перемещения —
+    короб сканируется целиком, но в отчете видно содержимое."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Перемещения"
     _style_header(ws, MOVEMENT_HEADERS)
 
+    status_map = {"draft": "Черновик", "completed": "Завершен"}
+
     for doc in documents:
-        ws.append(
-            [
-                doc.number,
-                doc.created_at.strftime("%Y-%m-%d %H:%M") if doc.created_at else "",
-                doc.box.box_number if doc.box else "",
-                doc.from_warehouse.name if doc.from_warehouse else "",
-                doc.from_cell.code if doc.from_cell else "",
-                doc.to_warehouse.name if doc.to_warehouse else "",
-                doc.to_cell.code if doc.to_cell else "",
-            ]
-        )
+        for line in doc.lines:
+            box_items = list(line.box.items) if line.box else []
+            rows = box_items or [None]
+            for box_item in rows:
+                ws.append(
+                    [
+                        doc.number,
+                        doc.created_at.strftime("%Y-%m-%d %H:%M") if doc.created_at else "",
+                        status_map.get(doc.status, doc.status),
+                        line.box.box_number if line.box else "",
+                        box_item.nomenclature.sku if box_item else "",
+                        box_item.nomenclature.barcode if box_item else "",
+                        box_item.nomenclature.name if box_item else "",
+                        box_item.qty if box_item else "",
+                        box_item.nomenclature.unit if box_item else "",
+                        line.from_warehouse.name if line.from_warehouse else "",
+                        line.from_cell.code if line.from_cell else "",
+                        doc.to_warehouse.name if doc.to_warehouse else "",
+                        line.to_cell.code if line.to_cell else "",
+                    ]
+                )
 
     buffer = io.BytesIO()
     wb.save(buffer)

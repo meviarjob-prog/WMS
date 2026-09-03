@@ -32,6 +32,32 @@
 
   <div class="col-md-6">
     <div class="card p-3">
+      <h5>Размещение товара</h5>
+      <form method="get" action="{{ url_for('reports.placement_report') }}" class="row g-2">
+        <div class="col-12">
+          <label class="form-label">Склад</label>
+          <select name="warehouse_id" class="form-select">
+            <option value="">Все склады</option>
+            {% for wh in warehouses %}<option value="{{ wh.id }}">{{ wh.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="col-6">
+          <label class="form-label">С даты</label>
+          <input type="date" name="date_from" class="form-control">
+        </div>
+        <div class="col-6">
+          <label class="form-label">По дату</label>
+          <input type="date" name="date_to" class="form-control">
+        </div>
+        <div class="col-12 mt-3">
+          <button type="submit" class="btn btn-primary">📤 Выгрузить в Excel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card p-3">
       <h5>Перемещения товара</h5>
       <form method="get" action="{{ url_for('reports.movement_report') }}" class="row g-2">
         <div class="col-12">

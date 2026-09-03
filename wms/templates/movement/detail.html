@@ -2,18 +2,90 @@
 {% block title %}Перемещение {{ doc.number }}{% endblock %}
 {% block content %}
 <p><a href="{{ url_for('movement.list_documents') }}">&larr; Перемещение</a></p>
-<h3 class="mb-4">Перемещение {{ doc.number }}</h3>
 
-<div class="card p-3" style="max-width:640px">
-  <table class="table table-sm mb-3">
-    <tr><th>Дата</th><td>{{ doc.created_at.strftime('%d.%m.%Y %H:%M') }}</td></tr>
-    <tr><th>Короб</th><td>{{ doc.box.box_number }}</td></tr>
-    <tr><th>Откуда</th><td>{{ doc.from_warehouse.name if doc.from_warehouse else '—' }}{% if doc.from_cell %} / {{ doc.from_cell.code }}{% endif %}</td></tr>
-    <tr><th>Куда</th><td>{{ doc.to_warehouse.name }}{% if doc.to_cell %} / {{ doc.to_cell.code }}{% endif %}</td></tr>
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h3 class="mb-1">Перемещение {{ doc.number }}
+      <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
+    </h3>
+    <div class="text-muted">Склад назначения: {{ doc.to_warehouse.name }}</div>
+  </div>
+  <div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
+    {% if doc.status == 'draft' %}
+    <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
+      <button type="submit" class="btn btn-success">✅ Завершить перемещение</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if doc.status == 'draft' %}
+<div class="card p-3 mb-4">
+  <h5>Сканировать короб</h5>
+  <p class="text-muted small mb-2">Весь товар внутри короба поедет вместе с ним на склад «{{ doc.to_warehouse.name }}».</p>
+  <form method="post" action="{{ url_for('movement.add_box', doc_id=doc.id) }}">
+    <div class="d-flex gap-2">
+      <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg"
+             placeholder="Отсканируйте или введите номер короба" required autofocus data-submit-on-enter>
+      <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#boxNumberInput" title="Сканировать камерой">📷</button>
+      <button type="submit" class="btn btn-primary">Добавить</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card p-3">
+  <h5>Короба в списке</h5>
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th>Короб</th>
+        <th>Товары</th>
+        <th>Откуда</th>
+        {% if doc.status == 'draft' %}<th>Ячейка на складе назначения</th><th></th>{% else %}<th>Ячейка назначения</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for line in lines %}
+      <tr>
+        <td>
+          <b>{{ line.box.box_number }}</b>
+          <div><a target="_blank" href="{{ url_for('labels.box_label', box_id=line.box.id) }}">🖨 этикетка</a></div>
+        </td>
+        <td>
+          {% for it in line.box.items %}
+            <div>{{ it.nomenclature.name }} — {{ it.qty }} {{ it.nomenclature.unit }}</div>
+          {% else %}
+            <span class="text-muted">короб пуст</span>
+          {% endfor %}
+        </td>
+        <td>{{ line.from_warehouse.name if line.from_warehouse else '—' }}{% if line.from_cell %} / {{ line.from_cell.code }}{% endif %}</td>
+        {% if doc.status == 'draft' %}
+        <td style="min-width:260px">
+          <form method="post" action="{{ url_for('movement.set_cell', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-2">
+            <input type="text" id="cellCodeInput{{ line.id }}" name="cell_code" class="form-control form-control-sm"
+                   placeholder="Код ячейки (необязательно)" value="{{ line.to_cell.code if line.to_cell else '' }}" data-submit-on-enter>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-camera-scan-target="#cellCodeInput{{ line.id }}" title="Сканировать камерой">📷</button>
+            <button type="submit" class="btn btn-sm btn-outline-secondary">OK</button>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="{{ url_for('movement.delete_line', doc_id=doc.id, line_id=line.id) }}">
+            <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
+          </form>
+        </td>
+        {% else %}
+        <td>{{ line.to_cell.code if line.to_cell else '—' }}</td>
+        {% endif %}
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">Короба еще не отсканированы</td></tr>
+    {% endfor %}
+    </tbody>
   </table>
-  {% if doc.to_cell %}
-    <a class="btn btn-outline-secondary" target="_blank" href="{{ url_for('labels.cell_label', cell_id=doc.to_cell.id) }}">🖨 Этикетка новой ячейки</a>
+  {% if doc.status == 'draft' %}
+  <p class="text-muted small mb-0">Ячейку можно не указывать сразу — короб приедет на склад «открытым», и его можно будет доразместить позже через «Размещение».</p>
   {% endif %}
-  <a class="btn btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_label', box_id=doc.box.id) }}">🖨 Этикетка короба</a>
 </div>
 {% endblock %}

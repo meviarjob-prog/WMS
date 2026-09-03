@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Новое размещение{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('placement.list_documents') }}">&larr; Размещение</a></p>
+<h3 class="mb-4">Новый документ размещения</h3>
+
+{% if not warehouses %}
+  <div class="alert alert-warning">Сначала создайте хотя бы один склад: <a href="{{ url_for('warehouses.list_warehouses') }}">Склады</a></div>
+{% else %}
+<div class="col-md-5">
+  <div class="card p-3">
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label">Склад</label>
+        <select name="warehouse_id" class="form-select" required>
+          {% for wh in warehouses %}
+            <option value="{{ wh.id }}">{{ wh.code }} — {{ wh.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">Создать документ</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

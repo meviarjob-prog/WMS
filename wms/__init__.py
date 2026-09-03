@@ -45,6 +45,7 @@ def create_app(config_class=Config):
     from .blueprints.warehouses import bp as warehouses_bp
     from .blueprints.nomenclature import bp as nomenclature_bp
     from .blueprints.receiving import bp as receiving_bp
+    from .blueprints.placement import bp as placement_bp
     from .blueprints.movement import bp as movement_bp
     from .blueprints.labels import bp as labels_bp
     from .blueprints.reports import bp as reports_bp
@@ -54,6 +55,7 @@ def create_app(config_class=Config):
     app.register_blueprint(warehouses_bp, url_prefix="/warehouses")
     app.register_blueprint(nomenclature_bp, url_prefix="/nomenclature")
     app.register_blueprint(receiving_bp, url_prefix="/receiving")
+    app.register_blueprint(placement_bp, url_prefix="/placement")
     app.register_blueprint(movement_bp, url_prefix="/movement")
     app.register_blueprint(labels_bp, url_prefix="/labels")
     app.register_blueprint(reports_bp, url_prefix="/reports")

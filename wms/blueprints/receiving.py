@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from flask import (
     Blueprint,
     Response,
@@ -10,7 +12,7 @@ from flask import (
 )
 
 from ..extensions import db
-from ..models import Box, BoxItem, Cell, Nomenclature, ReceivingDocument, ReceivingLine
+from ..models import Nomenclature, ReceivingDocument, ReceivingLine, UnplacedStock
 from ..utils.excel_io import export_receiving_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
@@ -51,17 +53,12 @@ def new_document():
 @bp.route("/<int:doc_id>")
 def detail(doc_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
-    unpacked_lines = doc.lines.filter_by(box_id=None).all()
-    boxes = doc.boxes.order_by(Box.created_at.asc()).all()
-    return render_template(
-        "receiving/detail.html", doc=doc, unpacked_lines=unpacked_lines, boxes=boxes
-    )
+    lines = doc.lines.all()
+    return render_template("receiving/detail.html", doc=doc, lines=lines)
 
 
 def _add_or_increment_line(doc, nomenclature, qty):
-    line = ReceivingLine(
-        document_id=doc.id, nomenclature_id=nomenclature.id, qty=qty, box_id=None
-    )
+    line = ReceivingLine(document_id=doc.id, nomenclature_id=nomenclature.id, qty=qty)
     db.session.add(line)
     db.session.commit()
     return line
@@ -110,93 +107,15 @@ def add_line(doc_id):
 
 @bp.route("/<int:doc_id>/lines/<int:line_id>/delete", methods=["POST"])
 def delete_line(doc_id, line_id):
-    line = ReceivingLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
-    if line.box_id is not None:
-        flash("Нельзя удалить строку, уже упакованную в короб", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc_id))
-    db.session.delete(line)
-    db.session.commit()
-    return redirect(url_for("receiving.detail", doc_id=doc_id))
-
-
-@bp.route("/<int:doc_id>/boxes/create", methods=["POST"])
-def create_box(doc_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
     if doc.status != "draft":
         flash("Документ уже завершен", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return redirect(url_for("receiving.detail", doc_id=doc_id))
 
-    box = Box(
-        box_number=next_number("box"),
-        warehouse_id=doc.warehouse_id,
-        receiving_document_id=doc.id,
-        status="open",
-    )
-    db.session.add(box)
+    line = ReceivingLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
+    db.session.delete(line)
     db.session.commit()
-    flash(f"Короб {box.box_number} создан", "success")
-    return redirect(url_for("receiving.detail", doc_id=doc.id))
-
-
-@bp.route("/<int:doc_id>/lines/<int:line_id>/pack", methods=["POST"])
-def pack_line(doc_id, line_id):
-    doc = ReceivingDocument.query.get_or_404(doc_id)
-    line = ReceivingLine.query.filter_by(id=line_id, document_id=doc.id).first_or_404()
-    box_id = request.form.get("box_id", type=int)
-    qty = request.form.get("qty", type=float)
-
-    box = Box.query.filter_by(id=box_id, receiving_document_id=doc.id).first()
-    if not box:
-        flash("Короб не найден", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
-
-    if line.box_id is not None:
-        flash("Строка уже упакована", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
-
-    if qty is None or qty <= 0 or qty > line.qty:
-        qty = line.qty
-
-    box_item = BoxItem(box_id=box.id, nomenclature_id=line.nomenclature_id, qty=qty)
-    db.session.add(box_item)
-
-    if qty >= line.qty:
-        line.box_id = box.id
-    else:
-        line.qty -= qty
-        packed_line = ReceivingLine(
-            document_id=doc.id,
-            nomenclature_id=line.nomenclature_id,
-            qty=qty,
-            box_id=box.id,
-        )
-        db.session.add(packed_line)
-
-    db.session.commit()
-    flash(f"Товар упакован в короб {box.box_number}", "success")
-    return redirect(url_for("receiving.detail", doc_id=doc.id))
-
-
-@bp.route("/<int:doc_id>/boxes/<int:box_id>/place", methods=["POST"])
-def place_box(doc_id, box_id):
-    doc = ReceivingDocument.query.get_or_404(doc_id)
-    box = Box.query.filter_by(id=box_id, receiving_document_id=doc.id).first_or_404()
-
-    cell_code = request.form.get("cell_code", "").strip()
-    if not cell_code:
-        flash("Укажите или отсканируйте код ячейки", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
-
-    cell = Cell.query.filter_by(warehouse_id=doc.warehouse_id, code=cell_code).first()
-    if not cell:
-        flash(f"Ячейка '{cell_code}' не найдена на складе {doc.warehouse.name}", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
-
-    box.cell_id = cell.id
-    box.status = "stored"
-    db.session.commit()
-    flash(f"Короб {box.box_number} размещен в ячейке {cell.code}", "success")
-    return redirect(url_for("receiving.detail", doc_id=doc.id))
+    return redirect(url_for("receiving.detail", doc_id=doc_id))
 
 
 @bp.route("/<int:doc_id>/complete", methods=["POST"])
@@ -206,26 +125,21 @@ def complete(doc_id):
         flash("Документ уже завершен", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id))
 
-    if doc.lines.filter_by(box_id=None).count() > 0:
-        flash("Не все позиции упакованы в короба", "danger")
+    if doc.lines.count() == 0:
+        flash("В документе нет позиций", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id))
 
-    if doc.boxes.count() == 0:
-        flash("Нет коробов для завершения приемки", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
-
-    unplaced = [b for b in doc.boxes if b.cell_id is None]
-    if unplaced:
-        names = ", ".join(b.box_number for b in unplaced)
-        flash(f"Не все короба размещены в ячейках: {names}", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
-
-    from datetime import datetime
+    for line in doc.lines:
+        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, line.qty)
 
     doc.status = "completed"
     doc.completed_at = datetime.utcnow()
     db.session.commit()
-    flash(f"Приемка {doc.number} завершена", "success")
+    flash(
+        f"Приемка {doc.number} завершена. Товар зачислен в неразмещенный остаток "
+        f"склада «{doc.warehouse.name}» — разместите его в короба и ячейки через «Размещение».",
+        "success",
+    )
     return redirect(url_for("receiving.detail", doc_id=doc.id))
 
 

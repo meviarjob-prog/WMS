@@ -20,6 +20,13 @@
   </div>
 </div>
 
+{% if doc.status == 'completed' %}
+<div class="alert alert-success">
+  Приемка завершена — товар зачислен в неразмещенный остаток склада «{{ doc.warehouse.name }}».
+  <a href="{{ url_for('placement.new_document') }}">Разместить его в короба и ячейки →</a>
+</div>
+{% endif %}
+
 {% if doc.status == 'draft' %}
 <div class="row g-4 mb-4">
   <div class="col-md-5">
@@ -57,28 +64,16 @@
 </div>
 {% endif %}
 
-<div class="card p-3 mb-4">
-  <h5>Неупакованные позиции</h5>
+<div class="card p-3">
+  <h5>Позиции приемки</h5>
   <table class="table table-sm">
-    <thead><tr><th>Товар</th><th>Кол-во</th>{% if doc.status == 'draft' %}<th>Упаковать в короб</th><th></th>{% endif %}</tr></thead>
+    <thead><tr><th>Товар</th><th>Кол-во</th>{% if doc.status == 'draft' %}<th></th>{% endif %}</tr></thead>
     <tbody>
-    {% for line in unpacked_lines %}
+    {% for line in lines %}
       <tr>
         <td>{{ line.nomenclature.name }} <span class="text-muted">({{ line.nomenclature.sku }})</span></td>
         <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
         {% if doc.status == 'draft' %}
-        <td style="min-width:260px">
-          <form method="post" action="{{ url_for('receiving.pack_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-2">
-            <select name="box_id" class="form-select form-select-sm" required>
-              <option value="">Короб...</option>
-              {% for box in boxes %}
-                <option value="{{ box.id }}">{{ box.box_number }}</option>
-              {% endfor %}
-            </select>
-            <input type="number" name="qty" step="0.001" min="0.001" max="{{ line.qty }}" value="{{ line.qty }}" class="form-control form-control-sm" style="width:90px">
-            <button type="submit" class="btn btn-sm btn-outline-primary">Упаковать</button>
-          </form>
-        </td>
         <td>
           <form method="post" action="{{ url_for('receiving.delete_line', doc_id=doc.id, line_id=line.id) }}">
             <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
@@ -87,60 +82,15 @@
         {% endif %}
       </tr>
     {% else %}
-      <tr><td colspan="4" class="text-muted">Нет неупакованных позиций</td></tr>
+      <tr><td colspan="3" class="text-muted">Позиций еще нет</td></tr>
     {% endfor %}
     </tbody>
+    {% if lines %}
+    <tfoot>
+      <tr class="fw-bold"><td>Итого</td><td>{{ doc.total_qty() }}</td>{% if doc.status == 'draft' %}<td></td>{% endif %}</tr>
+    </tfoot>
+    {% endif %}
   </table>
-</div>
-
-<div class="card p-3">
-  <div class="d-flex justify-content-between align-items-center mb-2">
-    <h5 class="mb-0">Короба</h5>
-    {% if doc.status == 'draft' %}
-    <form method="post" action="{{ url_for('receiving.create_box', doc_id=doc.id) }}">
-      <button type="submit" class="btn btn-outline-primary btn-sm">📦 Создать короб</button>
-    </form>
-    {% endif %}
-  </div>
-
-  {% for box in boxes %}
-  <div class="border rounded p-3 mb-3">
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-      <div>
-        <b>{{ box.box_number }}</b>
-        <span class="badge badge-status-{{ box.status }}">{{ 'В ячейке' if box.status == 'stored' else 'Открыт' }}</span>
-        {% if box.cell %}<span class="text-muted">— ячейка {{ box.cell.code }}</span>{% endif %}
-      </div>
-      <div>
-        <a class="btn btn-sm btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_label', box_id=box.id) }}">🖨 Этикетка короба</a>
-        {% if box.items.count() > 0 %}
-        <a class="btn btn-sm btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_items_labels', box_id=box.id) }}">🖨 Этикетки товаров</a>
-        {% endif %}
-      </div>
-    </div>
-
-    <table class="table table-sm mt-2 mb-2">
-      <thead><tr><th>Товар</th><th>Кол-во</th></tr></thead>
-      <tbody>
-      {% for it in box.items %}
-        <tr><td>{{ it.nomenclature.name }}</td><td>{{ it.qty }} {{ it.nomenclature.unit }}</td></tr>
-      {% else %}
-        <tr><td colspan="2" class="text-muted">Короб пуст</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-
-    {% if doc.status == 'draft' and not box.cell %}
-    <form method="post" action="{{ url_for('receiving.place_box', doc_id=doc.id, box_id=box.id) }}" class="d-flex gap-2">
-      <input type="text" id="cellCodeInput{{ box.id }}" name="cell_code" class="form-control form-control-sm" placeholder="Отсканируйте / введите код ячейки" style="max-width:280px" required>
-      <button type="button" class="btn btn-sm btn-outline-primary" data-camera-scan-target="#cellCodeInput{{ box.id }}" title="Сканировать камерой">📷</button>
-      <button type="submit" class="btn btn-sm btn-primary">Разместить в ячейке</button>
-    </form>
-    {% endif %}
-  </div>
-  {% else %}
-    <div class="text-muted">Короба еще не созданы</div>
-  {% endfor %}
 </div>
 {% endblock %}
 

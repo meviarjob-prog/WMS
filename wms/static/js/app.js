@@ -113,6 +113,21 @@ function initBarcodeInput(input, onScan) {
 document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("[data-autocomplete-nomenclature]").forEach(initNomenclatureAutocomplete);
 
+  // Поле формы, которое должно уходить в отправку по Enter — в т.ч. по
+  // синтетическому Enter от сканирования камерой (scanner.js), который
+  // браузер сам по себе (в отличие от настоящего нажатия клавиши) не
+  // отправляет как обычную форму.
+  document.querySelectorAll("[data-submit-on-enter]").forEach((input) => {
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (input.value.trim() && input.form) {
+          input.form.submit();
+        }
+      }
+    });
+  });
+
   document.querySelectorAll("[data-autoprint]").forEach((el) => {
     if (el.dataset.autoprint === "1") {
       window.print();

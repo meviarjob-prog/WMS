@@ -30,14 +30,14 @@
   </div>
   <div class="col-6 col-md-2">
     <div class="card stat-card p-3">
-      <div class="text-muted small">Приемки (черновик)</div>
-      <div class="value">{{ stats.receiving_drafts }}</div>
+      <div class="text-muted small">Ждут размещения</div>
+      <div class="value">{{ stats.unplaced_items }}</div>
     </div>
   </div>
   <div class="col-6 col-md-2">
     <div class="card stat-card p-3">
-      <div class="text-muted small">Перемещений</div>
-      <div class="value">{{ stats.movements }}</div>
+      <div class="text-muted small">Коробов без ячейки</div>
+      <div class="value">{{ stats.open_boxes }}</div>
     </div>
   </div>
 </div>
@@ -47,18 +47,18 @@
     <a href="{{ url_for('receiving.new_document') }}" class="btn btn-primary w-100 py-3">➕ Новая приемка</a>
   </div>
   <div class="col-md-3">
-    <a href="{{ url_for('movement.new_movement') }}" class="btn btn-outline-primary w-100 py-3">🔀 Новое перемещение</a>
+    <a href="{{ url_for('placement.new_document') }}" class="btn btn-outline-primary w-100 py-3">📍 Новое размещение</a>
+  </div>
+  <div class="col-md-3">
+    <a href="{{ url_for('movement.new_document') }}" class="btn btn-outline-primary w-100 py-3">🔀 Новое перемещение</a>
   </div>
   <div class="col-md-3">
     <a href="{{ url_for('nomenclature.import_nomenclature') }}" class="btn btn-outline-secondary w-100 py-3">📥 Импорт номенклатуры</a>
   </div>
-  <div class="col-md-3">
-    <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary w-100 py-3">📊 Отчеты</a>
-  </div>
 </div>
 
 <div class="row g-3">
-  <div class="col-md-6">
+  <div class="col-md-4">
     <div class="card p-3">
       <h5>Последние приемки</h5>
       <table class="table table-sm">
@@ -78,17 +78,37 @@
       </table>
     </div>
   </div>
-  <div class="col-md-6">
+  <div class="col-md-4">
+    <div class="card p-3">
+      <h5>Последние размещения</h5>
+      <table class="table table-sm">
+        <thead><tr><th>Номер</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+        {% for d in recent_placement %}
+          <tr>
+            <td>{{ d.number }}</td>
+            <td>{{ d.warehouse.name }}</td>
+            <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
+            <td><a href="{{ url_for('placement.detail', doc_id=d.id) }}">Открыть</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="text-muted">Нет данных</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col-md-4">
     <div class="card p-3">
       <h5>Последние перемещения</h5>
       <table class="table table-sm">
-        <thead><tr><th>Номер</th><th>Короб</th><th>Куда</th><th></th></tr></thead>
+        <thead><tr><th>Номер</th><th>Куда</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for d in recent_movement %}
           <tr>
             <td>{{ d.number }}</td>
-            <td>{{ d.box.box_number }}</td>
-            <td>{{ d.to_warehouse.name }}{% if d.to_cell %} / {{ d.to_cell.code }}{% endif %}</td>
+            <td>{{ d.to_warehouse.name }}</td>
+            <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
             <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">Открыть</a></td>
           </tr>
         {% else %}
