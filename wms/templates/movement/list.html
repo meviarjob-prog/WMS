@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Перемещение{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h3 class="mb-0">Перемещение товара</h3>
+  <div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_all') }}">📤 Экспорт в Excel</a>
+    <a class="btn btn-primary" href="{{ url_for('movement.new_movement') }}">➕ Новое перемещение</a>
+  </div>
+</div>
+
+<div class="card p-3">
+  <table class="table">
+    <thead><tr><th>Номер</th><th>Дата</th><th>Короб</th><th>Откуда</th><th>Куда</th></tr></thead>
+    <tbody>
+    {% for d in documents %}
+      <tr>
+        <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+        <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ d.box.box_number }}</td>
+        <td>{{ d.from_warehouse.name if d.from_warehouse else '—' }}{% if d.from_cell %} / {{ d.from_cell.code }}{% endif %}</td>
+        <td>{{ d.to_warehouse.name }}{% if d.to_cell %} / {{ d.to_cell.code }}{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">Перемещений еще нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

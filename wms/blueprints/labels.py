@@ -1,0 +1,98 @@
+from flask import Blueprint, Response, abort, render_template, request
+
+from ..models import Box, Cell, Nomenclature
+from ..utils.barcodes import generate_barcode_data_uri
+from ..utils.labels_pdf import build_label_pdf
+
+bp = Blueprint("labels", __name__)
+
+
+def _autoprint():
+    return request.args.get("autoprint", "1") != "0"
+
+
+# ---------- Этикетка товара ----------
+
+
+@bp.route("/item/<int:item_id>")
+def item_label(item_id):
+    item = Nomenclature.query.get_or_404(item_id)
+    img = generate_barcode_data_uri(item.barcode)
+    return render_template(
+        "labels/item.html", item=item, barcode_img=img, autoprint=_autoprint()
+    )
+
+
+@bp.route("/item/<int:item_id>.pdf")
+def item_label_pdf(item_id):
+    item = Nomenclature.query.get_or_404(item_id)
+    pdf = build_label_pdf(item.barcode, item.name, f"арт. {item.sku}")
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"inline; filename=item_{item.sku}.pdf"},
+    )
+
+
+# ---------- Этикетка короба ----------
+
+
+@bp.route("/box/<int:box_id>")
+def box_label(box_id):
+    box = Box.query.get_or_404(box_id)
+    img = generate_barcode_data_uri(box.box_number)
+    return render_template("labels/box.html", box=box, barcode_img=img, autoprint=_autoprint())
+
+
+@bp.route("/box/<int:box_id>.pdf")
+def box_label_pdf(box_id):
+    box = Box.query.get_or_404(box_id)
+    subtitle = box.warehouse.name if box.warehouse else ""
+    pdf = build_label_pdf(box.box_number, f"Короб {box.box_number}", subtitle)
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"inline; filename={box.box_number}.pdf"},
+    )
+
+
+@bp.route("/box/<int:box_id>/items")
+def box_items_labels(box_id):
+    """Печать этикеток всех товаров, упакованных в короб (для наклейки на каждую позицию)."""
+    box = Box.query.get_or_404(box_id)
+    labels = []
+    for line in box.items:
+        labels.append(
+            {
+                "item": line.nomenclature,
+                "qty": line.qty,
+                "barcode_img": generate_barcode_data_uri(line.nomenclature.barcode),
+            }
+        )
+    if not labels:
+        abort(404, "В коробе нет товаров")
+    return render_template(
+        "labels/box_items.html", box=box, labels=labels, autoprint=_autoprint()
+    )
+
+
+# ---------- Этикетка ячейки ----------
+
+
+@bp.route("/cell/<int:cell_id>")
+def cell_label(cell_id):
+    cell = Cell.query.get_or_404(cell_id)
+    img = generate_barcode_data_uri(cell.code)
+    return render_template("labels/cell.html", cell=cell, barcode_img=img, autoprint=_autoprint())
+
+
+@bp.route("/cell/<int:cell_id>.pdf")
+def cell_label_pdf(cell_id):
+    cell = Cell.query.get_or_404(cell_id)
+    subtitle = cell.warehouse.name if cell.warehouse else ""
+    pdf = build_label_pdf(cell.code, f"Ячейка {cell.code}", subtitle)
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"inline; filename=cell_{cell.code}.pdf"},
+    )

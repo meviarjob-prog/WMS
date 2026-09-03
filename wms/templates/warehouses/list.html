@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Склады{% endblock %}
+{% block content %}
+<h3 class="mb-4">Склады</h3>
+
+<div class="row g-4">
+  <div class="col-md-5">
+    <div class="card p-3">
+      <h5>Добавить склад</h5>
+      <form method="post" action="{{ url_for('warehouses.create_warehouse') }}">
+        <div class="mb-2">
+          <label class="form-label">Код</label>
+          <input type="text" name="code" class="form-control" required placeholder="WH1">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Наименование</label>
+          <input type="text" name="name" class="form-control" required placeholder="Основной склад">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Адрес</label>
+          <input type="text" name="address" class="form-control">
+        </div>
+        <button type="submit" class="btn btn-primary">Создать</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card p-3">
+      <h5>Список складов</h5>
+      <table class="table">
+        <thead><tr><th>Код</th><th>Наименование</th><th>Адрес</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+        {% for wh in warehouses %}
+          <tr>
+            <td>{{ wh.code }}</td>
+            <td>{{ wh.name }}</td>
+            <td>{{ wh.address or '' }}</td>
+            <td>{% if wh.is_active %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}</td>
+            <td class="text-nowrap">
+              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('warehouses.cells', warehouse_id=wh.id) }}">Ячейки</a>
+              <form method="post" action="{{ url_for('warehouses.toggle_warehouse', warehouse_id=wh.id) }}" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if wh.is_active else 'Включить' }}</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="text-muted">Склады еще не созданы</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

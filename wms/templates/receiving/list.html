@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Приемка{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h3 class="mb-0">Приемка товара</h3>
+  <a class="btn btn-primary" href="{{ url_for('receiving.new_document') }}">➕ Новая приемка</a>
+</div>
+
+<div class="card p-3">
+  <table class="table">
+    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Поставщик</th><th>Статус</th><th></th></tr></thead>
+    <tbody>
+    {% for d in documents %}
+      <tr>
+        <td>{{ d.number }}</td>
+        <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ d.warehouse.name }}</td>
+        <td>{{ d.supplier or '' }}</td>
+        <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
+        <td>
+          <a href="{{ url_for('receiving.detail', doc_id=d.id) }}">Открыть</a>
+          · <a href="{{ url_for('receiving.export_document', doc_id=d.id) }}">Excel</a>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="text-muted">Документов еще нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

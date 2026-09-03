@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Приемка {{ doc.number }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('receiving.list_documents') }}">&larr; Приемка</a></p>
+
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h3 class="mb-1">Приемка {{ doc.number }}
+      <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
+    </h3>
+    <div class="text-muted">Склад: {{ doc.warehouse.name }} {% if doc.supplier %}· Поставщик: {{ doc.supplier }}{% endif %}</div>
+  </div>
+  <div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('receiving.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
+    {% if doc.status == 'draft' %}
+    <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}" class="d-inline">
+      <button type="submit" class="btn btn-success">✅ Завершить приемку</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if doc.status == 'draft' %}
+<div class="row g-4 mb-4">
+  <div class="col-md-5">
+    <div class="card p-3">
+      <h5>Сканировать штрихкод товара</h5>
+      <input type="text" id="scanInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод и нажмите Enter" autofocus>
+      <div id="scanResult" class="small mt-2"></div>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card p-3">
+      <h5>Добавить товар вручную (поиск "содержит")</h5>
+      <form method="post" action="{{ url_for('receiving.add_line', doc_id=doc.id) }}" class="row g-2 align-items-end">
+        <div class="col-md-7">
+          <label class="form-label">Товар</label>
+          <div class="autocomplete-box" data-autocomplete-nomenclature>
+            <input type="text" class="form-control ac-input" placeholder="Артикул, наименование или штрихкод..." autocomplete="off">
+            <input type="hidden" class="ac-value" name="nomenclature_id" required>
+            <div class="autocomplete-list"></div>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Кол-во</label>
+          <input type="number" step="0.001" min="0.001" name="qty" class="form-control" value="1" required>
+        </div>
+        <div class="col-md-2">
+          <button type="submit" class="btn btn-primary w-100">Добавить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card p-3 mb-4">
+  <h5>Неупакованные позиции</h5>
+  <table class="table table-sm">
+    <thead><tr><th>Товар</th><th>Кол-во</th>{% if doc.status == 'draft' %}<th>Упаковать в короб</th><th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for line in unpacked_lines %}
+      <tr>
+        <td>{{ line.nomenclature.name }} <span class="text-muted">({{ line.nomenclature.sku }})</span></td>
+        <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
+        {% if doc.status == 'draft' %}
+        <td style="min-width:260px">
+          <form method="post" action="{{ url_for('receiving.pack_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-2">
+            <select name="box_id" class="form-select form-select-sm" required>
+              <option value="">Короб...</option>
+              {% for box in boxes %}
+                <option value="{{ box.id }}">{{ box.box_number }}</option>
+              {% endfor %}
+            </select>
+            <input type="number" name="qty" step="0.001" min="0.001" max="{{ line.qty }}" value="{{ line.qty }}" class="form-control form-control-sm" style="width:90px">
+            <button type="submit" class="btn btn-sm btn-outline-primary">Упаковать</button>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="{{ url_for('receiving.delete_line', doc_id=doc.id, line_id=line.id) }}">
+            <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="text-muted">Нет неупакованных позиций</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card p-3">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h5 class="mb-0">Короба</h5>
+    {% if doc.status == 'draft' %}
+    <form method="post" action="{{ url_for('receiving.create_box', doc_id=doc.id) }}">
+      <button type="submit" class="btn btn-outline-primary btn-sm">📦 Создать короб</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% for box in boxes %}
+  <div class="border rounded p-3 mb-3">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <b>{{ box.box_number }}</b>
+        <span class="badge badge-status-{{ box.status }}">{{ 'В ячейке' if box.status == 'stored' else 'Открыт' }}</span>
+        {% if box.cell %}<span class="text-muted">— ячейка {{ box.cell.code }}</span>{% endif %}
+      </div>
+      <div>
+        <a class="btn btn-sm btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_label', box_id=box.id) }}">🖨 Этикетка короба</a>
+        {% if box.items.count() > 0 %}
+        <a class="btn btn-sm btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_items_labels', box_id=box.id) }}">🖨 Этикетки товаров</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <table class="table table-sm mt-2 mb-2">
+      <thead><tr><th>Товар</th><th>Кол-во</th></tr></thead>
+      <tbody>
+      {% for it in box.items %}
+        <tr><td>{{ it.nomenclature.name }}</td><td>{{ it.qty }} {{ it.nomenclature.unit }}</td></tr>
+      {% else %}
+        <tr><td colspan="2" class="text-muted">Короб пуст</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    {% if doc.status == 'draft' and not box.cell %}
+    <form method="post" action="{{ url_for('receiving.place_box', doc_id=doc.id, box_id=box.id) }}" class="d-flex gap-2">
+      <input type="text" name="cell_code" class="form-control form-control-sm" placeholder="Отсканируйте / введите код ячейки" style="max-width:280px" required>
+      <button type="submit" class="btn btn-sm btn-primary">Разместить в ячейке</button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}
+    <div class="text-muted">Короба еще не созданы</div>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const scanInput = document.getElementById("scanInput");
+  const scanResult = document.getElementById("scanResult");
+  if (scanInput) {
+    initBarcodeInput(scanInput, (barcode) => {
+      fetch("{{ url_for('receiving.add_line_by_barcode', doc_id=doc.id) }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ barcode: barcode, qty: 1 }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.ok) {
+            scanResult.innerHTML = '<span class="text-success">Добавлено: ' + data.line.name + '</span>';
+            location.reload();
+          } else {
+            scanResult.innerHTML = '<span class="text-danger">' + data.error + '</span>';
+          }
+        });
+    });
+  }
+</script>
+{% endblock %}

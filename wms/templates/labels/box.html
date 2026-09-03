@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Этикетка {{ box.box_number }}</title>
+<link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body data-autoprint="{{ '1' if autoprint else '0' }}">
+<div class="no-print p-2">
+  <a class="btn btn-sm btn-primary" href="{{ url_for('labels.box_label_pdf', box_id=box.id) }}" target="_blank">Скачать PDF</a>
+  <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
+</div>
+
+<div class="label-page">
+  <img src="{{ barcode_img }}" alt="barcode">
+  <div class="label-title">Короб {{ box.box_number }}</div>
+  <div class="label-subtitle">{{ box.warehouse.name if box.warehouse else '' }}</div>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Импорт номенклатуры{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('nomenclature.list_nomenclature') }}">&larr; Номенклатура</a></p>
+<h3 class="mb-4">Импорт номенклатуры из Excel</h3>
+
+<div class="row g-4">
+  <div class="col-md-6">
+    <div class="card p-3">
+      <ol class="mb-3">
+        <li>Скачайте шаблон Excel</li>
+        <li>Заполните строки: артикул, штрихкод, наименование, ед. изм., описание</li>
+        <li>Загрузите заполненный файл</li>
+      </ol>
+      <a class="btn btn-outline-secondary mb-3" href="{{ url_for('nomenclature.download_template') }}">📄 Скачать шаблон xlsx</a>
+      <form method="post" enctype="multipart/form-data">
+        <div class="mb-3">
+          <input type="file" name="file" class="form-control" accept=".xlsx" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Импортировать</button>
+      </form>
+    </div>
+  </div>
+
+  {% if result %}
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Результат импорта</h5>
+      <p>Создано: <b>{{ result.created }}</b><br>
+         Обновлено: <b>{{ result.updated }}</b><br>
+         Ошибок: <b>{{ result.errors|length }}</b></p>
+      {% if result.errors %}
+        <ul class="text-danger small">
+          {% for err in result.errors %}<li>{{ err }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

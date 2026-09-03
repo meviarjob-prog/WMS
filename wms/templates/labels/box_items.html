@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Этикетки товаров короба {{ box.box_number }}</title>
+<link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body data-autoprint="{{ '1' if autoprint else '0' }}">
+<div class="no-print p-2">
+  <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
+</div>
+
+{% for l in labels %}
+<div class="label-page">
+  <img src="{{ l.barcode_img }}" alt="barcode">
+  <div class="label-title">{{ l.item.name }}</div>
+  <div class="label-subtitle">арт. {{ l.item.sku }} · {{ l.qty }} {{ l.item.unit }}</div>
+</div>
+{% endfor %}
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

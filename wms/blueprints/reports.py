@@ -1,0 +1,84 @@
+from datetime import datetime
+
+from flask import Blueprint, Response, render_template, request
+
+from ..models import MovementDocument, ReceivingDocument, Warehouse
+from ..utils.excel_io import (
+    export_movement_to_excel,
+    export_receiving_to_excel,
+    timestamp_for_filename,
+)
+
+bp = Blueprint("reports", __name__)
+
+
+def _parse_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+@bp.route("/")
+def index():
+    warehouses = Warehouse.query.order_by(Warehouse.code).all()
+    return render_template("reports/index.html", warehouses=warehouses)
+
+
+def _filtered_receiving():
+    query = ReceivingDocument.query
+    warehouse_id = request.args.get("warehouse_id", type=int)
+    date_from = _parse_date(request.args.get("date_from"))
+    date_to = _parse_date(request.args.get("date_to"))
+
+    if warehouse_id:
+        query = query.filter_by(warehouse_id=warehouse_id)
+    if date_from:
+        query = query.filter(ReceivingDocument.created_at >= date_from)
+    if date_to:
+        query = query.filter(ReceivingDocument.created_at < date_to)
+    return query.order_by(ReceivingDocument.created_at.desc()).all()
+
+
+def _filtered_movement():
+    query = MovementDocument.query
+    warehouse_id = request.args.get("warehouse_id", type=int)
+    date_from = _parse_date(request.args.get("date_from"))
+    date_to = _parse_date(request.args.get("date_to"))
+
+    if warehouse_id:
+        query = query.filter(
+            (MovementDocument.from_warehouse_id == warehouse_id)
+            | (MovementDocument.to_warehouse_id == warehouse_id)
+        )
+    if date_from:
+        query = query.filter(MovementDocument.created_at >= date_from)
+    if date_to:
+        query = query.filter(MovementDocument.created_at < date_to)
+    return query.order_by(MovementDocument.created_at.desc()).all()
+
+
+@bp.route("/receiving.xlsx")
+def receiving_report():
+    documents = _filtered_receiving()
+    data = export_receiving_to_excel(documents)
+    fname = f"receiving_report_{timestamp_for_filename()}.xlsx"
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+@bp.route("/movement.xlsx")
+def movement_report():
+    documents = _filtered_movement()
+    data = export_movement_to_excel(documents)
+    fname = f"movement_report_{timestamp_for_filename()}.xlsx"
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )

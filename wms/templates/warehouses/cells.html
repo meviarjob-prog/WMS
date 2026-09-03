@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Ячейки — {{ warehouse.name }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('warehouses.list_warehouses') }}">&larr; Склады</a></p>
+<h3 class="mb-4">Ячейки склада «{{ warehouse.name }}»</h3>
+
+<div class="row g-4">
+  <div class="col-md-5">
+    <div class="card p-3">
+      <h5>Добавить ячейку</h5>
+      <form method="post" action="{{ url_for('warehouses.create_cell', warehouse_id=warehouse.id) }}">
+        <div class="mb-2">
+          <label class="form-label">Код ячейки</label>
+          <input type="text" name="code" class="form-control" required placeholder="A-01-01">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Описание</label>
+          <input type="text" name="description" class="form-control">
+        </div>
+        <button type="submit" class="btn btn-primary">Создать</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card p-3">
+      <h5>Список ячеек</h5>
+      <table class="table">
+        <thead><tr><th>Код</th><th>Описание</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+        {% for cell in cells %}
+          <tr>
+            <td>{{ cell.code }}</td>
+            <td>{{ cell.description or '' }}</td>
+            <td>{% if cell.is_active %}<span class="badge bg-success">Активна</span>{% else %}<span class="badge bg-secondary">Отключена</span>{% endif %}</td>
+            <td class="text-nowrap">
+              <a class="btn btn-sm btn-outline-primary" target="_blank" href="{{ url_for('labels.cell_label', cell_id=cell.id) }}">🖨 Этикетка</a>
+              <form method="post" action="{{ url_for('warehouses.toggle_cell', cell_id=cell.id) }}" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if cell.is_active else 'Включить' }}</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="text-muted">Ячейки еще не созданы</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

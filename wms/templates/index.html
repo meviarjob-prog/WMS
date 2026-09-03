@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Главная{% endblock %}
+{% block content %}
+<h3 class="mb-4">Обзор склада</h3>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-2">
+    <div class="card stat-card p-3">
+      <div class="text-muted small">Склады</div>
+      <div class="value">{{ stats.warehouses }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card stat-card p-3">
+      <div class="text-muted small">Ячейки</div>
+      <div class="value">{{ stats.cells }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card stat-card p-3">
+      <div class="text-muted small">Номенклатура</div>
+      <div class="value">{{ stats.nomenclature }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card stat-card p-3">
+      <div class="text-muted small">Короба</div>
+      <div class="value">{{ stats.boxes }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card stat-card p-3">
+      <div class="text-muted small">Приемки (черновик)</div>
+      <div class="value">{{ stats.receiving_drafts }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card stat-card p-3">
+      <div class="text-muted small">Перемещений</div>
+      <div class="value">{{ stats.movements }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <a href="{{ url_for('receiving.new_document') }}" class="btn btn-primary w-100 py-3">➕ Новая приемка</a>
+  </div>
+  <div class="col-md-3">
+    <a href="{{ url_for('movement.new_movement') }}" class="btn btn-outline-primary w-100 py-3">🔀 Новое перемещение</a>
+  </div>
+  <div class="col-md-3">
+    <a href="{{ url_for('nomenclature.import_nomenclature') }}" class="btn btn-outline-secondary w-100 py-3">📥 Импорт номенклатуры</a>
+  </div>
+  <div class="col-md-3">
+    <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary w-100 py-3">📊 Отчеты</a>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Последние приемки</h5>
+      <table class="table table-sm">
+        <thead><tr><th>Номер</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+        {% for d in recent_receiving %}
+          <tr>
+            <td>{{ d.number }}</td>
+            <td>{{ d.warehouse.name }}</td>
+            <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
+            <td><a href="{{ url_for('receiving.detail', doc_id=d.id) }}">Открыть</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="text-muted">Нет данных</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Последние перемещения</h5>
+      <table class="table table-sm">
+        <thead><tr><th>Номер</th><th>Короб</th><th>Куда</th><th></th></tr></thead>
+        <tbody>
+        {% for d in recent_movement %}
+          <tr>
+            <td>{{ d.number }}</td>
+            <td>{{ d.box.box_number }}</td>
+            <td>{{ d.to_warehouse.name }}{% if d.to_cell %} / {{ d.to_cell.code }}{% endif %}</td>
+            <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">Открыть</a></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="text-muted">Нет данных</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Новое перемещение{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('movement.list_documents') }}">&larr; Перемещение</a></p>
+<h3 class="mb-4">Перемещение короба</h3>
+
+{% if not warehouses %}
+  <div class="alert alert-warning">Сначала создайте хотя бы один склад: <a href="{{ url_for('warehouses.list_warehouses') }}">Склады</a></div>
+{% else %}
+<div class="col-md-6">
+  <div class="card p-3">
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label">Короб (отсканируйте или введите номер)</label>
+        <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg" required autofocus>
+        <div id="boxInfo" class="small text-muted mt-1"></div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Склад назначения</label>
+        <select name="to_warehouse_id" class="form-select" required>
+          {% for wh in warehouses %}
+            <option value="{{ wh.id }}">{{ wh.code }} — {{ wh.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Ячейка назначения (отсканируйте / введите код, необязательно)</label>
+        <input type="text" name="to_cell_code" class="form-control">
+      </div>
+      <button type="submit" class="btn btn-primary">Переместить</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const boxInput = document.getElementById("boxNumberInput");
+  const boxInfo = document.getElementById("boxInfo");
+  if (boxInput) {
+    boxInput.addEventListener("change", () => {
+      const value = boxInput.value.trim();
+      if (!value) return;
+      fetch("/api/box/by-number/" + encodeURIComponent(value))
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.found) {
+            boxInfo.textContent = "Сейчас: " + (data.warehouse || "—") + (data.cell ? " / " + data.cell : "") + " · товаров: " + data.total_qty;
+            boxInfo.className = "small text-success mt-1";
+          } else {
+            boxInfo.textContent = "Короб не найден";
+            boxInfo.className = "small text-danger mt-1";
+          }
+        });
+    });
+  }
+</script>
+{% endblock %}
