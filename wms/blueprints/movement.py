@@ -3,6 +3,7 @@ from flask import Blueprint, Response, flash, redirect, render_template, request
 from ..extensions import db
 from ..models import Box, Cell, MovementDocument, Warehouse
 from ..utils.excel_io import export_movement_to_excel, timestamp_for_filename
+from ..utils.http import content_disposition
 from ..utils.numbering import next_number
 
 bp = Blueprint("movement", __name__)
@@ -74,5 +75,5 @@ def export_all():
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={fname}"},
+        headers={"Content-Disposition": content_disposition(fname)},
     )

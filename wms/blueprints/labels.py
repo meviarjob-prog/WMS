@@ -2,6 +2,7 @@ from flask import Blueprint, Response, abort, render_template, request
 
 from ..models import Box, Cell, Nomenclature
 from ..utils.barcodes import generate_barcode_data_uri
+from ..utils.http import content_disposition
 from ..utils.labels_pdf import build_label_pdf
 
 bp = Blueprint("labels", __name__)
@@ -30,7 +31,7 @@ def item_label_pdf(item_id):
     return Response(
         pdf,
         mimetype="application/pdf",
-        headers={"Content-Disposition": f"inline; filename=item_{item.sku}.pdf"},
+        headers={"Content-Disposition": content_disposition(f"item_{item.sku}.pdf", "inline")},
     )
 
 
@@ -52,7 +53,7 @@ def box_label_pdf(box_id):
     return Response(
         pdf,
         mimetype="application/pdf",
-        headers={"Content-Disposition": f"inline; filename={box.box_number}.pdf"},
+        headers={"Content-Disposition": content_disposition(f"{box.box_number}.pdf", "inline")},
     )
 
 
@@ -94,5 +95,5 @@ def cell_label_pdf(cell_id):
     return Response(
         pdf,
         mimetype="application/pdf",
-        headers={"Content-Disposition": f"inline; filename=cell_{cell.code}.pdf"},
+        headers={"Content-Disposition": content_disposition(f"cell_{cell.code}.pdf", "inline")},
     )

@@ -8,6 +8,7 @@ from ..utils.excel_io import (
     export_receiving_to_excel,
     timestamp_for_filename,
 )
+from ..utils.http import content_disposition
 
 bp = Blueprint("reports", __name__)
 
@@ -68,7 +69,7 @@ def receiving_report():
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={fname}"},
+        headers={"Content-Disposition": content_disposition(fname)},
     )
 
 
@@ -80,5 +81,5 @@ def movement_report():
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={fname}"},
+        headers={"Content-Disposition": content_disposition(fname)},
     )

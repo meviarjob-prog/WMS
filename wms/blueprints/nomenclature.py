@@ -8,6 +8,7 @@ from ..utils.excel_io import (
     import_nomenclature_from_excel,
     timestamp_for_filename,
 )
+from ..utils.http import content_disposition
 
 bp = Blueprint("nomenclature", __name__)
 
@@ -77,7 +78,7 @@ def export_all():
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={fname}"},
+        headers={"Content-Disposition": content_disposition(fname)},
     )
 
 
