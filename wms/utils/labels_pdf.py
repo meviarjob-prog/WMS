@@ -1,14 +1,26 @@
 import io
+import os
 import textwrap
 
 from reportlab.lib.pagesizes import mm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 from .barcodes import generate_barcode_png_bytes
 
 LABEL_WIDTH = 58 * mm
 LABEL_HEIGHT = 40 * mm
+
+# Стандартные PDF-шрифты (Helvetica и т.п.) не содержат кириллицу — вместо
+# русских букв печатаются "квадраты". Подключаем TrueType-шрифт с кириллицей.
+_FONTS_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "fonts")
+FONT_REGULAR = "DejaVuSans"
+FONT_BOLD = "DejaVuSans-Bold"
+
+pdfmetrics.registerFont(TTFont(FONT_REGULAR, os.path.join(_FONTS_DIR, "DejaVuSans.ttf")))
+pdfmetrics.registerFont(TTFont(FONT_BOLD, os.path.join(_FONTS_DIR, "DejaVuSans-Bold.ttf")))
 
 
 def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
@@ -36,7 +48,7 @@ def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
     c.drawImage(img, x, y, width=draw_w, height=draw_h, mask="auto")
 
     text_top = y - 3 * mm
-    c.setFont("Helvetica-Bold", 8)
+    c.setFont(FONT_BOLD, 8)
 
     wrapped = textwrap.wrap(title, width=32) or [""]
     wrapped = wrapped[:3]
@@ -47,7 +59,7 @@ def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
         c.drawCentredString(LABEL_WIDTH / 2, ty, line)
 
     if subtitle:
-        c.setFont("Helvetica", 7)
+        c.setFont(FONT_REGULAR, 7)
         ty -= line_height
         c.drawCentredString(LABEL_WIDTH / 2, ty, subtitle)
 
