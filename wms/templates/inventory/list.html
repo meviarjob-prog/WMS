@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Инвентаризация{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h3 class="mb-0">Инвентаризация</h3>
+  <div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('inventory.export_all') }}">📤 Экспорт в Excel</a>
+    <a class="btn btn-primary" href="{{ url_for('inventory.new_document') }}">➕ Новая инвентаризация</a>
+  </div>
+</div>
+
+<div class="card p-3">
+  <table class="table">
+    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Коробов</th><th>Позиций</th><th>Автор</th><th>Статус</th><th></th></tr></thead>
+    <tbody>
+    {% for d in documents %}
+      <tr>
+        <td><a href="{{ url_for('inventory.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+        <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ d.warehouse.name }}</td>
+        <td>{{ d.scanned_boxes.count() }}</td>
+        <td>{{ d.lines.count() }}</td>
+        <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
+        <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
+        <td>
+          <a href="{{ url_for('inventory.detail', doc_id=d.id) }}">Открыть</a>
+          · <a href="{{ url_for('inventory.export_document', doc_id=d.id) }}">Excel</a>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="text-muted">Инвентаризаций еще нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

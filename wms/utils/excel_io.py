@@ -321,5 +321,47 @@ def export_production_to_excel(rows) -> bytes:
     return buffer.getvalue()
 
 
+INVENTORY_HEADERS = [
+    "Номер документа",
+    "Дата",
+    "Склад",
+    "Статус",
+    "Артикул",
+    "Штрихкод",
+    "Наименование",
+    "Кол-во",
+    "Ед. изм.",
+]
+
+
+def export_inventory_to_excel(documents) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Инвентаризация"
+    _style_header(ws, INVENTORY_HEADERS)
+
+    status_map = {"draft": "Черновик", "completed": "Завершен"}
+
+    for doc in documents:
+        for line in doc.lines:
+            ws.append(
+                [
+                    doc.number,
+                    doc.created_at.strftime("%Y-%m-%d %H:%M") if doc.created_at else "",
+                    doc.warehouse.name if doc.warehouse else "",
+                    status_map.get(doc.status, doc.status),
+                    line.nomenclature.sku if line.nomenclature else "",
+                    line.nomenclature.barcode if line.nomenclature else "",
+                    line.nomenclature.name if line.nomenclature else "",
+                    line.qty,
+                    line.nomenclature.unit if line.nomenclature else "",
+                ]
+            )
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 def timestamp_for_filename() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")

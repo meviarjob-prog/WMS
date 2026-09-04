@@ -409,3 +409,67 @@ class ProductionRecord(db.Model):
 
     def __repr__(self):
         return f"<ProductionRecord {self.id}>"
+
+
+class InventoryDocument(db.Model):
+    """Лист инвентаризации по складу: сканируются короба один за другим,
+    товар внутри каждого короба автоматически суммируется в общий список
+    (одинаковые товары из разных коробов складываются в одну строку)."""
+
+    __tablename__ = "inventory_documents"
+
+    id = db.Column(db.Integer, primary_key=True)
+    number = db.Column(db.String(30), unique=True, nullable=False)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+
+    warehouse = db.relationship("Warehouse")
+    created_by = db.relationship("User")
+    lines = db.relationship(
+        "InventoryLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
+    )
+    scanned_boxes = db.relationship(
+        "InventoryScannedBox", backref="document", lazy="dynamic", cascade="all, delete-orphan"
+    )
+
+    def total_qty(self):
+        return sum(line.qty for line in self.lines)
+
+
+class InventoryLine(db.Model):
+    """Одна строка агрегированного списка — суммарное количество товара по
+    всем отсканированным в этом документе коробам."""
+
+    __tablename__ = "inventory_lines"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("inventory_documents.id"), nullable=False)
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
+    qty = db.Column(db.Float, nullable=False, default=0)
+
+    nomenclature = db.relationship("Nomenclature")
+
+    __table_args__ = (
+        db.UniqueConstraint("document_id", "nomenclature_id", name="uq_inventory_doc_item"),
+    )
+
+
+class InventoryScannedBox(db.Model):
+    """Какие короба уже учтены в этом документе — не дает посчитать один и
+    тот же короб дважды при повторном/случайном скане."""
+
+    __tablename__ = "inventory_scanned_boxes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("inventory_documents.id"), nullable=False)
+    box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=False)
+    scanned_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    box = db.relationship("Box")
+
+    __table_args__ = (
+        db.UniqueConstraint("document_id", "box_id", name="uq_inventory_doc_box"),
+    )

@@ -9,6 +9,7 @@ SERIES = {
     "placement": ("RAZ-", 6),
     "movement": ("PER-", 6),
     "box": ("BOX-", 6),
+    "inventory": ("INV-", 6),
 }
 
 

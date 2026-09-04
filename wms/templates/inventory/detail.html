@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Инвентаризация {{ doc.number }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('inventory.list_documents') }}">&larr; Инвентаризация</a></p>
+
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h3 class="mb-1">Инвентаризация {{ doc.number }}
+      <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
+    </h3>
+    <div class="text-muted">Склад: {{ doc.warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
+  </div>
+  <div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('inventory.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
+    {% if doc.status == 'draft' %}
+    <form method="post" action="{{ url_for('inventory.complete', doc_id=doc.id) }}" class="d-inline">
+      <button type="submit" class="btn btn-success">✅ Завершить инвентаризацию</button>
+    </form>
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('inventory.delete_document', doc_id=doc.id) }}" class="d-inline" onsubmit="return confirm('Удалить лист инвентаризации {{ doc.number }} целиком? Действие необратимо.');">
+      <button type="submit" class="btn btn-outline-danger">🗑 Удалить документ</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+{% if doc.status == 'draft' %}
+<div class="card p-3 mb-4">
+  <h5>Сканировать короб</h5>
+  <p class="text-muted small mb-2">Короб должен быть на складе «{{ doc.warehouse.name }}» — весь товар внутри него автоматически добавится в список, одинаковые товары из разных коробов суммируются.</p>
+  <form method="post" action="{{ url_for('inventory.add_box', doc_id=doc.id) }}">
+    <div class="d-flex gap-2">
+      <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg"
+             placeholder="Отсканируйте или введите номер короба" required autofocus data-submit-on-enter>
+      <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#boxNumberInput" title="Сканировать камерой">📷</button>
+      <button type="submit" class="btn btn-primary">Добавить</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-md-7">
+    <div class="card p-3">
+      <h5>Список товара (суммировано по коробам)</h5>
+      <table class="table table-sm">
+        <thead><tr><th>Товар</th><th>Кол-во</th></tr></thead>
+        <tbody>
+        {% for line in lines %}
+          <tr>
+            <td>{{ line.nomenclature.name }} <span class="text-muted">({{ line.nomenclature.sku }})</span></td>
+            <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="2" class="text-muted">Позиций еще нет — отсканируйте короб</td></tr>
+        {% endfor %}
+        </tbody>
+        {% if lines %}
+        <tfoot>
+          <tr class="fw-bold"><td>Итого</td><td>{{ doc.total_qty() }}</td></tr>
+        </tfoot>
+        {% endif %}
+      </table>
+    </div>
+  </div>
+
+  <div class="col-md-5">
+    <div class="card p-3">
+      <h5>Отсканированные короба</h5>
+      <table class="table table-sm">
+        <thead><tr><th>Короб</th><th>Время</th>{% if doc.status == 'draft' %}<th></th>{% endif %}</tr></thead>
+        <tbody>
+        {% for sb in scanned_boxes %}
+          <tr>
+            <td><a href="{{ url_for('boxes.detail', box_id=sb.box.id) }}">{{ sb.box.box_number }}</a></td>
+            <td>{{ sb.scanned_at.strftime('%H:%M:%S') }}</td>
+            {% if doc.status == 'draft' %}
+            <td>
+              <form method="post" action="{{ url_for('inventory.delete_scanned_box', doc_id=doc.id, scanned_id=sb.id) }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Исключить короб, пересчитать суммы">✕</button>
+              </form>
+            </td>
+            {% endif %}
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="text-muted">Коробов еще нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
