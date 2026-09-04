@@ -13,7 +13,17 @@ from flask import (
 from flask_login import current_user
 
 from ..extensions import db
-from ..models import Box, BoxItem, Cell, Nomenclature, PlacementDocument, PlacementLine, UnplacedStock, Warehouse
+from ..models import (
+    Box,
+    BoxItem,
+    Cell,
+    MovementLine,
+    Nomenclature,
+    PlacementDocument,
+    PlacementLine,
+    UnplacedStock,
+    Warehouse,
+)
 from ..utils.excel_io import export_placement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
@@ -264,6 +274,46 @@ def place_box_standalone(box_id):
     else:
         flash(f"Короб {box.box_number} размещен в ячейке {box.cell.code}", "success")
     return redirect(next_url)
+
+
+@bp.route("/<int:doc_id>/delete", methods=["POST"])
+def delete_document(doc_id):
+    """Удаляет черновик размещения целиком: неупакованный остаток и остаток,
+    упакованный в короба этого документа, возвращается обратно в
+    неразмещенный остаток склада, сами короба (и их содержимое) удаляются.
+    Если какой-то короб уже успел уехать перемещением — удалить нельзя,
+    чтобы не потерять историю и не рассинхронизировать расположение."""
+    if not current_user.is_admin:
+        flash("Удалять документы может только администратор", "danger")
+        return redirect(url_for("placement.detail", doc_id=doc_id))
+
+    doc = PlacementDocument.query.get_or_404(doc_id)
+    if doc.status != "draft":
+        flash("Можно удалить только черновик — завершенный документ уже разместил товар в ячейках", "danger")
+        return redirect(url_for("placement.detail", doc_id=doc_id))
+
+    boxes = doc.boxes.all()
+    for box in boxes:
+        if MovementLine.query.filter_by(box_id=box.id).first():
+            flash(
+                f"Нельзя удалить: короб {box.box_number} уже участвует в перемещении",
+                "danger",
+            )
+            return redirect(url_for("placement.detail", doc_id=doc_id))
+
+    for line in doc.lines.filter_by(box_id=None).all():
+        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, line.qty)
+
+    for box in boxes:
+        for item in box.items:
+            UnplacedStock.add(doc.warehouse_id, item.nomenclature_id, item.qty)
+        db.session.delete(box)
+
+    number = doc.number
+    db.session.delete(doc)
+    db.session.commit()
+    flash(f"Документ размещения {number} удален, остаток возвращен в неразмещенный", "success")
+    return redirect(url_for("placement.list_documents"))
 
 
 @bp.route("/<int:doc_id>/complete", methods=["POST"])

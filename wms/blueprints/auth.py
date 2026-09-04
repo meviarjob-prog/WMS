@@ -64,6 +64,9 @@ def create_user():
     full_name = request.form.get("full_name", "").strip()
     is_admin = request.form.get("is_admin") == "on"
     shift_minutes = request.form.get("shift_minutes", type=int) or 480
+    role = request.form.get("role", "warehouse")
+    if role not in ("warehouse", "production"):
+        role = "warehouse"
 
     if not username:
         flash("Укажите логин", "danger")
@@ -74,7 +77,13 @@ def create_user():
         return redirect(url_for("auth.users"))
 
     temp_password = secrets.token_urlsafe(6)
-    user = User(username=username, full_name=full_name, is_admin=is_admin, shift_minutes=shift_minutes)
+    user = User(
+        username=username,
+        full_name=full_name,
+        is_admin=is_admin,
+        shift_minutes=shift_minutes,
+        role=role,
+    )
     user.set_password(temp_password)
     db.session.add(user)
     db.session.commit()
@@ -104,6 +113,30 @@ def update_shift_minutes(user_id):
     user.shift_minutes = shift_minutes
     db.session.commit()
     flash(f"Плановая смена для «{user.username}» обновлена: {shift_minutes} мин", "success")
+    return redirect(url_for("auth.users"))
+
+
+@bp.route("/users/<int:user_id>/role", methods=["POST"])
+@login_required
+def update_role(user_id):
+    """Роль ограничивает доступ: "production" видит только сканирование ЧЗ
+    на производстве, ничего больше (проверяется в before_request)."""
+    if not _require_admin():
+        return redirect(url_for("main.index"))
+
+    user = User.query.get_or_404(user_id)
+    role = request.form.get("role", "warehouse")
+    if role not in ("warehouse", "production"):
+        flash("Некорректная роль", "danger")
+        return redirect(url_for("auth.users"))
+
+    if user.id == current_user.id and role == "production" and not user.is_admin:
+        flash("Нельзя ограничить самого себя до роли «производство»", "danger")
+        return redirect(url_for("auth.users"))
+
+    user.role = role
+    db.session.commit()
+    flash(f"Роль для «{user.username}» обновлена", "success")
     return redirect(url_for("auth.users"))
 
 

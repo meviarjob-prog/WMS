@@ -135,6 +135,10 @@ def create_app(config_class=Config):
             return None
         if not current_user.is_authenticated:
             return redirect(url_for("auth.login", next=request.full_path))
+        # Роль "производство" — доступ только к сканированию ЧЗ, ничего
+        # больше (даже при прямом вводе адреса другой страницы).
+        if current_user.is_production_only() and not request.endpoint.startswith("production."):
+            return redirect(url_for("production.index"))
         return None
 
     @app.context_processor

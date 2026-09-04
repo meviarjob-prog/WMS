@@ -21,6 +21,13 @@
           <label class="form-check-label" for="isAdminCheck">Администратор</label>
         </div>
         <div class="mb-2">
+          <label class="form-label">Роль</label>
+          <select name="role" class="form-select">
+            <option value="warehouse">Сотрудник склада (полный доступ)</option>
+            <option value="production">Сотрудник производства (только сканирование ЧЗ)</option>
+          </select>
+        </div>
+        <div class="mb-2">
           <label class="form-label">Плановая смена, мин <span class="text-muted">(для эффективности на производстве)</span></label>
           <input type="number" step="1" min="1" name="shift_minutes" class="form-control" value="480">
         </div>
@@ -33,13 +40,24 @@
   <div class="col-md-8">
     <div class="card p-3">
       <table class="table table-sm">
-        <thead><tr><th>Логин</th><th>Имя</th><th>Права</th><th>Смена, мин</th><th>Статус</th><th></th></tr></thead>
+        <thead><tr><th>Логин</th><th>Имя</th><th>Права</th><th>Роль</th><th>Смена, мин</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for u in users %}
           <tr>
             <td>{{ u.username }}</td>
             <td>{{ u.full_name or '' }}</td>
             <td>{% if u.is_admin %}<span class="badge bg-primary">Админ</span>{% else %}Сотрудник{% endif %}</td>
+            <td style="min-width:200px">
+              <form method="post" action="{{ url_for('auth.update_role', user_id=u.id) }}" class="d-flex gap-1">
+                <select name="role" class="form-select form-select-sm" {% if u.id == current_user.id and not u.is_admin %}disabled{% endif %}>
+                  <option value="warehouse" {% if u.role == 'warehouse' %}selected{% endif %}>Склад (полный доступ)</option>
+                  <option value="production" {% if u.role == 'production' %}selected{% endif %}>Производство (только ЧЗ)</option>
+                </select>
+                {% if u.id != current_user.id or u.is_admin %}
+                <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+                {% endif %}
+              </form>
+            </td>
             <td style="min-width:120px">
               <form method="post" action="{{ url_for('auth.update_shift_minutes', user_id=u.id) }}" class="d-flex gap-1">
                 <input type="number" step="1" min="1" name="shift_minutes" value="{{ u.shift_minutes }}" class="form-control form-control-sm" style="width:70px">

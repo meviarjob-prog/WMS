@@ -28,6 +28,14 @@ class User(UserMixin, db.Model):
     # Плановая длительность смены (минут) — используется для расчета
     # эффективности в модуле «Производство» (норма-минуты / эта величина).
     shift_minutes = db.Column(db.Integer, nullable=False, default=480)
+    # "warehouse" — обычный доступ ко всем разделам (как раньше);
+    # "production" — ограниченный доступ: только сканирование ЧЗ на
+    # производстве, ничего больше (проверяется в before_request). Админ
+    # (is_admin=True) всегда имеет полный доступ независимо от role.
+    role = db.Column(db.String(20), nullable=False, default="warehouse")
+
+    def is_production_only(self):
+        return self.role == "production" and not self.is_admin
 
     def set_password(self, raw_password):
         self.password_hash = generate_password_hash(raw_password)

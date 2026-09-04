@@ -16,6 +16,11 @@
     <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
       <button type="submit" class="btn btn-success">✅ Завершить перемещение</button>
     </form>
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('movement.delete_document', doc_id=doc.id) }}" class="d-inline" onsubmit="return confirm('Удалить список перемещения {{ doc.number }} целиком? Действие необратимо.');">
+      <button type="submit" class="btn btn-outline-danger">🗑 Удалить документ</button>
+    </form>
+    {% endif %}
     {% endif %}
   </div>
 </div>

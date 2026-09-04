@@ -125,6 +125,24 @@ def set_cell(doc_id, line_id):
     return redirect(url_for("movement.detail", doc_id=doc_id))
 
 
+@bp.route("/<int:doc_id>/delete", methods=["POST"])
+def delete_document(doc_id):
+    if not current_user.is_admin:
+        flash("Удалять документы может только администратор", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc_id))
+
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status != "draft":
+        flash("Можно удалить только черновик — завершенный документ уже переместил короба", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc_id))
+
+    number = doc.number
+    db.session.delete(doc)
+    db.session.commit()
+    flash(f"Список перемещения {number} удален", "success")
+    return redirect(url_for("movement.list_documents"))
+
+
 @bp.route("/<int:doc_id>/complete", methods=["POST"])
 def complete(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)
