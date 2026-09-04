@@ -117,9 +117,11 @@ def create_app(config_class=Config):
 
     with app.app_context():
         from . import models  # noqa: F401
+        from .utils.categorize import bootstrap_categories
 
         db.create_all()
         _bootstrap_admin()
+        bootstrap_categories()
 
     @login_manager.user_loader
     def load_user(user_id):

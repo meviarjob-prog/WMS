@@ -15,6 +15,40 @@ class Counter(db.Model):
     value = db.Column(db.Integer, nullable=False, default=0)
 
 
+class AppSetting(db.Model):
+    """Простые настройки приложения в виде ключ-значение (например,
+    задержка между сканами на производстве) — редактируются администратором,
+    без отдельной формы под каждую настройку."""
+
+    __tablename__ = "app_settings"
+
+    key = db.Column(db.String(50), primary_key=True)
+    value = db.Column(db.String(200))
+
+
+class ProductCategory(db.Model):
+    """Вид товара (свитер/кардиган/шапка/...) — определяется автоматически
+    по вхождению ключевого слова в название товара при создании/импорте
+    номенклатуры. У каждого вида своя норма времени на 1 шт для расчета
+    эффективности на производстве (используется, если у конкретного товара
+    норма не задана явно)."""
+
+    __tablename__ = "product_categories"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    # Ключевые слова через запятую для автоопределения по названию товара
+    # (регистронезависимое вхождение подстроки), например "свитер,свитера".
+    keywords = db.Column(db.String(300))
+    norm_minutes = db.Column(db.Float, nullable=True)
+    # Категория-заглушка: присваивается товару, если ни одно ключевое слово
+    # других категорий не подошло. Должна быть ровно одна такая категория.
+    is_default = db.Column(db.Boolean, nullable=False, default=False)
+
+    def __repr__(self):
+        return f"<ProductCategory {self.name}>"
+
+
 class User(UserMixin, db.Model):
     __tablename__ = "users"
 
@@ -126,9 +160,19 @@ class Nomenclature(db.Model):
     description = db.Column(db.String(500))
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     # Норма времени на изготовление 1 шт (минут) — используется в модуле
-    # «Производство» для расчета эффективности сотрудника. Не задана —
-    # позиция просто не участвует в расчете нормо-минут.
+    # «Производство» для расчета эффективности сотрудника. Если не задана —
+    # берется норма вида товара (category.norm_minutes).
     norm_minutes = db.Column(db.Float, nullable=True)
+    # Вид товара (свитер/кардиган/шапка/...) — определяется автоматически
+    # по названию при создании/импорте, задает норму по умолчанию.
+    category_id = db.Column(db.Integer, db.ForeignKey("product_categories.id"), nullable=True)
+
+    category = db.relationship("ProductCategory")
+
+    def effective_norm_minutes(self):
+        if self.norm_minutes is not None:
+            return self.norm_minutes
+        return self.category.norm_minutes if self.category else None
 
     def __repr__(self):
         return f"<Nomenclature {self.sku} {self.name}>"
@@ -342,20 +386,18 @@ class MovementLine(db.Model):
 class ProductionRecord(db.Model):
     """Одна собранная сотрудником единица товара на производстве.
 
-    Обычный штрихкод товара (barcode) одинаков у всех единиц одного
-    артикула и сам по себе не может подтвердить количество — его можно
-    отсканировать сколько угодно раз. Код Честного Знака у каждой
-    физической единицы уникален, поэтому именно на него завязана защита
-    от накрутки: UNIQUE на chestny_znak гарантирует на уровне БД, что
-    одна и та же промаркированная единица не будет засчитана дважды —
-    ни по ошибке, ни намеренно (в т.ч. другим сотрудником)."""
+    Сканируется обычный штрихкод товара — он одинаков у всех единиц
+    одного артикула, поэтому надежно исключить накрутку по количеству
+    (как это делает уникальный код) нельзя. Вместо этого — простая защита
+    от случайных повторных сканов: минимальный интервал между двумя
+    сканами одного сотрудника (см. production._scan_cooldown_seconds()),
+    настраиваемый администратором."""
 
     __tablename__ = "production_records"
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
-    chestny_znak = db.Column(db.String(300), nullable=False, unique=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     # Рабочий день, к которому относится запись (для группировки по сменам
     # в отчете эффективности) — отдельно от created_at на случай смены
@@ -366,4 +408,4 @@ class ProductionRecord(db.Model):
     nomenclature = db.relationship("Nomenclature")
 
     def __repr__(self):
-        return f"<ProductionRecord {self.chestny_znak}>"
+        return f"<ProductionRecord {self.id}>"

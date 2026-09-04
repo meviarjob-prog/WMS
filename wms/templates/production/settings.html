@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Настройки производства{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('production.index') }}">&larr; Производство</a></p>
+<h3 class="mb-4">Настройки производства</h3>
+
+<div class="row g-4">
+  <div class="col-md-5">
+    <div class="card p-3">
+      <h5>Задержка между сканами</h5>
+      <p class="text-muted small">
+        Минимальный интервал (сек) между двумя сканами одного сотрудника —
+        защита от случайного повторного скана. 0 — без задержки.
+      </p>
+      <form method="post" action="{{ url_for('production.settings') }}" class="d-flex gap-2">
+        <input type="number" step="1" min="0" name="cooldown_seconds" class="form-control" value="{{ cooldown_seconds }}">
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+      </form>
+    </div>
+
+    <div class="card p-3 mt-3">
+      <h5>Добавить вид товара</h5>
+      <form method="post" action="{{ url_for('production.create_category') }}">
+        <div class="mb-2">
+          <label class="form-label">Название</label>
+          <input type="text" name="name" class="form-control" required placeholder="например, Джемпер">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Ключевые слова <span class="text-muted">(через запятую, для автоопределения по названию товара)</span></label>
+          <input type="text" name="keywords" class="form-control" placeholder="джемпер,джемперы">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Норма времени на 1 шт, мин</label>
+          <input type="number" step="0.1" min="0" name="norm_minutes" class="form-control">
+        </div>
+        <button type="submit" class="btn btn-primary">Добавить</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-md-7">
+    <div class="card p-3">
+      <h5>Виды товара и нормы</h5>
+      <p class="text-muted small">
+        При создании или импорте товара его вид определяется автоматически
+        по вхождению одного из ключевых слов в название (без учета
+        регистра). Если ничего не подошло — присваивается вид-заглушка
+        (отмечен ниже).
+      </p>
+      <table class="table table-sm">
+        <thead><tr><th>Вид</th><th>Ключевые слова</th><th>Норма, мин</th><th></th></tr></thead>
+        <tbody>
+        {% for cat in categories %}
+          <tr>
+            <td>{{ cat.name }}{% if cat.is_default %} <span class="badge bg-secondary">по умолчанию</span>{% endif %}</td>
+            <td colspan="3">
+              <form method="post" action="{{ url_for('production.update_category', category_id=cat.id) }}" class="d-flex gap-2 align-items-center">
+                <input type="text" name="keywords" class="form-control form-control-sm" value="{{ cat.keywords or '' }}" style="max-width:220px">
+                <input type="number" step="0.1" min="0" name="norm_minutes" class="form-control form-control-sm" value="{{ cat.norm_minutes if cat.norm_minutes is not none else '' }}" style="width:90px">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="text-muted">Видов товара еще нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

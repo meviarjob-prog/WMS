@@ -1,7 +1,8 @@
 from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
 
 from ..extensions import db
-from ..models import Nomenclature
+from ..models import Nomenclature, ProductCategory
+from ..utils.categorize import classify_by_name
 from ..utils.excel_io import (
     build_nomenclature_template,
     export_nomenclature_to_excel,
@@ -27,7 +28,8 @@ def list_nomenclature():
             )
         )
     items = query.order_by(Nomenclature.name).all()
-    return render_template("nomenclature/list.html", items=items, q=q)
+    categories = ProductCategory.query.order_by(ProductCategory.name).all()
+    return render_template("nomenclature/list.html", items=items, q=q, categories=categories)
 
 
 @bp.route("/create", methods=["POST"])
@@ -54,6 +56,8 @@ def create_nomenclature():
         flash(f"Штрихкод '{barcode}' уже используется", "danger")
         return redirect(url_for("nomenclature.list_nomenclature"))
 
+    category = classify_by_name(name)
+
     item = Nomenclature(
         sku=sku,
         barcode=barcode,
@@ -61,6 +65,7 @@ def create_nomenclature():
         unit=unit,
         description=description,
         norm_minutes=norm_minutes,
+        category_id=category.id if category else None,
     )
     db.session.add(item)
     db.session.commit()
@@ -76,6 +81,18 @@ def update_norm(item_id):
     item.norm_minutes = norm_minutes
     db.session.commit()
     flash(f"Норма для «{item.name}» обновлена", "success")
+    return redirect(url_for("nomenclature.list_nomenclature", q=request.form.get("q", "")))
+
+
+@bp.route("/<int:item_id>/category", methods=["POST"])
+def update_category(item_id):
+    """Вид товара определяется автоматически по названию при создании, но
+    его можно поправить вручную (например, если название нетипичное)."""
+    item = Nomenclature.query.get_or_404(item_id)
+    category_id = request.form.get("category_id", type=int)
+    item.category_id = category_id or None
+    db.session.commit()
+    flash(f"Вид товара для «{item.name}» обновлен", "success")
     return redirect(url_for("nomenclature.list_nomenclature", q=request.form.get("q", "")))
 
 

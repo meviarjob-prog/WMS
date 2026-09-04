@@ -5,6 +5,8 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from .categorize import classify_by_name
+
 NOMENCLATURE_HEADERS = [
     "Артикул (SKU)",
     "Штрихкод",
@@ -101,8 +103,14 @@ def import_nomenclature_from_excel(file_stream, db, Nomenclature) -> ImportResul
             existing.description = description
             if norm_minutes is not None:
                 existing.norm_minutes = norm_minutes
+            # Вид товара переопределять не трогаем, если он уже выставлен
+            # (вручную или предыдущим импортом) — только если пуст.
+            if existing.category_id is None:
+                category = classify_by_name(name)
+                existing.category_id = category.id if category else None
             result.updated += 1
         else:
+            category = classify_by_name(name)
             item = Nomenclature(
                 sku=sku,
                 barcode=barcode,
@@ -110,6 +118,7 @@ def import_nomenclature_from_excel(file_stream, db, Nomenclature) -> ImportResul
                 unit=unit or "шт",
                 description=description,
                 norm_minutes=norm_minutes,
+                category_id=category.id if category else None,
             )
             db.session.add(item)
             result.created += 1

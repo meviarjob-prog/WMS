@@ -5,21 +5,49 @@ from flask_login import current_user
 from sqlalchemy import case, func
 
 from ..extensions import db
-from ..models import Nomenclature, ProductionRecord, User
-from ..utils.chestny_znak import extract_gtin, gtin_barcode_candidates
+from ..models import AppSetting, Nomenclature, ProductCategory, ProductionRecord, User
 from ..utils.excel_io import export_production_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 
 bp = Blueprint("production", __name__)
+
+SCAN_COOLDOWN_KEY = "production_scan_cooldown_seconds"
+DEFAULT_SCAN_COOLDOWN_SECONDS = 40
+
+
+def get_scan_cooldown_seconds():
+    setting = AppSetting.query.get(SCAN_COOLDOWN_KEY)
+    if setting and setting.value:
+        try:
+            return int(setting.value)
+        except ValueError:
+            pass
+    return DEFAULT_SCAN_COOLDOWN_SECONDS
+
+
+def set_scan_cooldown_seconds(value):
+    setting = AppSetting.query.get(SCAN_COOLDOWN_KEY)
+    if not setting:
+        setting = AppSetting(key=SCAN_COOLDOWN_KEY)
+        db.session.add(setting)
+    setting.value = str(value)
+    db.session.commit()
+
+
+def _effective_norm_column():
+    """Норма для расчета нормо-минут: своя у товара, а если не задана —
+    норма его вида (категории)."""
+    return func.coalesce(Nomenclature.norm_minutes, ProductCategory.norm_minutes)
 
 
 def _today_stats(user_id):
     row = (
         db.session.query(
             func.count(ProductionRecord.id),
-            func.sum(Nomenclature.norm_minutes),
+            func.sum(_effective_norm_column()),
         )
         .join(Nomenclature, Nomenclature.id == ProductionRecord.nomenclature_id)
+        .outerjoin(ProductCategory, ProductCategory.id == Nomenclature.category_id)
         .filter(ProductionRecord.user_id == user_id, ProductionRecord.work_date == date.today())
         .first()
     )
@@ -36,70 +64,57 @@ def index():
         .limit(50)
         .all()
     )
-    return render_template("production/index.html", stats=stats, records=records)
-
-
-def _find_nomenclature_by_gtin(chestny_znak):
-    gtin = extract_gtin(chestny_znak)
-    if not gtin:
-        return None
-    for candidate in gtin_barcode_candidates(gtin):
-        item = Nomenclature.query.filter_by(barcode=candidate).first()
-        if item:
-            return item
-    return None
+    return render_template(
+        "production/index.html",
+        stats=stats,
+        records=records,
+        cooldown_seconds=get_scan_cooldown_seconds(),
+    )
 
 
 @bp.route("/scan", methods=["POST"])
 def scan():
-    """Сканируется только код Честного Знака — штрихкод товара не нужен,
-    товар определяется по GTIN, зашитому в сам код ЧЗ (см.
-    utils/chestny_znak.py). Если формат не распознан или товар с таким
-    штрихкодом не заведен в номенклатуре — фронтенд просит выбрать товар
-    вручную и присылает тот же код повторно вместе с nomenclature_id."""
+    """Сканируется обычный штрихкод товара. Он одинаков у всех единиц
+    одного артикула, поэтому надежно отличить одну единицу от другой
+    (как раньше делал уникальный код Честного Знака) нельзя — вместо
+    этого простая защита от случайных повторных сканов: минимальный
+    интервал между двумя сканами одного сотрудника, задается
+    администратором в «Производство → Настройки»."""
     payload = request.json or {}
-    chestny_znak = (payload.get("chestny_znak") or "").strip()
-    nomenclature_id = payload.get("nomenclature_id")
+    barcode = (payload.get("barcode") or "").strip()
 
-    if not chestny_znak:
-        return jsonify({"ok": False, "error": "Отсканируйте код Честного Знака"}), 400
+    if not barcode:
+        return jsonify({"ok": False, "error": "Отсканируйте штрихкод товара"}), 400
 
-    existing = ProductionRecord.query.filter_by(chestny_znak=chestny_znak).first()
-    if existing:
-        when = existing.created_at.strftime("%d.%m.%Y %H:%M")
-        who = existing.user.display_name() if existing.user else "неизвестно"
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": f"Этот код Честного Знака уже учтен: {who}, {when}. Повторно засчитать нельзя.",
-                }
-            ),
-            409,
+    item = Nomenclature.query.filter_by(barcode=barcode).first()
+    if not item:
+        return jsonify({"ok": False, "error": f"Товар со штрихкодом '{barcode}' не найден"}), 404
+
+    cooldown = get_scan_cooldown_seconds()
+    if cooldown > 0:
+        last_record = (
+            ProductionRecord.query.filter_by(user_id=current_user.id)
+            .order_by(ProductionRecord.created_at.desc())
+            .first()
         )
-
-    if nomenclature_id:
-        item = Nomenclature.query.get(nomenclature_id)
-        if not item:
-            return jsonify({"ok": False, "error": "Товар не найден"}), 404
-    else:
-        item = _find_nomenclature_by_gtin(chestny_znak)
-        if not item:
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "need_manual": True,
-                        "error": "Не удалось определить товар по коду — выберите вручную",
-                    }
-                ),
-                200,
-            )
+        if last_record:
+            elapsed = (datetime.utcnow() - last_record.created_at).total_seconds()
+            if elapsed < cooldown:
+                wait = int(cooldown - elapsed) + 1
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Слишком быстро — подождите еще {wait} сек с прошлого скана",
+                            "wait_seconds": wait,
+                        }
+                    ),
+                    429,
+                )
 
     record = ProductionRecord(
         user_id=current_user.id,
         nomenclature_id=item.id,
-        chestny_znak=chestny_znak,
         work_date=date.today(),
     )
     db.session.add(record)
@@ -111,6 +126,7 @@ def scan():
             "ok": True,
             "record": {"id": record.id, "name": item.name, "sku": item.sku, "time": record.created_at.strftime("%H:%M:%S")},
             "today": stats,
+            "cooldown_seconds": cooldown,
         }
     )
 
@@ -128,6 +144,72 @@ def delete_record(record_id):
     return redirect(request.referrer or url_for("production.index"))
 
 
+def _require_admin():
+    if not current_user.is_admin:
+        flash("Доступно только администраторам", "danger")
+        return False
+    return True
+
+
+@bp.route("/settings", methods=["GET", "POST"])
+def settings():
+    if not _require_admin():
+        return redirect(url_for("production.index"))
+
+    if request.method == "POST":
+        cooldown = request.form.get("cooldown_seconds", type=int)
+        if cooldown is None or cooldown < 0:
+            flash("Укажите корректную задержку в секундах (0 — без задержки)", "danger")
+        else:
+            set_scan_cooldown_seconds(cooldown)
+            flash("Задержка между сканами обновлена", "success")
+        return redirect(url_for("production.settings"))
+
+    categories = ProductCategory.query.order_by(ProductCategory.name).all()
+    return render_template(
+        "production/settings.html",
+        cooldown_seconds=get_scan_cooldown_seconds(),
+        categories=categories,
+    )
+
+
+@bp.route("/settings/categories/create", methods=["POST"])
+def create_category():
+    if not _require_admin():
+        return redirect(url_for("production.index"))
+
+    name = request.form.get("name", "").strip()
+    keywords = request.form.get("keywords", "").strip()
+    norm_minutes = request.form.get("norm_minutes", type=float)
+
+    if not name:
+        flash("Укажите название вида товара", "danger")
+        return redirect(url_for("production.settings"))
+
+    if ProductCategory.query.filter_by(name=name).first():
+        flash(f"Вид «{name}» уже существует", "danger")
+        return redirect(url_for("production.settings"))
+
+    category = ProductCategory(name=name, keywords=keywords, norm_minutes=norm_minutes)
+    db.session.add(category)
+    db.session.commit()
+    flash(f"Вид «{name}» добавлен", "success")
+    return redirect(url_for("production.settings"))
+
+
+@bp.route("/settings/categories/<int:category_id>/update", methods=["POST"])
+def update_category(category_id):
+    if not _require_admin():
+        return redirect(url_for("production.index"))
+
+    category = ProductCategory.query.get_or_404(category_id)
+    category.keywords = request.form.get("keywords", "").strip()
+    category.norm_minutes = request.form.get("norm_minutes", type=float)
+    db.session.commit()
+    flash(f"Вид «{category.name}» обновлен", "success")
+    return redirect(url_for("production.settings"))
+
+
 def _parse_date(value):
     if not value:
         return None
@@ -138,15 +220,17 @@ def _parse_date(value):
 
 
 def _efficiency_rows(date_from=None, date_to=None, user_id=None):
+    effective_norm = _effective_norm_column()
     query = (
         db.session.query(
             ProductionRecord.user_id,
             ProductionRecord.work_date,
             func.count(ProductionRecord.id),
-            func.sum(Nomenclature.norm_minutes),
-            func.sum(case((Nomenclature.norm_minutes.is_(None), 1), else_=0)),
+            func.sum(effective_norm),
+            func.sum(case((effective_norm.is_(None), 1), else_=0)),
         )
         .join(Nomenclature, Nomenclature.id == ProductionRecord.nomenclature_id)
+        .outerjoin(ProductCategory, ProductCategory.id == Nomenclature.category_id)
         .group_by(ProductionRecord.user_id, ProductionRecord.work_date)
     )
     if date_from:
