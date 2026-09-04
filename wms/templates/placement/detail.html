@@ -8,7 +8,7 @@
     <h3 class="mb-1">Размещение {{ doc.number }}
       <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
     </h3>
-    <div class="text-muted">Склад: {{ doc.warehouse.name }}</div>
+    <div class="text-muted">Склад: {{ doc.warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
   </div>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('placement.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
@@ -23,11 +23,16 @@
 {% if doc.status == 'draft' %}
 <div class="card p-3 mb-4">
   <h5>Неразмещенный остаток на складе «{{ doc.warehouse.name }}»</h5>
+  {% if available_stock %}
+  <p class="text-muted small mb-2">Двойной клик по строке — взять всё доступное количество под упаковку.</p>
+  {% endif %}
   <table class="table table-sm mb-0">
     <thead><tr><th>Товар</th><th>Доступно</th></tr></thead>
-    <tbody>
+    <tbody id="availableStockBody">
     {% for row in available_stock %}
-      <tr><td>{{ row.nomenclature.name }} ({{ row.nomenclature.sku }})</td><td>{{ row.qty }} {{ row.nomenclature.unit }}</td></tr>
+      <tr class="stock-row" style="cursor:pointer" data-nomenclature-id="{{ row.nomenclature_id }}" data-available="{{ row.qty }}" title="Двойной клик — добавить под упаковку">
+        <td>{{ row.nomenclature.name }} ({{ row.nomenclature.sku }})</td><td>{{ row.qty }} {{ row.nomenclature.unit }}</td>
+      </tr>
     {% else %}
       <tr><td colspan="2" class="text-muted">Неразмещенного остатка на этом складе нет</td></tr>
     {% endfor %}
@@ -203,6 +208,33 @@
             scanResult.innerHTML = '<span class="text-danger">' + data.error + '</span>';
           }
         });
+    });
+  }
+
+  // Двойной клик по строке остатка — добавить всё доступное количество под упаковку
+  const stockBody = document.getElementById("availableStockBody");
+  if (stockBody) {
+    stockBody.querySelectorAll(".stock-row").forEach((row) => {
+      row.addEventListener("dblclick", () => {
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = "{{ url_for('placement.add_line', doc_id=doc.id) }}";
+
+        const idInput = document.createElement("input");
+        idInput.type = "hidden";
+        idInput.name = "nomenclature_id";
+        idInput.value = row.dataset.nomenclatureId;
+
+        const qtyInput = document.createElement("input");
+        qtyInput.type = "hidden";
+        qtyInput.name = "qty";
+        qtyInput.value = row.dataset.available;
+
+        form.appendChild(idInput);
+        form.appendChild(qtyInput);
+        document.body.appendChild(form);
+        form.submit();
+      });
     });
   }
 </script>

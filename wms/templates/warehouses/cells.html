@@ -2,7 +2,53 @@
 {% block title %}Ячейки — {{ warehouse.name }}{% endblock %}
 {% block content %}
 <p><a href="{{ url_for('warehouses.list_warehouses') }}">&larr; Склады</a></p>
-<h3 class="mb-4">Ячейки склада «{{ warehouse.name }}»</h3>
+<h3 class="mb-4">Склад «{{ warehouse.name }}» ({{ warehouse.code }})</h3>
+
+<div class="row g-4 mb-4">
+  <div class="col-md-5">
+    <div class="card p-3">
+      <h5>Добавить зону</h5>
+      <p class="text-muted small">Зона объединяет несколько ячеек (стеллаж/участок) — для крупной A4-этикетки на вход в зону.</p>
+      <form method="post" action="{{ url_for('warehouses.create_zone', warehouse_id=warehouse.id) }}">
+        <div class="mb-2">
+          <label class="form-label">Код зоны</label>
+          <input type="text" name="code" class="form-control" required placeholder="A">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Название</label>
+          <input type="text" name="name" class="form-control" placeholder="Стеллаж A">
+        </div>
+        <button type="submit" class="btn btn-primary">Создать зону</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-md-7">
+    <div class="card p-3">
+      <h5>Зоны склада</h5>
+      <table class="table table-sm">
+        <thead><tr><th>Код</th><th>Название</th><th>Ячеек</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+        {% for zone in zones %}
+          <tr>
+            <td>{{ zone.code }}</td>
+            <td>{{ zone.name or '' }}</td>
+            <td>{{ zone.cells.count() }}</td>
+            <td>{% if zone.is_active %}<span class="badge bg-success">Активна</span>{% else %}<span class="badge bg-secondary">Отключена</span>{% endif %}</td>
+            <td class="text-nowrap">
+              <a class="btn btn-sm btn-outline-primary" target="_blank" href="{{ url_for('labels.zone_label', zone_id=zone.id) }}">🖨 A4-этикетка</a>
+              <form method="post" action="{{ url_for('warehouses.toggle_zone', zone_id=zone.id) }}" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if zone.is_active else 'Включить' }}</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="text-muted">Зоны еще не созданы</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <div class="row g-4">
   <div class="col-md-5">
@@ -12,6 +58,15 @@
         <div class="mb-2">
           <label class="form-label">Код ячейки</label>
           <input type="text" name="code" class="form-control" required placeholder="A-01-01">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Зона (необязательно)</label>
+          <select name="zone_id" class="form-select">
+            <option value="">Без зоны</option>
+            {% for zone in zones %}
+              <option value="{{ zone.id }}">{{ zone.code }}{% if zone.name %} — {{ zone.name }}{% endif %}</option>
+            {% endfor %}
+          </select>
         </div>
         <div class="mb-2">
           <label class="form-label">Описание</label>
@@ -25,11 +80,12 @@
     <div class="card p-3">
       <h5>Список ячеек</h5>
       <table class="table">
-        <thead><tr><th>Код</th><th>Описание</th><th>Статус</th><th></th></tr></thead>
+        <thead><tr><th>Код</th><th>Зона</th><th>Описание</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for cell in cells %}
           <tr>
             <td>{{ cell.code }}</td>
+            <td>{{ cell.zone.code if cell.zone else '' }}</td>
             <td>{{ cell.description or '' }}</td>
             <td>{% if cell.is_active %}<span class="badge bg-success">Активна</span>{% else %}<span class="badge bg-secondary">Отключена</span>{% endif %}</td>
             <td class="text-nowrap">
@@ -40,7 +96,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="4" class="text-muted">Ячейки еще не созданы</td></tr>
+          <tr><td colspan="5" class="text-muted">Ячейки еще не созданы</td></tr>
         {% endfor %}
         </tbody>
       </table>

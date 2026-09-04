@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Вход — WMS</title>
+<link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+</head>
+<body class="d-flex align-items-center" style="min-height:100vh">
+<div class="container" style="max-width:380px">
+  <div class="text-center mb-4">
+    <div style="font-size:2.5rem">📦</div>
+    <h3>WMS — вход</h3>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ 'danger' if category == 'danger' else category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="card p-4">
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label">Логин</label>
+        <input type="text" name="username" class="form-control form-control-lg" value="{{ username or '' }}" required autofocus>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Пароль</label>
+        <input type="password" name="password" class="form-control form-control-lg" required>
+      </div>
+      <button type="submit" class="btn btn-primary w-100 btn-lg">Войти</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

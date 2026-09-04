@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
+from flask_login import current_user
 
 from ..extensions import db
 from ..models import Box, Cell, MovementDocument, MovementLine, Warehouse
@@ -28,7 +29,11 @@ def new_document():
         flash("Выберите склад назначения", "danger")
         return redirect(url_for("movement.new_document"))
 
-    doc = MovementDocument(number=next_number("movement"), to_warehouse_id=to_warehouse_id)
+    doc = MovementDocument(
+        number=next_number("movement"),
+        to_warehouse_id=to_warehouse_id,
+        created_by_id=current_user.id,
+    )
     db.session.add(doc)
     db.session.commit()
     flash(f"Список перемещения {doc.number} создан — сканируйте короба", "success")

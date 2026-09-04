@@ -1,5 +1,8 @@
 from datetime import datetime
 
+from flask_login import UserMixin
+from werkzeug.security import check_password_hash, generate_password_hash
+
 from .extensions import db
 
 
@@ -10,6 +13,37 @@ class Counter(db.Model):
 
     key = db.Column(db.String(50), primary_key=True)
     value = db.Column(db.Integer, nullable=False, default=0)
+
+
+class User(UserMixin, db.Model):
+    __tablename__ = "users"
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    full_name = db.Column(db.String(200))
+    is_admin = db.Column(db.Boolean, nullable=False, default=False)
+    is_active_user = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def set_password(self, raw_password):
+        self.password_hash = generate_password_hash(raw_password)
+
+    def check_password(self, raw_password):
+        return check_password_hash(self.password_hash, raw_password)
+
+    # UserMixin.is_active — Flask-Login проверяет это свойство при загрузке
+    # пользователя из сессии; свою колонку называем иначе, чтобы не путать
+    # с зарезервированным именем.
+    @property
+    def is_active(self):
+        return self.is_active_user
+
+    def display_name(self):
+        return self.full_name or self.username
+
+    def __repr__(self):
+        return f"<User {self.username}>"
 
 
 class Warehouse(db.Model):
@@ -27,11 +61,35 @@ class Warehouse(db.Model):
         return f"<Warehouse {self.code}>"
 
 
+class Zone(db.Model):
+    """Зона склада — объединяет несколько ячеек (стеллаж/ряд/участок).
+    Печатается как крупная A4-этикетка для навешивания на стеллаж/вход в зону."""
+
+    __tablename__ = "zones"
+
+    id = db.Column(db.Integer, primary_key=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    code = db.Column(db.String(50), nullable=False)
+    name = db.Column(db.String(200))
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+
+    warehouse = db.relationship("Warehouse")
+    cells = db.relationship("Cell", backref="zone", lazy="dynamic")
+
+    __table_args__ = (
+        db.UniqueConstraint("warehouse_id", "code", name="uq_zone_warehouse_code"),
+    )
+
+    def __repr__(self):
+        return f"<Zone {self.code}>"
+
+
 class Cell(db.Model):
     __tablename__ = "cells"
 
     id = db.Column(db.Integer, primary_key=True)
     warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    zone_id = db.Column(db.Integer, db.ForeignKey("zones.id"), nullable=True)
     code = db.Column(db.String(50), nullable=False)
     description = db.Column(db.String(200))
     is_active = db.Column(db.Boolean, nullable=False, default=True)
@@ -148,10 +206,12 @@ class ReceivingDocument(db.Model):
     warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     supplier = db.Column(db.String(200))
     status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
 
     warehouse = db.relationship("Warehouse")
+    created_by = db.relationship("User")
     lines = db.relationship(
         "ReceivingLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
     )
@@ -184,10 +244,12 @@ class PlacementDocument(db.Model):
     number = db.Column(db.String(30), unique=True, nullable=False)
     warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
 
     warehouse = db.relationship("Warehouse")
+    created_by = db.relationship("User")
     lines = db.relationship(
         "PlacementLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
     )
@@ -226,10 +288,12 @@ class MovementDocument(db.Model):
     number = db.Column(db.String(30), unique=True, nullable=False)
     to_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
 
     to_warehouse = db.relationship("Warehouse")
+    created_by = db.relationship("User")
     lines = db.relationship(
         "MovementLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
     )

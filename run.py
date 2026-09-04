@@ -25,6 +25,12 @@ if __name__ == "__main__":
     ssl_context = "adhoc" if use_https else None
     scheme = "https" if use_https else "http"
     port = int(os.environ.get("WMS_PORT", "5000"))
+    # Несколько пользователей работают одновременно (разные ПК/телефоны) —
+    # включаем многопоточность, чтобы запросы не выстраивались в очередь.
+    # Debug-режим Werkzeug по умолчанию выключен: он открывает интерактивную
+    # консоль с выполнением кода при ошибке, что небезопасно, когда сервер
+    # доступен нескольким людям по сети. Включить для разработки: WMS_DEBUG=1.
+    debug = os.environ.get("WMS_DEBUG", "").strip().lower() in ("1", "true", "yes")
 
     lan_ip = _detect_lan_ip()
 
@@ -46,4 +52,4 @@ if __name__ == "__main__":
         )
     print("=" * 60)
 
-    app.run(host="0.0.0.0", port=port, debug=True, ssl_context=ssl_context)
+    app.run(host="0.0.0.0", port=port, debug=debug, threaded=True, ssl_context=ssl_context)

@@ -8,7 +8,7 @@
     <h3 class="mb-1">Перемещение {{ doc.number }}
       <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
     </h3>
-    <div class="text-muted">Склад назначения: {{ doc.to_warehouse.name }}</div>
+    <div class="text-muted">Склад назначения: {{ doc.to_warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
   </div>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>

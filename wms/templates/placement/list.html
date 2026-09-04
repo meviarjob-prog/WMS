@@ -59,13 +59,14 @@
 <div class="card p-3">
   <h5>Документы размещения</h5>
   <table class="table">
-    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Статус</th><th></th></tr></thead>
+    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Автор</th><th>Статус</th><th></th></tr></thead>
     <tbody>
     {% for d in documents %}
       <tr>
         <td>{{ d.number }}</td>
         <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
         <td>{{ d.warehouse.name }}</td>
+        <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
         <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
         <td>
           <a href="{{ url_for('placement.detail', doc_id=d.id) }}">Открыть</a>
@@ -73,7 +74,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="5" class="text-muted">Документов еще нет</td></tr>
+      <tr><td colspan="6" class="text-muted">Документов еще нет</td></tr>
     {% endfor %}
     </tbody>
   </table>

@@ -8,7 +8,7 @@
     <h3 class="mb-1">Приемка {{ doc.number }}
       <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
     </h3>
-    <div class="text-muted">Склад: {{ doc.warehouse.name }} {% if doc.supplier %}· Поставщик: {{ doc.supplier }}{% endif %}</div>
+    <div class="text-muted">Склад: {{ doc.warehouse.name }} {% if doc.supplier %}· Поставщик: {{ doc.supplier }}{% endif %}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
   </div>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('receiving.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
@@ -72,13 +72,21 @@
     {% for line in lines %}
       <tr>
         <td>{{ line.nomenclature.name }} <span class="text-muted">({{ line.nomenclature.sku }})</span></td>
-        <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
         {% if doc.status == 'draft' %}
+        <td style="min-width:160px">
+          <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
+            <input type="number" name="qty" step="0.001" min="0.001" value="{{ line.qty }}" class="form-control form-control-sm" style="width:100px">
+            <span class="align-self-center small text-muted">{{ line.nomenclature.unit }}</span>
+            <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+          </form>
+        </td>
         <td>
           <form method="post" action="{{ url_for('receiving.delete_line', doc_id=doc.id, line_id=line.id) }}">
             <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
           </form>
         </td>
+        {% else %}
+        <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
         {% endif %}
       </tr>
     {% else %}

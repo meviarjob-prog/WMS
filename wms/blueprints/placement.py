@@ -10,6 +10,7 @@ from flask import (
     request,
     url_for,
 )
+from flask_login import current_user
 
 from ..extensions import db
 from ..models import Box, BoxItem, Cell, Nomenclature, PlacementDocument, PlacementLine, UnplacedStock, Warehouse
@@ -53,7 +54,11 @@ def new_document():
         flash("Выберите склад размещения", "danger")
         return redirect(url_for("placement.new_document"))
 
-    doc = PlacementDocument(number=next_number("placement"), warehouse_id=warehouse_id)
+    doc = PlacementDocument(
+        number=next_number("placement"),
+        warehouse_id=warehouse_id,
+        created_by_id=current_user.id,
+    )
     db.session.add(doc)
     db.session.commit()
     flash(f"Документ размещения {doc.number} создан", "success")

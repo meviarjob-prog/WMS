@@ -1,8 +1,10 @@
+from sqlalchemy import text
+
 from ..extensions import db
-from ..models import Counter
 
 # Настройки серий номеров: ключ -> (префикс, ширина)
 SERIES = {
+    "warehouse": ("WH-", 3),
     "receiving": ("PRM-", 6),
     "placement": ("RAZ-", 6),
     "movement": ("PER-", 6),
@@ -11,16 +13,24 @@ SERIES = {
 
 
 def next_number(key: str) -> str:
-    """Атомарно увеличивает счетчик и возвращает отформатированный номер."""
+    """Атомарно увеличивает счетчик и возвращает отформатированный номер.
+
+    Инкремент выполняется одним SQL-запросом (UPSERT) прямо в базе, а не
+    read-modify-write в Python — это важно при одновременной работе
+    нескольких пользователей: два запроса не могут получить один и тот же
+    номер, даже если оба обратились к next_number почти одновременно.
+    """
     prefix, width = SERIES[key]
 
-    counter = Counter.query.filter_by(key=key).first()
-    if counter is None:
-        counter = Counter(key=key, value=0)
-        db.session.add(counter)
-        db.session.flush()
+    db.session.execute(
+        text(
+            "INSERT INTO counters (key, value) VALUES (:key, 1) "
+            "ON CONFLICT(key) DO UPDATE SET value = value + 1"
+        ),
+        {"key": key},
+    )
+    value = db.session.execute(
+        text("SELECT value FROM counters WHERE key = :key"), {"key": key}
+    ).scalar_one()
 
-    counter.value += 1
-    db.session.flush()
-
-    return f"{prefix}{counter.value:0{width}d}"
+    return f"{prefix}{value:0{width}d}"

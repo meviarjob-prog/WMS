@@ -3,5 +3,9 @@ __pycache__/
 .venv/
 venv/
 instance/*.db
+instance/*.db-shm
+instance/*.db-wal
 *.db
+*.db-shm
+*.db-wal
 .DS_Store

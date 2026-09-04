@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Этикетка зоны {{ zone.code }}</title>
+<link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+<style>
+  /* Переопределяем @page 58x40мм из style.css — этой странице нужен A4 */
+  @page { size: A4; margin: 15mm; }
+
+  .zone-label-page {
+    width: 100%;
+    min-height: 240mm;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  .zone-label-page img {
+    max-width: 90%;
+    max-height: 70mm;
+  }
+
+  .zone-label-title {
+    font-size: 30pt;
+    font-weight: 700;
+    margin-top: 8mm;
+  }
+
+  .zone-label-subtitle {
+    font-size: 14pt;
+    color: #333;
+    margin-top: 4mm;
+  }
+
+  .zone-label-cells {
+    font-size: 11pt;
+    color: #333;
+    margin-top: 14mm;
+    max-width: 160mm;
+  }
+</style>
+</head>
+<body data-autoprint="{{ '1' if autoprint else '0' }}">
+<div class="no-print p-2">
+  <a class="btn btn-sm btn-primary" href="{{ url_for('labels.zone_label_pdf', zone_id=zone.id) }}" target="_blank">Скачать PDF</a>
+  <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">Печать</button>
+</div>
+
+<div class="zone-label-page">
+  <img src="{{ barcode_img }}" alt="barcode">
+  <div class="zone-label-title">Зона {{ zone.code }}{% if zone.name %} — {{ zone.name }}{% endif %}</div>
+  <div class="zone-label-subtitle">{{ zone.warehouse.name if zone.warehouse else '' }}</div>
+  {% if cell_codes %}
+  <div class="zone-label-cells">
+    <b>Ячейки в зоне:</b> {{ cell_codes | join(', ') }}
+  </div>
+  {% endif %}
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

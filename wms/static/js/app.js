@@ -93,20 +93,38 @@ function initNomenclatureAutocomplete(root) {
 }
 
 /**
- * Обработчик ввода со сканера штрихкода: сканер эмулирует быструю печать + Enter.
- * onScan(value) вызывается по Enter или после паузы в наборе.
+ * Обработчик ввода со сканера штрихкода. Срабатывает по Enter (если сканер
+ * его присылает) — сразу, ИЛИ автоматически после короткой паузы в наборе
+ * (если сканер настроен без Enter, либо просто не был нажат) — так товар
+ * добавляется сканированием без необходимости нажимать Enter.
+ * onScan(value) вызывается ровно один раз на скан.
  */
-function initBarcodeInput(input, onScan) {
+function initBarcodeInput(input, onScan, options) {
+  const debounceMs = (options && options.debounceMs) || 350;
+  let timer = null;
+
+  function fire() {
+    clearTimeout(timer);
+    timer = null;
+    const value = input.value.trim();
+    if (value) {
+      onScan(value);
+      input.value = "";
+    }
+  }
+
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      const value = input.value.trim();
-      if (value) {
-        onScan(value);
-        input.value = "";
-      }
+      fire();
     }
   });
+
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(fire, debounceMs);
+  });
+
   input.addEventListener("focus", () => input.select());
 }
 

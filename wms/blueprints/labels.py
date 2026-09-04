@@ -1,9 +1,9 @@
 from flask import Blueprint, Response, abort, render_template, request
 
-from ..models import Box, Cell, Nomenclature
+from ..models import Box, Cell, Nomenclature, Zone
 from ..utils.barcodes import generate_barcode_data_uri
 from ..utils.http import content_disposition
-from ..utils.labels_pdf import build_label_pdf
+from ..utils.labels_pdf import build_label_pdf, build_zone_label_pdf
 
 bp = Blueprint("labels", __name__)
 
@@ -96,4 +96,31 @@ def cell_label_pdf(cell_id):
         pdf,
         mimetype="application/pdf",
         headers={"Content-Disposition": content_disposition(f"cell_{cell.code}.pdf", "inline")},
+    )
+
+
+# ---------- Этикетка зоны (A4) ----------
+
+
+@bp.route("/zone/<int:zone_id>")
+def zone_label(zone_id):
+    zone = Zone.query.get_or_404(zone_id)
+    img = generate_barcode_data_uri(zone.code)
+    cell_codes = [c.code for c in zone.cells.order_by(Cell.code).all()]
+    return render_template(
+        "labels/zone.html", zone=zone, barcode_img=img, cell_codes=cell_codes, autoprint=_autoprint()
+    )
+
+
+@bp.route("/zone/<int:zone_id>.pdf")
+def zone_label_pdf(zone_id):
+    zone = Zone.query.get_or_404(zone_id)
+    subtitle = zone.warehouse.name if zone.warehouse else ""
+    title = f"Зона {zone.code}" + (f" — {zone.name}" if zone.name else "")
+    cell_codes = [c.code for c in zone.cells.order_by(Cell.code).all()]
+    pdf = build_zone_label_pdf(zone.code, title, subtitle, cell_codes)
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": content_disposition(f"zone_{zone.code}.pdf", "inline")},
     )

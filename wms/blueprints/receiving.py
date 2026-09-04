@@ -10,6 +10,7 @@ from flask import (
     request,
     url_for,
 )
+from flask_login import current_user
 
 from ..extensions import db
 from ..models import Nomenclature, ReceivingDocument, ReceivingLine, UnplacedStock
@@ -42,7 +43,10 @@ def new_document():
         return redirect(url_for("receiving.new_document"))
 
     doc = ReceivingDocument(
-        number=next_number("receiving"), warehouse_id=warehouse_id, supplier=supplier
+        number=next_number("receiving"),
+        warehouse_id=warehouse_id,
+        supplier=supplier,
+        created_by_id=current_user.id,
     )
     db.session.add(doc)
     db.session.commit()
@@ -103,6 +107,25 @@ def add_line(doc_id):
     _add_or_increment_line(doc, item, qty)
     flash(f"Добавлено: {item.name} ({qty} {item.unit})", "success")
     return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+
+@bp.route("/<int:doc_id>/lines/<int:line_id>/update", methods=["POST"])
+def update_line(doc_id, line_id):
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if doc.status != "draft":
+        flash("Документ уже завершен", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc_id))
+
+    line = ReceivingLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
+    qty = request.form.get("qty", type=float)
+    if qty is None or qty <= 0:
+        flash("Укажите корректное количество", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc_id))
+
+    line.qty = qty
+    db.session.commit()
+    flash(f"Количество обновлено: {line.nomenclature.name} — {qty} {line.nomenclature.unit}", "success")
+    return redirect(url_for("receiving.detail", doc_id=doc_id))
 
 
 @bp.route("/<int:doc_id>/lines/<int:line_id>/delete", methods=["POST"])

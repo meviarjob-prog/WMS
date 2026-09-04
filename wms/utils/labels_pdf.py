@@ -2,7 +2,7 @@ import io
 import os
 import textwrap
 
-from reportlab.lib.pagesizes import mm
+from reportlab.lib.pagesizes import A4, mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -62,6 +62,55 @@ def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
         c.setFont(FONT_REGULAR, 7)
         ty -= line_height
         c.drawCentredString(LABEL_WIDTH / 2, ty, subtitle)
+
+    c.showPage()
+    c.save()
+    return buffer.getvalue()
+
+
+def build_zone_label_pdf(code_value: str, title: str, subtitle: str = "", cell_codes=None) -> bytes:
+    """Строит крупную A4-этикетку зоны склада: штрихкод, код/название зоны,
+    список входящих ячеек — для печати и навешивания на стеллаж/вход в зону.
+    """
+    width, height = A4
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+
+    margin = 20 * mm
+
+    png_bytes = generate_barcode_png_bytes(code_value)
+    img = ImageReader(io.BytesIO(png_bytes))
+    img_w, img_h = img.getSize()
+
+    max_img_w = width - 2 * margin
+    max_img_h = 60 * mm
+    scale = min(max_img_w / img_w, max_img_h / img_h)
+    draw_w = img_w * scale
+    draw_h = img_h * scale
+    x = (width - draw_w) / 2
+    y = height - margin - draw_h
+
+    c.drawImage(img, x, y, width=draw_w, height=draw_h, mask="auto")
+
+    ty = y - 18 * mm
+    c.setFont(FONT_BOLD, 34)
+    c.drawCentredString(width / 2, ty, title)
+
+    if subtitle:
+        ty -= 12 * mm
+        c.setFont(FONT_REGULAR, 16)
+        c.drawCentredString(width / 2, ty, subtitle)
+
+    if cell_codes:
+        ty -= 14 * mm
+        c.setFont(FONT_BOLD, 12)
+        c.drawCentredString(width / 2, ty, "Ячейки в зоне:")
+        ty -= 8 * mm
+        c.setFont(FONT_REGULAR, 11)
+        wrapped = textwrap.wrap(", ".join(cell_codes), width=70)
+        for line in wrapped:
+            c.drawCentredString(width / 2, ty, line)
+            ty -= 6 * mm
 
     c.showPage()
     c.save()

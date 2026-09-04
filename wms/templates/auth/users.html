@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Пользователи{% endblock %}
+{% block content %}
+<h3 class="mb-4">Пользователи</h3>
+
+<div class="row g-4">
+  <div class="col-md-4">
+    <div class="card p-3">
+      <h5>Добавить пользователя</h5>
+      <form method="post" action="{{ url_for('auth.create_user') }}">
+        <div class="mb-2">
+          <label class="form-label">Логин</label>
+          <input type="text" name="username" class="form-control" required>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Имя (необязательно)</label>
+          <input type="text" name="full_name" class="form-control">
+        </div>
+        <div class="form-check mb-2">
+          <input type="checkbox" name="is_admin" class="form-check-input" id="isAdminCheck">
+          <label class="form-check-label" for="isAdminCheck">Администратор</label>
+        </div>
+        <button type="submit" class="btn btn-primary">Создать</button>
+      </form>
+      <p class="text-muted small mt-2 mb-0">Временный пароль сгенерируется автоматически и покажется один раз после создания.</p>
+    </div>
+  </div>
+
+  <div class="col-md-8">
+    <div class="card p-3">
+      <table class="table table-sm">
+        <thead><tr><th>Логин</th><th>Имя</th><th>Права</th><th>Статус</th><th></th></tr></thead>
+        <tbody>
+        {% for u in users %}
+          <tr>
+            <td>{{ u.username }}</td>
+            <td>{{ u.full_name or '' }}</td>
+            <td>{% if u.is_admin %}<span class="badge bg-primary">Админ</span>{% else %}Сотрудник{% endif %}</td>
+            <td>{% if u.is_active_user %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}</td>
+            <td class="text-nowrap">
+              <form method="post" action="{{ url_for('auth.reset_password', user_id=u.id) }}" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">Сбросить пароль</button>
+              </form>
+              {% if u.id != current_user.id %}
+              <form method="post" action="{{ url_for('auth.toggle_user', user_id=u.id) }}" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if u.is_active_user else 'Включить' }}</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
