@@ -3,8 +3,15 @@
 Делает две вещи одновременно:
 1. Поднимает сам WMS-сервер локально.
 2. Запускает Cloudflare Tunnel (готовый бинарник cloudflared) и печатает
-   выданную им настоящую HTTPS-ссылку (https://....trycloudflare.com) —
-   без неё браузер не даст доступ к камере телефона для сканирования.
+   выданную им настоящую HTTPS-ссылку — без неё браузер не даст доступ к
+   камере телефона для сканирования.
+
+По умолчанию — quick tunnel (https://....trycloudflare.com), адрес
+меняется при каждом перезапуске программы, настройка не нужна. Если
+рядом с .exe лежит файл cloudflared_token.txt (токен именованного
+туннеля из дашборда Cloudflare) — используется он, и ссылка становится
+постоянной (не меняется между запусками). См. deploy/build_exe.md,
+раздел «Постоянная ссылка».
 
 Обычный `python run.py` (или собранный из него .exe) для этого не подходит:
 там нужно самому поднимать второй процесс (cloudflared) в отдельном окне.
@@ -52,6 +59,38 @@ def _find_cloudflared():
         if path and os.path.isfile(path):
             return path
     return None
+
+
+def _read_sidecar_file(filename):
+    """Ищет файл рядом с .exe (или со скриптом при запуске из исходников)
+    и возвращает его содержимое (одна строка) без пробелов, либо None."""
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    path = os.path.join(base_dir, filename)
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        value = f.read().strip()
+    return value or None
+
+
+def _find_tunnel_token():
+    """Токен именованного (постоянного) туннеля Cloudflare — если задан,
+    ссылка не меняется при перезапуске программы (в отличие от обычного
+    quick tunnel). Берется из переменной окружения WMS_TUNNEL_TOKEN или
+    файла cloudflared_token.txt рядом с .exe (см. deploy/build_exe.md)."""
+    return os.environ.get("WMS_TUNNEL_TOKEN") or _read_sidecar_file("cloudflared_token.txt")
+
+
+def _find_public_url():
+    """Адрес, который выводится в консоли и открывается в браузере при
+    использовании именованного туннеля (сам cloudflared его не печатает,
+    в отличие от quick tunnel — адрес настраивается один раз в дашборде
+    Cloudflare). Из WMS_PUBLIC_URL или файла cloudflared_url.txt."""
+    return os.environ.get("WMS_PUBLIC_URL") or _read_sidecar_file("cloudflared_url.txt")
 
 
 def _wait_for_dns(url, timeout=15):
@@ -103,6 +142,18 @@ def _start_tunnel(cloudflared_path, local_port, on_url_found):
     return process
 
 
+def _start_named_tunnel(cloudflared_path, token):
+    """Запускает постоянный (именованный) туннель Cloudflare по токену —
+    в отличие от quick tunnel, адрес заранее настроен в дашборде
+    Cloudflare (Zero Trust → Networks → Tunnels) и не меняется между
+    запусками программы."""
+    return subprocess.Popen(
+        [cloudflared_path, "tunnel", "run", "--token", token],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def main():
     port = int(os.environ.get("WMS_PORT", "5000"))
     app = create_app()
@@ -126,6 +177,32 @@ def main():
             server_thread.join()
         except KeyboardInterrupt:
             pass
+        return
+
+    token = _find_tunnel_token()
+    if token:
+        public_url = _find_public_url()
+        print("Поднимаю постоянную ссылку (именованный Cloudflare Tunnel)...")
+        print("=" * 60)
+        tunnel_process = _start_named_tunnel(cloudflared_path, token)
+        time.sleep(3)  # даем туннелю время подключиться перед проверкой/открытием
+        print("=" * 60)
+        print("Готово! Ссылка постоянная — не меняется при перезапуске программы.")
+        if public_url:
+            print(f"  {public_url}")
+            _wait_for_dns(public_url)
+            try:
+                webbrowser.open(public_url)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            print("Откройте адрес, настроенный для этого туннеля в дашборде Cloudflare")
+            print("(Zero Trust → Networks → Tunnels → Public Hostname).")
+        print("=" * 60)
+        try:
+            tunnel_process.wait()
+        except KeyboardInterrupt:
+            tunnel_process.terminate()
         return
 
     print("Поднимаю защищенную ссылку (Cloudflare Tunnel)...")

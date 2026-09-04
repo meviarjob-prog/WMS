@@ -17,3 +17,8 @@ instance/*.db-wal
 # Скачивается отдельно с github.com/cloudflare/cloudflared/releases,
 # в репозиторий не кладем (сторонний бинарник под Windows).
 /cloudflared.exe
+# Токен постоянного туннеля Cloudflare (см. deploy/build_exe.md, раздел
+# «Постоянная ссылка») — секрет, кладется вручную рядом с собранным .exe,
+# в репозиторий не попадает.
+/cloudflared_token.txt
+/cloudflared_url.txt
