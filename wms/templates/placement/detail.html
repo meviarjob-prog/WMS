@@ -126,9 +126,9 @@
   <div class="border rounded p-3 mb-3">
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
       <div>
-        <b>{{ box.box_number }}</b>
+        <a href="{{ url_for('boxes.detail', box_id=box.id) }}"><b>{{ box.box_number }}</b></a>
         <span class="badge badge-status-{{ box.status }}">{{ 'В ячейке' if box.status == 'stored' else 'Открыт' }}</span>
-        {% if box.cell %}<span class="text-muted">— ячейка {{ box.cell.code }}</span>{% endif %}
+        {% if box.cell %}<span class="text-muted">— ячейка <a href="{{ url_for('warehouses.cell_detail', cell_id=box.cell.id) }}">{{ box.cell.code }}</a></span>{% endif %}
       </div>
       <div>
         <a class="btn btn-sm btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_label', box_id=box.id) }}">🖨 Этикетка короба</a>

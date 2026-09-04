@@ -278,21 +278,24 @@ class PlacementLine(db.Model):
 
 
 class MovementDocument(db.Model):
-    """Перемещение — список коробов, едущих на один склад назначения.
-    Короба сканируются и добавляются в список по одному; весь товар внутри
-    короба переезжает вместе с ним."""
+    """Перемещение — список коробов, едущих со склада-отправителя на склад
+    назначения (оба выбираются один раз для всего документа). Короба
+    сканируются и добавляются в список по одному; весь товар внутри короба
+    переезжает вместе с ним."""
 
     __tablename__ = "movement_documents"
 
     id = db.Column(db.Integer, primary_key=True)
     number = db.Column(db.String(30), unique=True, nullable=False)
+    from_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     to_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
 
-    to_warehouse = db.relationship("Warehouse")
+    from_warehouse = db.relationship("Warehouse", foreign_keys=[from_warehouse_id])
+    to_warehouse = db.relationship("Warehouse", foreign_keys=[to_warehouse_id])
     created_by = db.relationship("User")
     lines = db.relationship(
         "MovementLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"

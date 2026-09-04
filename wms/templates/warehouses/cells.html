@@ -80,13 +80,14 @@
     <div class="card p-3">
       <h5>Список ячеек</h5>
       <table class="table">
-        <thead><tr><th>Код</th><th>Зона</th><th>Описание</th><th>Статус</th><th></th></tr></thead>
+        <thead><tr><th>Код</th><th>Зона</th><th>Описание</th><th>Коробов</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for cell in cells %}
           <tr>
-            <td>{{ cell.code }}</td>
+            <td><a href="{{ url_for('warehouses.cell_detail', cell_id=cell.id) }}">{{ cell.code }}</a></td>
             <td>{{ cell.zone.code if cell.zone else '' }}</td>
             <td>{{ cell.description or '' }}</td>
+            <td><a href="{{ url_for('warehouses.cell_detail', cell_id=cell.id) }}">{{ cell.boxes.count() }}</a></td>
             <td>{% if cell.is_active %}<span class="badge bg-success">Активна</span>{% else %}<span class="badge bg-secondary">Отключена</span>{% endif %}</td>
             <td class="text-nowrap">
               <a class="btn btn-sm btn-outline-primary" target="_blank" href="{{ url_for('labels.cell_label', cell_id=cell.id) }}">🖨 Этикетка</a>
@@ -96,7 +97,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="5" class="text-muted">Ячейки еще не созданы</td></tr>
+          <tr><td colspan="6" class="text-muted">Ячейки еще не созданы</td></tr>
         {% endfor %}
         </tbody>
       </table>

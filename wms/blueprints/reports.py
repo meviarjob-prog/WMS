@@ -2,7 +2,7 @@ from datetime import datetime
 
 from flask import Blueprint, Response, render_template, request
 
-from ..models import MovementDocument, MovementLine, PlacementDocument, ReceivingDocument, Warehouse
+from ..models import MovementDocument, PlacementDocument, ReceivingDocument, Warehouse
 from ..utils.excel_io import (
     export_movement_to_excel,
     export_placement_to_excel,
@@ -66,15 +66,9 @@ def _filtered_movement():
     date_to = _parse_date(request.args.get("date_to"))
 
     if warehouse_id:
-        # склад назначения документа, либо склад-источник хотя бы одного короба в списке
-        from_ids = (
-            MovementLine.query.filter_by(from_warehouse_id=warehouse_id)
-            .with_entities(MovementLine.document_id)
-            .distinct()
-        )
         query = query.filter(
-            (MovementDocument.to_warehouse_id == warehouse_id)
-            | (MovementDocument.id.in_(from_ids))
+            (MovementDocument.from_warehouse_id == warehouse_id)
+            | (MovementDocument.to_warehouse_id == warehouse_id)
         )
     if date_from:
         query = query.filter(MovementDocument.created_at >= date_from)

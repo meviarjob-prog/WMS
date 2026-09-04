@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Короб {{ box.box_number }}{% endblock %}
+{% block content %}
+<h3 class="mb-1">Короб {{ box.box_number }}
+  <span class="badge badge-status-{{ box.status }}">{{ 'В ячейке' if box.status == 'stored' else 'Открыт' }}</span>
+</h3>
+<div class="text-muted mb-4">
+  Склад: {{ box.warehouse.name if box.warehouse else '—' }}
+  {% if box.cell %}
+    · Ячейка: <a href="{{ url_for('warehouses.cell_detail', cell_id=box.cell.id) }}">{{ box.cell.code }}</a>
+  {% else %}
+    · без ячейки
+  {% endif %}
+</div>
+
+<div class="mb-4">
+  <a class="btn btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_label', box_id=box.id) }}">🖨 Этикетка короба</a>
+  {% if items %}
+  <a class="btn btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_items_labels', box_id=box.id) }}">🖨 Этикетки товаров</a>
+  {% endif %}
+</div>
+
+<div class="card p-3" style="max-width:640px">
+  <h5>Товары в коробе</h5>
+  <table class="table table-sm mb-0">
+    <thead><tr><th>Товар</th><th>Артикул</th><th>Кол-во</th></tr></thead>
+    <tbody>
+    {% for it in items %}
+      <tr>
+        <td>{{ it.nomenclature.name }}</td>
+        <td>{{ it.nomenclature.sku }}</td>
+        <td>{{ it.qty }} {{ it.nomenclature.unit }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3" class="text-muted">Короб пуст</td></tr>
+    {% endfor %}
+    </tbody>
+    {% if items %}
+    <tfoot>
+      <tr class="fw-bold"><td colspan="2">Итого</td><td>{{ box.total_qty() }}</td></tr>
+    </tfoot>
+    {% endif %}
+  </table>
+</div>
+{% endblock %}

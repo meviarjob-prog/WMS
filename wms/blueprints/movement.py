@@ -24,13 +24,19 @@ def new_document():
         warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
         return render_template("movement/new.html", warehouses=warehouses)
 
+    from_warehouse_id = request.form.get("from_warehouse_id", type=int)
     to_warehouse_id = request.form.get("to_warehouse_id", type=int)
-    if not to_warehouse_id:
-        flash("Выберите склад назначения", "danger")
+    if not from_warehouse_id or not to_warehouse_id:
+        flash("Выберите склад-отправитель и склад назначения", "danger")
+        return redirect(url_for("movement.new_document"))
+
+    if from_warehouse_id == to_warehouse_id:
+        flash("Склад-отправитель и склад назначения не могут совпадать", "danger")
         return redirect(url_for("movement.new_document"))
 
     doc = MovementDocument(
         number=next_number("movement"),
+        from_warehouse_id=from_warehouse_id,
         to_warehouse_id=to_warehouse_id,
         created_by_id=current_user.id,
     )
@@ -60,10 +66,10 @@ def add_box(doc_id):
         flash(f"Короб '{box_number}' не найден", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
-    if box.warehouse_id == doc.to_warehouse_id:
+    if box.warehouse_id != doc.from_warehouse_id:
         flash(
-            f"Короб {box.box_number} уже на складе «{doc.to_warehouse.name}». "
-            f"Для перестановки внутри склада используйте «Размещение».",
+            f"Короб {box.box_number} не на складе-отправителе «{doc.from_warehouse.name}» "
+            f"(сейчас на складе «{box.warehouse.name}»).",
             "danger",
         )
         return redirect(url_for("movement.detail", doc_id=doc.id))

@@ -1,7 +1,7 @@
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..extensions import db
-from ..models import Cell, Warehouse, Zone
+from ..models import Box, Cell, Warehouse, Zone
 from ..utils.numbering import next_number
 
 bp = Blueprint("warehouses", __name__)
@@ -108,3 +108,10 @@ def toggle_cell(cell_id):
     cell.is_active = not cell.is_active
     db.session.commit()
     return redirect(url_for("warehouses.cells", warehouse_id=cell.warehouse_id))
+
+
+@bp.route("/cells/<int:cell_id>")
+def cell_detail(cell_id):
+    cell = Cell.query.get_or_404(cell_id)
+    boxes = Box.query.filter_by(cell_id=cell.id).order_by(Box.box_number).all()
+    return render_template("warehouses/cell_detail.html", cell=cell, boxes=boxes)

@@ -8,7 +8,7 @@
     <h3 class="mb-1">Перемещение {{ doc.number }}
       <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
     </h3>
-    <div class="text-muted">Склад назначения: {{ doc.to_warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
+    <div class="text-muted">{{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
   </div>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
@@ -23,7 +23,7 @@
 {% if doc.status == 'draft' %}
 <div class="card p-3 mb-4">
   <h5>Сканировать короб</h5>
-  <p class="text-muted small mb-2">Весь товар внутри короба поедет вместе с ним на склад «{{ doc.to_warehouse.name }}».</p>
+  <p class="text-muted small mb-2">Короб должен быть на складе «{{ doc.from_warehouse.name }}» — весь товар внутри него поедет вместе с ним на склад «{{ doc.to_warehouse.name }}».</p>
   <form method="post" action="{{ url_for('movement.add_box', doc_id=doc.id) }}">
     <div class="d-flex gap-2">
       <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg"
@@ -50,7 +50,7 @@
     {% for line in lines %}
       <tr>
         <td>
-          <b>{{ line.box.box_number }}</b>
+          <a href="{{ url_for('boxes.detail', box_id=line.box.id) }}"><b>{{ line.box.box_number }}</b></a>
           <div><a target="_blank" href="{{ url_for('labels.box_label', box_id=line.box.id) }}">🖨 этикетка</a></div>
         </td>
         <td>

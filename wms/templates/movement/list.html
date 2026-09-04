@@ -11,12 +11,13 @@
 
 <div class="card p-3">
   <table class="table">
-    <thead><tr><th>Номер</th><th>Дата</th><th>Склад назначения</th><th>Коробов</th><th>Автор</th><th>Статус</th><th></th></tr></thead>
+    <thead><tr><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Автор</th><th>Статус</th><th></th></tr></thead>
     <tbody>
     {% for d in documents %}
       <tr>
         <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
         <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ d.from_warehouse.name }}</td>
         <td>{{ d.to_warehouse.name }}</td>
         <td>{{ d.lines.count() }}</td>
         <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
@@ -27,7 +28,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="7" class="text-muted">Перемещений еще нет</td></tr>
+      <tr><td colspan="8" class="text-muted">Перемещений еще нет</td></tr>
     {% endfor %}
     </tbody>
   </table>

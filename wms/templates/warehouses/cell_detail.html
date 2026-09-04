@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Ячейка {{ cell.code }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('warehouses.cells', warehouse_id=cell.warehouse_id) }}">&larr; Ячейки склада «{{ cell.warehouse.name }}»</a></p>
+
+<h3 class="mb-1">Ячейка {{ cell.code }}</h3>
+<div class="text-muted mb-4">
+  Склад: {{ cell.warehouse.name }}
+  {% if cell.zone %} · Зона: {{ cell.zone.code }}{% if cell.zone.name %} — {{ cell.zone.name }}{% endif %}{% endif %}
+  {% if cell.description %} · {{ cell.description }}{% endif %}
+</div>
+
+<div class="mb-4">
+  <a class="btn btn-outline-secondary" target="_blank" href="{{ url_for('labels.cell_label', cell_id=cell.id) }}">🖨 Этикетка ячейки</a>
+</div>
+
+<div class="card p-3">
+  <h5>Короба в этой ячейке</h5>
+  <table class="table table-sm">
+    <thead><tr><th>Короб</th><th>Товаров позиций</th><th>Кол-во</th><th></th></tr></thead>
+    <tbody>
+    {% for box in boxes %}
+      <tr>
+        <td><a href="{{ url_for('boxes.detail', box_id=box.id) }}">{{ box.box_number }}</a></td>
+        <td>{{ box.items.count() }}</td>
+        <td>{{ box.total_qty() }}</td>
+        <td><a href="{{ url_for('boxes.detail', box_id=box.id) }}">Состав короба</a></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="text-muted">В этой ячейке коробов нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
