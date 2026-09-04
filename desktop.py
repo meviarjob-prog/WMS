@@ -16,11 +16,13 @@
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
 import webbrowser
+from urllib.parse import urlparse
 
 from wms import create_app
 
@@ -50,6 +52,24 @@ def _find_cloudflared():
         if path and os.path.isfile(path):
             return path
     return None
+
+
+def _wait_for_dns(url, timeout=15):
+    """cloudflared печатает ссылку в консоль в момент, когда туннель уже
+    поднят у него самого, но публичный DNS для этого только что созданного
+    поддомена начинает её резолвить с задержкой в несколько секунд — иначе
+    браузер при автооткрытии сразу показывает "Не удалось найти IP-адрес
+    сервера" (ERR_NAME_NOT_RESOLVED), хотя ссылка на самом деле рабочая.
+    Ждем, пока имя реально начнет резолвиться, прежде чем открывать браузер."""
+    hostname = urlparse(url).hostname
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            socket.gethostbyname(hostname)
+            return True
+        except socket.gaierror:
+            time.sleep(1)
+    return False
 
 
 def _run_server(app, host, port):
@@ -129,7 +149,13 @@ def main():
         print("Эта ссылка с настоящим HTTPS — камера на телефоне заработает")
         print("без предупреждений браузера. Ссылка меняется при каждом")
         print("перезапуске программы — раздавай актуальную ссылку заново.")
+        print()
+        print("Если сразу после запуска браузер покажет ошибку вида")
+        print("«не удалось найти IP-адрес сервера» — подождите 10-15 секунд")
+        print("и обновите страницу: свежей ссылке нужно немного времени,")
+        print("чтобы стать видимой всем DNS-серверам в интернете.")
         print("=" * 60)
+        _wait_for_dns(url)
         try:
             webbrowser.open(url)
         except Exception:  # noqa: BLE001
