@@ -37,6 +37,7 @@ def create_nomenclature():
     name = request.form.get("name", "").strip()
     unit = request.form.get("unit", "шт").strip() or "шт"
     description = request.form.get("description", "").strip()
+    norm_minutes = request.form.get("norm_minutes", type=float)
 
     if not sku or not name:
         flash("Укажите артикул и наименование", "danger")
@@ -53,11 +54,29 @@ def create_nomenclature():
         flash(f"Штрихкод '{barcode}' уже используется", "danger")
         return redirect(url_for("nomenclature.list_nomenclature"))
 
-    item = Nomenclature(sku=sku, barcode=barcode, name=name, unit=unit, description=description)
+    item = Nomenclature(
+        sku=sku,
+        barcode=barcode,
+        name=name,
+        unit=unit,
+        description=description,
+        norm_minutes=norm_minutes,
+    )
     db.session.add(item)
     db.session.commit()
     flash(f"Товар '{name}' добавлен", "success")
     return redirect(url_for("nomenclature.list_nomenclature"))
+
+
+@bp.route("/<int:item_id>/norm", methods=["POST"])
+def update_norm(item_id):
+    """Норма времени на 1 шт для расчета эффективности в модуле «Производство»."""
+    item = Nomenclature.query.get_or_404(item_id)
+    norm_minutes = request.form.get("norm_minutes", type=float)
+    item.norm_minutes = norm_minutes
+    db.session.commit()
+    flash(f"Норма для «{item.name}» обновлена", "success")
+    return redirect(url_for("nomenclature.list_nomenclature", q=request.form.get("q", "")))
 
 
 @bp.route("/template.xlsx")

@@ -11,6 +11,7 @@ NOMENCLATURE_HEADERS = [
     "Наименование",
     "Ед. изм.",
     "Описание",
+    "Норма времени на 1 шт, мин",
 ]
 
 
@@ -30,7 +31,7 @@ def build_nomenclature_template() -> bytes:
     ws.title = "Номенклатура"
     _style_header(ws, NOMENCLATURE_HEADERS)
 
-    example = ["ART-0001", "4600000000015", "Пример: Футболка белая XL", "шт", ""]
+    example = ["ART-0001", "4600000000015", "Пример: Футболка белая XL", "шт", "", 12]
     ws.append(example)
 
     buffer = io.BytesIO()
@@ -70,6 +71,12 @@ def import_nomenclature_from_excel(file_stream, db, Nomenclature) -> ImportResul
         name = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
         unit = str(row[3]).strip() if len(row) > 3 and row[3] not in (None, "") else "шт"
         description = str(row[4]).strip() if len(row) > 4 and row[4] is not None else ""
+        norm_minutes = None
+        if len(row) > 5 and row[5] not in (None, ""):
+            try:
+                norm_minutes = float(row[5])
+            except (TypeError, ValueError):
+                result.errors.append(f"Строка {row_idx}: некорректная норма времени '{row[5]}'")
 
         if not sku or not name:
             result.errors.append(f"Строка {row_idx}: не заполнен артикул или наименование")
@@ -92,6 +99,8 @@ def import_nomenclature_from_excel(file_stream, db, Nomenclature) -> ImportResul
             existing.name = name
             existing.unit = unit or "шт"
             existing.description = description
+            if norm_minutes is not None:
+                existing.norm_minutes = norm_minutes
             result.updated += 1
         else:
             item = Nomenclature(
@@ -100,6 +109,7 @@ def import_nomenclature_from_excel(file_stream, db, Nomenclature) -> ImportResul
                 name=name,
                 unit=unit or "шт",
                 description=description,
+                norm_minutes=norm_minutes,
             )
             db.session.add(item)
             result.created += 1
@@ -113,7 +123,9 @@ def export_nomenclature_to_excel(items) -> bytes:
     ws.title = "Номенклатура"
     _style_header(ws, NOMENCLATURE_HEADERS)
     for item in items:
-        ws.append([item.sku, item.barcode, item.name, item.unit, item.description or ""])
+        ws.append(
+            [item.sku, item.barcode, item.name, item.unit, item.description or "", item.norm_minutes or ""]
+        )
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
@@ -258,6 +270,42 @@ def export_movement_to_excel(documents) -> bytes:
                         line.to_cell.code if line.to_cell else "",
                     ]
                 )
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+PRODUCTION_HEADERS = [
+    "Дата",
+    "Сотрудник",
+    "Кол-во, шт",
+    "Нормо-минуты",
+    "Плановая смена, мин",
+    "Эффективность, %",
+    "Из них без нормы, шт",
+]
+
+
+def export_production_to_excel(rows) -> bytes:
+    """rows — список словарей из production._efficiency_rows()."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Эффективность"
+    _style_header(ws, PRODUCTION_HEADERS)
+
+    for row in rows:
+        ws.append(
+            [
+                row["work_date"].strftime("%Y-%m-%d") if row["work_date"] else "",
+                row["user"].display_name() if row["user"] else "",
+                row["qty"],
+                row["normo_minutes"],
+                row["shift_minutes"],
+                row["efficiency"] if row["efficiency"] is not None else "",
+                row["missing_norm"],
+            ]
+        )
 
     buffer = io.BytesIO()
     wb.save(buffer)

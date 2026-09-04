@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Производство{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+  <h3 class="mb-0">Производство — учет выработки</h3>
+  <a class="btn btn-outline-secondary" href="{{ url_for('production.efficiency') }}">📊 Отчет по эффективности</a>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Сдать изделие</h5>
+      <p class="text-muted small">
+        Для каждого изделия сканируются два кода: обычный штрихкод товара
+        (определяет, что произведено) и код Честного Знака (уникален для
+        каждой единицы — подтверждает, что это отдельное изделие, а не
+        повторный скан одного и того же).
+      </p>
+      <div class="mb-2">
+        <label class="form-label">1. Штрихкод товара</label>
+        <div class="d-flex gap-2">
+          <input type="text" id="barcodeInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод товара" autofocus autocomplete="off">
+          <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#barcodeInput" title="Сканировать камерой">📷</button>
+        </div>
+      </div>
+      <div class="mb-2">
+        <label class="form-label">2. Код Честного Знака</label>
+        <div class="d-flex gap-2">
+          <input type="text" id="cznInput" class="form-control form-control-lg" placeholder="Отсканируйте код Честного Знака" autocomplete="off">
+          <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#cznInput" title="Сканировать камерой">📷</button>
+        </div>
+      </div>
+      <div id="scanResult" class="mt-2"></div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Сегодня: {{ current_user.display_name() }}</h5>
+      <div class="row text-center">
+        <div class="col-6">
+          <div class="display-6" id="statQty">{{ stats.qty }}</div>
+          <div class="text-muted small">шт собрано</div>
+        </div>
+        <div class="col-6">
+          <div class="display-6" id="statNormo">{{ stats.normo_minutes | round(1) }}</div>
+          <div class="text-muted small">нормо-минут</div>
+        </div>
+      </div>
+    </div>
+    <div class="card p-3 mt-3">
+      <h6>Последние записи за сегодня</h6>
+      <table class="table table-sm mb-0" id="recentTable">
+        <tbody>
+        {% for r in records %}
+          <tr>
+            <td>{{ r.created_at.strftime('%H:%M:%S') }}</td>
+            <td>{{ r.nomenclature.name }}</td>
+            <td>
+              <form method="post" action="{{ url_for('production.delete_record', record_id=r.id) }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td class="text-muted">Записей еще нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const barcodeInput = document.getElementById("barcodeInput");
+  const cznInput = document.getElementById("cznInput");
+  const scanResult = document.getElementById("scanResult");
+  const statQty = document.getElementById("statQty");
+  const statNormo = document.getElementById("statNormo");
+  const recentTable = document.querySelector("#recentTable tbody");
+
+  let pendingBarcode = null;
+
+  function resetScan() {
+    pendingBarcode = null;
+    barcodeInput.value = "";
+    cznInput.value = "";
+    barcodeInput.focus();
+  }
+
+  initBarcodeInput(barcodeInput, (value) => {
+    pendingBarcode = value;
+    cznInput.focus();
+  });
+
+  initBarcodeInput(cznInput, (value) => {
+    if (!pendingBarcode) {
+      scanResult.innerHTML = '<div class="alert alert-warning py-2 mb-0">Сначала отсканируйте штрихкод товара</div>';
+      cznInput.value = "";
+      barcodeInput.focus();
+      return;
+    }
+
+    fetch("{{ url_for('production.scan') }}", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ barcode: pendingBarcode, chestny_znak: value }),
+    })
+      .then((r) => r.json().then((data) => ({ status: r.status, data: data })))
+      .then(({ status, data }) => {
+        if (data.ok) {
+          scanResult.innerHTML = '<div class="alert alert-success py-2 mb-0">✓ ' + data.record.name + "</div>";
+          statQty.textContent = data.today.qty;
+          statNormo.textContent = Math.round(data.today.normo_minutes * 10) / 10;
+          const row = document.createElement("tr");
+          row.innerHTML = "<td>" + data.record.time + "</td><td>" + data.record.name + "</td><td></td>";
+          recentTable.insertBefore(row, recentTable.firstChild);
+        } else {
+          scanResult.innerHTML = '<div class="alert alert-danger py-2 mb-0">' + data.error + "</div>";
+        }
+        resetScan();
+      })
+      .catch(() => {
+        scanResult.innerHTML = '<div class="alert alert-danger py-2 mb-0">Ошибка связи с сервером</div>';
+        resetScan();
+      });
+  });
+</script>
+{% endblock %}

@@ -63,6 +63,7 @@ def create_user():
     username = request.form.get("username", "").strip()
     full_name = request.form.get("full_name", "").strip()
     is_admin = request.form.get("is_admin") == "on"
+    shift_minutes = request.form.get("shift_minutes", type=int) or 480
 
     if not username:
         flash("Укажите логин", "danger")
@@ -73,7 +74,7 @@ def create_user():
         return redirect(url_for("auth.users"))
 
     temp_password = secrets.token_urlsafe(6)
-    user = User(username=username, full_name=full_name, is_admin=is_admin)
+    user = User(username=username, full_name=full_name, is_admin=is_admin, shift_minutes=shift_minutes)
     user.set_password(temp_password)
     db.session.add(user)
     db.session.commit()
@@ -83,6 +84,26 @@ def create_user():
         f"— сообщите его пользователю, он сможет сменить пароль после входа.",
         "success",
     )
+    return redirect(url_for("auth.users"))
+
+
+@bp.route("/users/<int:user_id>/shift-minutes", methods=["POST"])
+@login_required
+def update_shift_minutes(user_id):
+    """Плановая длительность смены (мин) — используется для расчета
+    эффективности в отчете модуля «Производство»."""
+    if not _require_admin():
+        return redirect(url_for("main.index"))
+
+    user = User.query.get_or_404(user_id)
+    shift_minutes = request.form.get("shift_minutes", type=int)
+    if not shift_minutes or shift_minutes <= 0:
+        flash("Укажите корректную длительность смены в минутах", "danger")
+        return redirect(url_for("auth.users"))
+
+    user.shift_minutes = shift_minutes
+    db.session.commit()
+    flash(f"Плановая смена для «{user.username}» обновлена: {shift_minutes} мин", "success")
     return redirect(url_for("auth.users"))
 
 

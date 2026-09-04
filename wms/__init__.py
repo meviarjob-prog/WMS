@@ -99,6 +99,7 @@ def create_app(config_class=Config):
     from .blueprints.boxes import bp as boxes_bp
     from .blueprints.labels import bp as labels_bp
     from .blueprints.reports import bp as reports_bp
+    from .blueprints.production import bp as production_bp
     from .blueprints.api import bp as api_bp
 
     app.register_blueprint(auth_bp)
@@ -111,6 +112,7 @@ def create_app(config_class=Config):
     app.register_blueprint(boxes_bp, url_prefix="/boxes")
     app.register_blueprint(labels_bp, url_prefix="/labels")
     app.register_blueprint(reports_bp, url_prefix="/reports")
+    app.register_blueprint(production_bp, url_prefix="/production")
     app.register_blueprint(api_bp, url_prefix="/api")
 
     with app.app_context():

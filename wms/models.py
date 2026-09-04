@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from flask_login import UserMixin
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -25,6 +25,9 @@ class User(UserMixin, db.Model):
     is_admin = db.Column(db.Boolean, nullable=False, default=False)
     is_active_user = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    # Плановая длительность смены (минут) — используется для расчета
+    # эффективности в модуле «Производство» (норма-минуты / эта величина).
+    shift_minutes = db.Column(db.Integer, nullable=False, default=480)
 
     def set_password(self, raw_password):
         self.password_hash = generate_password_hash(raw_password)
@@ -114,6 +117,10 @@ class Nomenclature(db.Model):
     unit = db.Column(db.String(20), nullable=False, default="шт")
     description = db.Column(db.String(500))
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    # Норма времени на изготовление 1 шт (минут) — используется в модуле
+    # «Производство» для расчета эффективности сотрудника. Не задана —
+    # позиция просто не участвует в расчете нормо-минут.
+    norm_minutes = db.Column(db.Float, nullable=True)
 
     def __repr__(self):
         return f"<Nomenclature {self.sku} {self.name}>"
@@ -322,3 +329,33 @@ class MovementLine(db.Model):
     from_warehouse = db.relationship("Warehouse", foreign_keys=[from_warehouse_id])
     from_cell = db.relationship("Cell", foreign_keys=[from_cell_id])
     to_cell = db.relationship("Cell", foreign_keys=[to_cell_id])
+
+
+class ProductionRecord(db.Model):
+    """Одна собранная сотрудником единица товара на производстве.
+
+    Обычный штрихкод товара (barcode) одинаков у всех единиц одного
+    артикула и сам по себе не может подтвердить количество — его можно
+    отсканировать сколько угодно раз. Код Честного Знака у каждой
+    физической единицы уникален, поэтому именно на него завязана защита
+    от накрутки: UNIQUE на chestny_znak гарантирует на уровне БД, что
+    одна и та же промаркированная единица не будет засчитана дважды —
+    ни по ошибке, ни намеренно (в т.ч. другим сотрудником)."""
+
+    __tablename__ = "production_records"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
+    chestny_znak = db.Column(db.String(300), nullable=False, unique=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    # Рабочий день, к которому относится запись (для группировки по сменам
+    # в отчете эффективности) — отдельно от created_at на случай смены
+    # после полуночи.
+    work_date = db.Column(db.Date, nullable=False, default=date.today)
+
+    user = db.relationship("User")
+    nomenclature = db.relationship("Nomenclature")
+
+    def __repr__(self):
+        return f"<ProductionRecord {self.chestny_znak}>"

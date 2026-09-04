@@ -20,6 +20,10 @@
           <input type="checkbox" name="is_admin" class="form-check-input" id="isAdminCheck">
           <label class="form-check-label" for="isAdminCheck">Администратор</label>
         </div>
+        <div class="mb-2">
+          <label class="form-label">Плановая смена, мин <span class="text-muted">(для эффективности на производстве)</span></label>
+          <input type="number" step="1" min="1" name="shift_minutes" class="form-control" value="480">
+        </div>
         <button type="submit" class="btn btn-primary">Создать</button>
       </form>
       <p class="text-muted small mt-2 mb-0">Временный пароль сгенерируется автоматически и покажется один раз после создания.</p>
@@ -29,13 +33,19 @@
   <div class="col-md-8">
     <div class="card p-3">
       <table class="table table-sm">
-        <thead><tr><th>Логин</th><th>Имя</th><th>Права</th><th>Статус</th><th></th></tr></thead>
+        <thead><tr><th>Логин</th><th>Имя</th><th>Права</th><th>Смена, мин</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for u in users %}
           <tr>
             <td>{{ u.username }}</td>
             <td>{{ u.full_name or '' }}</td>
             <td>{% if u.is_admin %}<span class="badge bg-primary">Админ</span>{% else %}Сотрудник{% endif %}</td>
+            <td style="min-width:120px">
+              <form method="post" action="{{ url_for('auth.update_shift_minutes', user_id=u.id) }}" class="d-flex gap-1">
+                <input type="number" step="1" min="1" name="shift_minutes" value="{{ u.shift_minutes }}" class="form-control form-control-sm" style="width:70px">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+              </form>
+            </td>
             <td>{% if u.is_active_user %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}</td>
             <td class="text-nowrap">
               <form method="post" action="{{ url_for('auth.reset_password', user_id=u.id) }}" class="d-inline">
