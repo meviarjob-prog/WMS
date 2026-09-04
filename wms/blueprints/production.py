@@ -6,6 +6,7 @@ from sqlalchemy import case, func
 
 from ..extensions import db
 from ..models import Nomenclature, ProductionRecord, User
+from ..utils.chestny_znak import extract_gtin, gtin_barcode_candidates
 from ..utils.excel_io import export_production_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 
@@ -38,18 +39,30 @@ def index():
     return render_template("production/index.html", stats=stats, records=records)
 
 
+def _find_nomenclature_by_gtin(chestny_znak):
+    gtin = extract_gtin(chestny_znak)
+    if not gtin:
+        return None
+    for candidate in gtin_barcode_candidates(gtin):
+        item = Nomenclature.query.filter_by(barcode=candidate).first()
+        if item:
+            return item
+    return None
+
+
 @bp.route("/scan", methods=["POST"])
 def scan():
+    """Сканируется только код Честного Знака — штрихкод товара не нужен,
+    товар определяется по GTIN, зашитому в сам код ЧЗ (см.
+    utils/chestny_znak.py). Если формат не распознан или товар с таким
+    штрихкодом не заведен в номенклатуре — фронтенд просит выбрать товар
+    вручную и присылает тот же код повторно вместе с nomenclature_id."""
     payload = request.json or {}
-    barcode = (payload.get("barcode") or "").strip()
     chestny_znak = (payload.get("chestny_znak") or "").strip()
+    nomenclature_id = payload.get("nomenclature_id")
 
-    if not barcode or not chestny_znak:
-        return jsonify({"ok": False, "error": "Отсканируйте и штрихкод товара, и код Честного Знака"}), 400
-
-    item = Nomenclature.query.filter_by(barcode=barcode).first()
-    if not item:
-        return jsonify({"ok": False, "error": f"Товар со штрихкодом '{barcode}' не найден"}), 404
+    if not chestny_znak:
+        return jsonify({"ok": False, "error": "Отсканируйте код Честного Знака"}), 400
 
     existing = ProductionRecord.query.filter_by(chestny_znak=chestny_znak).first()
     if existing:
@@ -64,6 +77,24 @@ def scan():
             ),
             409,
         )
+
+    if nomenclature_id:
+        item = Nomenclature.query.get(nomenclature_id)
+        if not item:
+            return jsonify({"ok": False, "error": "Товар не найден"}), 404
+    else:
+        item = _find_nomenclature_by_gtin(chestny_znak)
+        if not item:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "need_manual": True,
+                        "error": "Не удалось определить товар по коду — выберите вручную",
+                    }
+                ),
+                200,
+            )
 
     record = ProductionRecord(
         user_id=current_user.id,

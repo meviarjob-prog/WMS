@@ -11,23 +11,23 @@
     <div class="card p-3">
       <h5>Сдать изделие</h5>
       <p class="text-muted small">
-        Для каждого изделия сканируются два кода: обычный штрихкод товара
-        (определяет, что произведено) и код Честного Знака (уникален для
-        каждой единицы — подтверждает, что это отдельное изделие, а не
-        повторный скан одного и того же).
+        Сканируется только код Честного Знака — он уникален для каждой
+        единицы (подтверждает, что это отдельное изделие, а не повторный
+        скан) и сам содержит данные о товаре.
       </p>
       <div class="mb-2">
-        <label class="form-label">1. Штрихкод товара</label>
+        <label class="form-label">Код Честного Знака</label>
         <div class="d-flex gap-2">
-          <input type="text" id="barcodeInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод товара" autofocus autocomplete="off">
-          <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#barcodeInput" title="Сканировать камерой">📷</button>
+          <input type="text" id="cznInput" class="form-control form-control-lg" placeholder="Отсканируйте код Честного Знака" autofocus autocomplete="off">
+          <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#cznInput" title="Сканировать камерой">📷</button>
         </div>
       </div>
-      <div class="mb-2">
-        <label class="form-label">2. Код Честного Знака</label>
-        <div class="d-flex gap-2">
-          <input type="text" id="cznInput" class="form-control form-control-lg" placeholder="Отсканируйте код Честного Знака" autocomplete="off">
-          <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#cznInput" title="Сканировать камерой">📷</button>
+      <div id="manualPick" class="mb-2" hidden>
+        <label class="form-label">Не удалось определить товар — выберите вручную</label>
+        <div class="autocomplete-box" data-autocomplete-nomenclature>
+          <input type="text" class="form-control ac-input" placeholder="Артикул, наименование или штрихкод..." autocomplete="off">
+          <input type="hidden" class="ac-value">
+          <div class="autocomplete-list"></div>
         </div>
       </div>
       <div id="scanResult" class="mt-2"></div>
@@ -74,39 +74,34 @@
 
 {% block scripts %}
 <script>
-  const barcodeInput = document.getElementById("barcodeInput");
   const cznInput = document.getElementById("cznInput");
   const scanResult = document.getElementById("scanResult");
   const statQty = document.getElementById("statQty");
   const statNormo = document.getElementById("statNormo");
   const recentTable = document.querySelector("#recentTable tbody");
+  const manualPick = document.getElementById("manualPick");
+  const manualInput = manualPick.querySelector(".ac-input");
 
-  let pendingBarcode = null;
+  let pendingChestnyZnak = null;
 
   function resetScan() {
-    pendingBarcode = null;
-    barcodeInput.value = "";
+    pendingChestnyZnak = null;
     cznInput.value = "";
-    barcodeInput.focus();
+    manualPick.hidden = true;
+    manualInput.value = "";
+    cznInput.disabled = false;
+    cznInput.focus();
   }
 
-  initBarcodeInput(barcodeInput, (value) => {
-    pendingBarcode = value;
-    cznInput.focus();
-  });
-
-  initBarcodeInput(cznInput, (value) => {
-    if (!pendingBarcode) {
-      scanResult.innerHTML = '<div class="alert alert-warning py-2 mb-0">Сначала отсканируйте штрихкод товара</div>';
-      cznInput.value = "";
-      barcodeInput.focus();
-      return;
+  function submitScan(chestnyZnak, nomenclatureId) {
+    const body = { chestny_znak: chestnyZnak };
+    if (nomenclatureId) {
+      body.nomenclature_id = nomenclatureId;
     }
-
     fetch("{{ url_for('production.scan') }}", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ barcode: pendingBarcode, chestny_znak: value }),
+      body: JSON.stringify(body),
     })
       .then((r) => r.json().then((data) => ({ status: r.status, data: data })))
       .then(({ status, data }) => {
@@ -117,15 +112,31 @@
           const row = document.createElement("tr");
           row.innerHTML = "<td>" + data.record.time + "</td><td>" + data.record.name + "</td><td></td>";
           recentTable.insertBefore(row, recentTable.firstChild);
+          resetScan();
+        } else if (data.need_manual) {
+          pendingChestnyZnak = chestnyZnak;
+          scanResult.innerHTML = '<div class="alert alert-warning py-2 mb-0">' + data.error + "</div>";
+          cznInput.disabled = true;
+          manualPick.hidden = false;
+          manualInput.focus();
         } else {
           scanResult.innerHTML = '<div class="alert alert-danger py-2 mb-0">' + data.error + "</div>";
+          resetScan();
         }
-        resetScan();
       })
       .catch(() => {
         scanResult.innerHTML = '<div class="alert alert-danger py-2 mb-0">Ошибка связи с сервером</div>';
         resetScan();
       });
+  }
+
+  initBarcodeInput(cznInput, (value) => {
+    submitScan(value, null);
+  });
+
+  manualInput.addEventListener("nomenclature-selected", (e) => {
+    if (!pendingChestnyZnak) return;
+    submitScan(pendingChestnyZnak, e.detail.id);
   });
 </script>
 {% endblock %}
