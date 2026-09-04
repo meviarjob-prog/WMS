@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Короба созданы{% endblock %}
+{% block content %}
+<h3 class="mb-4">Создано коробов: {{ boxes|length }}</h3>
+
+<div class="mb-4">
+  <a class="btn btn-primary" target="_blank" href="{{ url_for('labels.boxes_label_batch_pdf', ids=boxes|map(attribute='id')|join(',')) }}">🖨 Печать всех этикеток (PDF)</a>
+  <a class="btn btn-outline-secondary" href="{{ url_for('boxes.bulk_create') }}">➕ Создать еще партию</a>
+</div>
+
+<div class="card p-3">
+  <table class="table table-sm">
+    <thead><tr><th>Номер короба</th><th>Склад</th></tr></thead>
+    <tbody>
+    {% for box in boxes %}
+      <tr>
+        <td><a href="{{ url_for('boxes.detail', box_id=box.id) }}">{{ box.box_number }}</a></td>
+        <td>{{ box.warehouse.name }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

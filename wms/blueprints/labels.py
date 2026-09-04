@@ -3,7 +3,7 @@ from flask import Blueprint, Response, abort, render_template, request
 from ..models import Box, Cell, Nomenclature, Zone
 from ..utils.barcodes import generate_barcode_data_uri
 from ..utils.http import content_disposition
-from ..utils.labels_pdf import build_label_pdf, build_zone_label_pdf
+from ..utils.labels_pdf import build_label_pdf, build_labels_batch_pdf, build_zone_label_pdf
 
 bp = Blueprint("labels", __name__)
 
@@ -54,6 +54,39 @@ def box_label_pdf(box_id):
         pdf,
         mimetype="application/pdf",
         headers={"Content-Disposition": content_disposition(f"{box.box_number}.pdf", "inline")},
+    )
+
+
+@bp.route("/boxes/batch.pdf")
+def boxes_label_batch_pdf():
+    """Печать этикеток сразу нескольких коробов одним PDF (например, для
+    только что созданной массовой партии) — ?ids=1,2,3."""
+    ids_param = request.args.get("ids", "")
+    try:
+        ids = [int(v) for v in ids_param.split(",") if v.strip()]
+    except ValueError:
+        abort(400, "Некорректный список коробов")
+    if not ids:
+        abort(404, "Список коробов пуст")
+
+    boxes = Box.query.filter(Box.id.in_(ids)).all()
+    boxes_by_id = {b.id: b for b in boxes}
+    entries = []
+    for box_id in ids:
+        box = boxes_by_id.get(box_id)
+        if not box:
+            continue
+        subtitle = box.warehouse.name if box.warehouse else ""
+        entries.append((box.box_number, f"Короб {box.box_number}", subtitle))
+
+    if not entries:
+        abort(404, "Короба не найдены")
+
+    pdf = build_labels_batch_pdf(entries)
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": content_disposition("boxes_batch.pdf", "inline")},
     )
 
 

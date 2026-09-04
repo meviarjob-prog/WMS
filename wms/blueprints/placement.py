@@ -199,7 +199,10 @@ def pack_line(doc_id, line_id):
     box_id = request.form.get("box_id", type=int)
     qty = request.form.get("qty", type=float)
 
-    box = Box.query.filter_by(id=box_id, placement_document_id=doc.id).first()
+    # Короб может быть создан прямо в этом документе или заготовлен заранее
+    # (массовое создание в «Склады → Массовое создание коробов») — в любом
+    # случае годится любой еще не размещенный в ячейке короб этого склада.
+    box = Box.query.filter_by(id=box_id, warehouse_id=doc.warehouse_id, cell_id=None).first()
     if not box:
         flash("Короб не найден", "danger")
         return redirect(url_for("placement.detail", doc_id=doc.id))
@@ -210,6 +213,9 @@ def pack_line(doc_id, line_id):
 
     if qty is None or qty <= 0 or qty > line.qty:
         qty = line.qty
+
+    if box.placement_document_id is None:
+        box.placement_document_id = doc.id
 
     box_item = BoxItem(box_id=box.id, nomenclature_id=line.nomenclature_id, qty=qty)
     db.session.add(box_item)

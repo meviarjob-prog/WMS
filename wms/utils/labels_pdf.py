@@ -24,16 +24,10 @@ pdfmetrics.registerFont(TTFont(FONT_REGULAR, os.path.join(_FONTS_DIR, "DejaVuSan
 pdfmetrics.registerFont(TTFont(FONT_BOLD, os.path.join(_FONTS_DIR, "DejaVuSans-Bold.ttf")))
 
 
-def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
-    """Строит PDF-этикетку 58x40мм: штрихкод сверху, текст снизу.
-
-    code_value — значение, кодируемое в штрихкод (баркод товара / номер короба / код ячейки).
-    title — основная подпись (наименование товара / номер короба / код ячейки).
-    subtitle — дополнительная строка (например, артикул).
-    """
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
-
+def _draw_label_page(c, code_value: str, title: str, subtitle: str = ""):
+    """Рисует одну этикетку 58x40мм на текущей странице канваса c —
+    используется и для одиночной этикетки, и для пакетной печати (там
+    вызывается в цикле с showPage() между этикетками)."""
     png_bytes = generate_barcode_png_bytes(code_value)
     img = ImageReader(io.BytesIO(png_bytes))
     img_w, img_h = img.getSize()
@@ -64,7 +58,31 @@ def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
         ty -= line_height
         c.drawCentredString(LABEL_WIDTH / 2, ty, subtitle)
 
+
+def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
+    """Строит PDF-этикетку 58x40мм: штрихкод сверху, текст снизу.
+
+    code_value — значение, кодируемое в штрихкод (баркод товара / номер короба / код ячейки).
+    title — основная подпись (наименование товара / номер короба / код ячейки).
+    subtitle — дополнительная строка (например, артикул).
+    """
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
+    _draw_label_page(c, code_value, title, subtitle)
     c.showPage()
+    c.save()
+    return buffer.getvalue()
+
+
+def build_labels_batch_pdf(entries) -> bytes:
+    """Строит один PDF из нескольких этикеток 58x40мм подряд (одна на
+    страницу) — для печати сразу целой партии, например, только что
+    массово созданных коробов. entries — список (code_value, title, subtitle)."""
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
+    for code_value, title, subtitle in entries:
+        _draw_label_page(c, code_value, title, subtitle)
+        c.showPage()
     c.save()
     return buffer.getvalue()
 

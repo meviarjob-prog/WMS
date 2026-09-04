@@ -95,7 +95,7 @@
           <form method="post" action="{{ url_for('placement.pack_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-2">
             <select name="box_id" class="form-select form-select-sm" required>
               <option value="">Короб...</option>
-              {% for box in boxes %}
+              {% for box in open_boxes %}
                 <option value="{{ box.id }}">{{ box.box_number }}</option>
               {% endfor %}
             </select>

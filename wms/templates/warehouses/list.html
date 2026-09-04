@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Склады{% endblock %}
 {% block content %}
-<h3 class="mb-4">Склады</h3>
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h3 class="mb-0">Склады</h3>
+  <a class="btn btn-outline-secondary" href="{{ url_for('boxes.bulk_create') }}">📦 Массовое создание коробов</a>
+</div>
 
 <div class="row g-4">
   <div class="col-md-5">

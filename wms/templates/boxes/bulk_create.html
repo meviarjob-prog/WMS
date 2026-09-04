@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Массовое создание коробов{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('warehouses.list_warehouses') }}">&larr; Склады</a></p>
+<h3 class="mb-4">Массовое создание коробов</h3>
+
+<div class="col-md-5">
+  <div class="card p-3">
+    <p class="text-muted small">
+      Заготовьте партию пустых коробов заранее — распечатайте все
+      этикетки одним разом и наклейте на короба. Заполнять товаром
+      (в «Размещении») или ставить пустыми в ячейки можно потом, по мере
+      необходимости.
+    </p>
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label">Склад</label>
+        <select name="warehouse_id" class="form-select" required>
+          <option value="">Выберите склад...</option>
+          {% for wh in warehouses %}
+            <option value="{{ wh.id }}">{{ wh.code }} — {{ wh.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Количество коробов</label>
+        <input type="number" name="count" class="form-control" min="1" max="500" value="10" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Создать</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
