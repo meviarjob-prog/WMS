@@ -9,6 +9,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import Config, INSTANCE_DIR
 from .extensions import db, login_manager
+from .paths import resource_dir
 
 
 _sqlite_functions_registered = False
@@ -72,7 +73,11 @@ def create_app(config_class=Config):
 
     _register_sqlite_tuning()
 
-    app = Flask(__name__)
+    app = Flask(
+        __name__,
+        template_folder=resource_dir("templates"),
+        static_folder=resource_dir("static"),
+    )
     app.config.from_object(config_class)
 
     if app.config.get("BEHIND_PROXY"):

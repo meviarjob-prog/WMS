@@ -9,3 +9,11 @@ instance/*.db-wal
 *.db-shm
 *.db-wal
 .DS_Store
+
+# Сборка в .exe (PyInstaller) — генерируется локально, см. deploy/build_exe.md
+/dist/
+/build/
+*.spec.bak
+# Скачивается отдельно с github.com/cloudflare/cloudflared/releases,
+# в репозиторий не кладем (сторонний бинарник под Windows).
+/cloudflared.exe

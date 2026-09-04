@@ -8,6 +8,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
+from ..paths import resource_dir
 from .barcodes import generate_barcode_png_bytes
 
 LABEL_WIDTH = 58 * mm
@@ -15,7 +16,7 @@ LABEL_HEIGHT = 40 * mm
 
 # Стандартные PDF-шрифты (Helvetica и т.п.) не содержат кириллицу — вместо
 # русских букв печатаются "квадраты". Подключаем TrueType-шрифт с кириллицей.
-_FONTS_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "fonts")
+_FONTS_DIR = os.path.join(resource_dir("static"), "fonts")
 FONT_REGULAR = "DejaVuSans"
 FONT_BOLD = "DejaVuSans-Bold"
 

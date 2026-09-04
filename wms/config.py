@@ -1,6 +1,21 @@
 import os
+import sys
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _detect_base_dir():
+    """Папка, рядом с которой хранятся данные (instance/) — то есть корень
+    проекта при обычном запуске, но при запуске из .exe, собранного
+    PyInstaller (--onefile), sys.executable указывает на сам .exe, а
+    __file__ — на временную папку распаковки (sys._MEIPASS), которая
+    удаляется при каждом закрытии программы. Если брать её, база данных
+    стиралась бы при каждом перезапуске .exe — поэтому в frozen-режиме
+    данные храним рядом с .exe."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+BASE_DIR = _detect_base_dir()
 INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
 
 
