@@ -1,0 +1,4 @@
+# Дополнительно к основному requirements.txt — только на сервере,
+# для запуска через gunicorn (production WSGI-сервер, вместо dev-сервера
+# Flask из run.py). На Windows/для локальной разработки не нужен.
+gunicorn>=22.0,<24.0

@@ -5,6 +5,7 @@ from flask import Flask, redirect, request, url_for
 from flask_login import current_user
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import Config, INSTANCE_DIR
 from .extensions import db, login_manager
@@ -73,6 +74,12 @@ def create_app(config_class=Config):
 
     app = Flask(__name__)
     app.config.from_object(config_class)
+
+    if app.config.get("BEHIND_PROXY"):
+        # За nginx: доверяем X-Forwarded-For/-Proto/-Host от ровно одного
+        # прокси перед приложением, чтобы Flask видел правильную схему
+        # (https) и IP клиента вместо адреса самого nginx.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
     db.init_app(app)
     login_manager.init_app(app)
