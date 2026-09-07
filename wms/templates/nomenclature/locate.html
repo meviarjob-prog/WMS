@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Где товар{% endblock %}
+{% block content %}
+<h3 class="mb-4">Где товар</h3>
+
+<div class="card p-3 mb-4">
+  <form method="get" class="d-flex gap-2">
+    <input type="text" name="barcode" id="locateBarcodeInput" class="form-control form-control-lg"
+           placeholder="Отсканируйте или введите штрихкод" value="{{ barcode }}" required autofocus data-submit-on-enter>
+    <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#locateBarcodeInput" title="Сканировать камерой">📷</button>
+    <button type="submit" class="btn btn-primary">Найти</button>
+  </form>
+</div>
+
+{% if not_found %}
+<div class="alert alert-danger">Товар со штрихкодом «{{ barcode }}» не найден в номенклатуре.</div>
+{% elif item %}
+<div class="card p-3 mb-4">
+  <h5 class="mb-1">{{ item.name }}{% if item.size %} ({{ item.size }}){% endif %}</h5>
+  <div class="text-muted small">Артикул: {{ item.sku }} · Штрихкод: {{ item.barcode }}</div>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>В коробах</h5>
+      <table class="table table-sm">
+        <thead><tr><th>Склад</th><th>Ячейка</th><th>Короб</th><th>Кол-во</th></tr></thead>
+        <tbody>
+        {% for bi in box_rows %}
+          <tr>
+            <td>{{ bi.box.warehouse.name }}</td>
+            <td>{% if bi.box.cell %}{{ bi.box.cell.code }}{% else %}<span class="text-muted">не расставлен</span>{% endif %}</td>
+            <td><a href="{{ url_for('boxes.detail', box_id=bi.box.id) }}">{{ bi.box.box_number }}</a></td>
+            <td>{{ bi.qty | round(0) }} {{ item.unit }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="text-muted">Товар ни в одном коробе не упакован</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Неразмещенный остаток</h5>
+      <p class="text-muted small">Принято на складе, но еще не упаковано в короб.</p>
+      <table class="table table-sm">
+        <thead><tr><th>Склад</th><th>Кол-во</th></tr></thead>
+        <tbody>
+        {% for row in unplaced_rows %}
+          <tr>
+            <td>{{ row.warehouse.name }}</td>
+            <td>{{ row.qty | round(0) }} {{ item.unit }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="2" class="text-muted">Неразмещенного остатка нет</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

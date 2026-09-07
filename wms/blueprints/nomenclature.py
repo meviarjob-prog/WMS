@@ -3,6 +3,7 @@ from flask_login import current_user
 
 from ..extensions import db
 from ..models import (
+    Box,
     BoxItem,
     InventoryLine,
     Nomenclature,
@@ -12,6 +13,7 @@ from ..models import (
     ReceivingLine,
     ShipmentPlanLine,
     UnplacedStock,
+    Warehouse,
 )
 from ..utils.categorize import classify_by_name
 from ..utils.excel_io import (
@@ -65,6 +67,47 @@ def clear_nomenclature():
         "success",
     )
     return redirect(url_for("nomenclature.list_nomenclature"))
+
+
+@bp.route("/locate")
+def locate():
+    """Поиск товара по штрихкоду: где он сейчас физически лежит — по
+    складам/ячейкам/коробам (упакован) и отдельно неразмещенный остаток
+    (принят, но еще не упакован в короб)."""
+    barcode = request.args.get("barcode", "").strip()
+    item = None
+    box_rows = []
+    unplaced_rows = []
+    not_found = False
+
+    if barcode:
+        item = Nomenclature.query.filter_by(barcode=barcode).first()
+        if item is None:
+            not_found = True
+        else:
+            box_rows = (
+                BoxItem.query.filter_by(nomenclature_id=item.id)
+                .join(Box)
+                .join(Warehouse, Box.warehouse_id == Warehouse.id)
+                .order_by(Warehouse.code, Box.box_number)
+                .all()
+            )
+            unplaced_rows = (
+                UnplacedStock.query.filter_by(nomenclature_id=item.id)
+                .filter(UnplacedStock.qty > 0)
+                .join(Warehouse)
+                .order_by(Warehouse.code)
+                .all()
+            )
+
+    return render_template(
+        "nomenclature/locate.html",
+        barcode=barcode,
+        item=item,
+        box_rows=box_rows,
+        unplaced_rows=unplaced_rows,
+        not_found=not_found,
+    )
 
 
 @bp.route("/")
