@@ -98,6 +98,7 @@
           <th rowspan="2" class="align-bottom">Штрихкод</th>
           <th rowspan="2" class="align-bottom"></th>
           <th rowspan="2" class="align-bottom text-end" title="Принято на складе-отправителе, но еще не упаковано в короб">На разбраковке</th>
+          <th rowspan="2" class="align-bottom text-end" title="Упаковано в короб на складе-отправителе — готово к отправке">Готово к отгрузке</th>
           {% if ozon_cities %}<th colspan="{{ ozon_cities|length }}" class="text-center table-info">ОЗОН</th>{% endif %}
           {% if wb_cities %}<th colspan="{{ wb_cities|length }}" class="text-center table-warning border-start border-2 border-dark">ВБ</th>{% endif %}
         </tr>
@@ -114,6 +115,7 @@
           <td>{{ p.barcode }}</td>
           <td class="text-nowrap">{% if p.no_stock %}<span class="badge bg-danger" title="Нет на складе-отправителе">нет на складе</span>{% endif %}</td>
           <td class="text-end">{% if p.unplaced %}{{ p.unplaced | round(0) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td class="text-end">{% if p.ready_to_ship %}<b>{{ p.ready_to_ship | round(0) }}</b>{% else %}<span class="text-muted">—</span>{% endif %}</td>
           {% for city in ozon_cities %}
             {% set line = p.ozon.get(city) %}
             <td class="text-end">

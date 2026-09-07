@@ -345,6 +345,16 @@ def dashboard():
                     "unplaced": unplaced_stock.get(line.nomenclature_id, 0)
                     if line.nomenclature_id is not None
                     else 0,
+                    # Готово к отгрузке — уже упаковано в короб (независимо от
+                    # того, расставлен ли короб по ячейке), в отличие от
+                    # "на разбраковке" выше. stock включает и то, и другое.
+                    "ready_to_ship": max(
+                        stock.get(line.nomenclature_id, 0)
+                        - unplaced_stock.get(line.nomenclature_id, 0),
+                        0,
+                    )
+                    if line.nomenclature_id is not None
+                    else 0,
                     "ozon": {},
                     "wb": {},
                     "max_remaining": 0,
