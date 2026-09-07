@@ -10,27 +10,51 @@
 </div>
 
 <div class="card p-3">
-  <table class="table">
-    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Коробов</th><th>Позиций</th><th>Автор</th><th>Статус</th><th></th></tr></thead>
-    <tbody>
-    {% for d in documents %}
-      <tr>
-        <td><a href="{{ url_for('inventory.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
-        <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
-        <td>{{ d.warehouse.name }}</td>
-        <td>{{ d.scanned_boxes.count() }}</td>
-        <td>{{ d.lines.count() }}</td>
-        <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
-        <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
-        <td>
-          <a href="{{ url_for('inventory.detail', doc_id=d.id) }}">Открыть</a>
-          · <a href="{{ url_for('inventory.export_document', doc_id=d.id) }}">Excel</a>
-        </td>
-      </tr>
-    {% else %}
-      <tr><td colspan="8" class="text-muted">Инвентаризаций еще нет</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <p class="text-muted small mb-3">
+    Несколько человек могут одновременно считать один склад по разным листам
+    (создайте свой лист каждому — «➕ Новая инвентаризация», склад тот же).
+    Когда все закончат — отметьте их черновики галочками ниже и сведите в
+    один итоговый документ.
+  </p>
+  <form method="post" action="{{ url_for('inventory.merge_documents') }}">
+    <table class="table">
+      <thead><tr><th></th><th>Номер</th><th>Дата</th><th>Склад</th><th>Коробов</th><th>Позиций</th><th>Автор</th><th>Статус</th><th></th></tr></thead>
+      <tbody>
+      {% for d in documents %}
+        <tr>
+          <td>
+            {% if d.status == 'draft' %}
+              <input type="checkbox" name="doc_ids" value="{{ d.id }}">
+            {% endif %}
+          </td>
+          <td><a href="{{ url_for('inventory.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+          <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>{{ d.warehouse.name }}</td>
+          <td>{{ d.scanned_boxes.count() }}</td>
+          <td>{{ d.lines.count() }}</td>
+          <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
+          <td>
+            <span class="badge badge-status-{{ d.status }}">
+              {{ {'draft': 'Черновик', 'completed': 'Завершен', 'merged': 'Объединен'}.get(d.status, d.status) }}
+            </span>
+            {% if d.status == 'merged' and d.merged_into %}
+              <br><a class="small" href="{{ url_for('inventory.detail', doc_id=d.merged_into_id) }}">→ {{ d.merged_into.number }}</a>
+            {% endif %}
+          </td>
+          <td>
+            <a href="{{ url_for('inventory.detail', doc_id=d.id) }}">Открыть</a>
+            · <a href="{{ url_for('inventory.export_document', doc_id=d.id) }}">Excel</a>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="text-muted">Инвентаризаций еще нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit" class="btn btn-outline-primary"
+            onclick="return confirm('Свести отмеченные листы в один итоговый документ? Короба, отсканированные в нескольких листах, будут учтены один раз.');">
+      🔀 Свести выбранные в один
+    </button>
+  </form>
 </div>
 {% endblock %}

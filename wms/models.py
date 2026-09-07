@@ -450,15 +450,21 @@ class InventoryDocument(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     number = db.Column(db.String(30), unique=True, nullable=False)
     warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
-    status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
+    status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed | merged
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
     # См. MovementDocument.synced_to_1c_at.
     synced_to_1c_at = db.Column(db.DateTime, nullable=True)
+    # Заполняется, когда несколько параллельных листов (по разным
+    # людям/участкам склада) свели в один итоговый документ — см.
+    # inventory.merge_documents. Статус такого листа становится "merged",
+    # его короба и позиции остаются на месте как история подсчета.
+    merged_into_id = db.Column(db.Integer, db.ForeignKey("inventory_documents.id"), nullable=True)
 
     warehouse = db.relationship("Warehouse")
     created_by = db.relationship("User")
+    merged_into = db.relationship("InventoryDocument", remote_side=[id], backref="merged_from")
     lines = db.relationship(
         "InventoryLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
     )

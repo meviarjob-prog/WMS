@@ -50,6 +50,7 @@ body {
 .badge-status-completed { background-color: #198754; }
 .badge-status-open { background-color: #6c757d; }
 .badge-status-stored { background-color: #0d6efd; }
+.badge-status-merged { background-color: #6c757d; }
 
 /* ---- Мобильный экран ---- */
 

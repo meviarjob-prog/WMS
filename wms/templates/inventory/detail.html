@@ -6,9 +6,19 @@
 <div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
   <div>
     <h3 class="mb-1">Инвентаризация {{ doc.number }}
-      <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
+      <span class="badge badge-status-{{ doc.status }}">
+        {{ {'draft': 'Черновик', 'completed': 'Завершен', 'merged': 'Объединен'}.get(doc.status, doc.status) }}
+      </span>
     </h3>
     <div class="text-muted">Склад: {{ doc.warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
+    {% if doc.status == 'merged' and doc.merged_into %}
+    <div class="text-muted small">Сведен в итоговый документ: <a href="{{ url_for('inventory.detail', doc_id=doc.merged_into_id) }}">{{ doc.merged_into.number }}</a></div>
+    {% endif %}
+    {% if doc.merged_from %}
+    <div class="text-muted small">Собран из листов:
+      {% for src in doc.merged_from %}<a href="{{ url_for('inventory.detail', doc_id=src.id) }}">{{ src.number }}</a>{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% endif %}
   </div>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('inventory.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>

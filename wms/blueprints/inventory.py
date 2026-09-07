@@ -18,6 +18,78 @@ def list_documents():
     return render_template("inventory/list.html", documents=documents)
 
 
+@bp.route("/merge", methods=["POST"])
+def merge_documents():
+    """Свести несколько параллельных листов (по разным людям/участкам
+    одного склада) в один итоговый документ: короба объединяются без
+    задвоения (один и тот же короб, отсканированный в двух листах по
+    ошибке, учитывается один раз), позиции пересчитываются заново из
+    содержимого коробов. Исходные листы помечаются как "merged" и
+    остаются в истории — ничего не удаляется."""
+    doc_ids = request.form.getlist("doc_ids", type=int)
+    if len(doc_ids) < 2:
+        flash("Выберите минимум два листа для объединения", "danger")
+        return redirect(url_for("inventory.list_documents"))
+
+    docs = InventoryDocument.query.filter(InventoryDocument.id.in_(doc_ids)).all()
+    if len(docs) != len(set(doc_ids)):
+        flash("Не удалось найти все выбранные листы", "danger")
+        return redirect(url_for("inventory.list_documents"))
+    if any(d.status != "draft" for d in docs):
+        flash("Объединять можно только черновики (не завершенные и не уже объединенные листы)", "danger")
+        return redirect(url_for("inventory.list_documents"))
+    warehouse_ids = {d.warehouse_id for d in docs}
+    if len(warehouse_ids) > 1:
+        flash("Выбранные листы относятся к разным складам — объединять можно только листы одного склада", "danger")
+        return redirect(url_for("inventory.list_documents"))
+
+    merged = InventoryDocument(
+        number=next_number("inventory"),
+        warehouse_id=warehouse_ids.pop(),
+        created_by_id=current_user.id,
+    )
+    db.session.add(merged)
+    db.session.flush()
+
+    seen_box_ids = set()
+    duplicate_box_numbers = []
+    for doc in docs:
+        for scanned in doc.scanned_boxes:
+            if scanned.box_id in seen_box_ids:
+                duplicate_box_numbers.append(scanned.box.box_number)
+                continue
+            seen_box_ids.add(scanned.box_id)
+            db.session.add(InventoryScannedBox(document_id=merged.id, box_id=scanned.box_id))
+            for box_item in scanned.box.items:
+                line = InventoryLine.query.filter_by(
+                    document_id=merged.id, nomenclature_id=box_item.nomenclature_id
+                ).first()
+                if line:
+                    line.qty += box_item.qty
+                else:
+                    line = InventoryLine(
+                        document_id=merged.id,
+                        nomenclature_id=box_item.nomenclature_id,
+                        qty=box_item.qty,
+                    )
+                    db.session.add(line)
+        doc.status = "merged"
+        doc.merged_into_id = merged.id
+
+    db.session.commit()
+
+    message = f"Листы объединены в {merged.number}: {len(seen_box_ids)} коробов из {len(docs)} листов"
+    if duplicate_box_numbers:
+        flash(
+            message + f". Внимание: короб(а) {', '.join(duplicate_box_numbers)} "
+            "отсканированы в нескольких листах — учтены один раз",
+            "warning",
+        )
+    else:
+        flash(message, "success")
+    return redirect(url_for("inventory.detail", doc_id=merged.id))
+
+
 @bp.route("/new", methods=["GET", "POST"])
 def new_document():
     if request.method == "GET":
