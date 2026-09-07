@@ -12,7 +12,7 @@
       <h5>Неразмещенный остаток по складам</h5>
       <p class="text-muted small">Принятый товар, который еще не упакован в короба и не расставлен по ячейкам.</p>
       <table class="table table-sm">
-        <thead><tr><th>Склад</th><th>Штрихкод</th><th>Наименование</th><th>Размер</th><th>Кол-во</th></tr></thead>
+        <thead><tr><th>Склад</th><th>Штрихкод</th><th>Наименование</th><th>Размер</th><th>Кол-во</th><th></th></tr></thead>
         <tbody>
         {% for row in stock_rows %}
           <tr>
@@ -21,9 +21,24 @@
             <td>{{ row.nomenclature.name }}</td>
             <td>{{ row.nomenclature.size or '' }}</td>
             <td>{{ row.qty }} {{ row.nomenclature.unit }}</td>
+            <td>
+              <details>
+                <summary class="btn btn-sm btn-outline-danger">Возврат</summary>
+                <form method="post" action="{{ url_for('placement.write_off_stock') }}" class="d-flex gap-1 mt-2">
+                  <input type="hidden" name="warehouse_id" value="{{ row.warehouse_id }}">
+                  <input type="hidden" name="nomenclature_id" value="{{ row.nomenclature_id }}">
+                  <input type="number" step="any" min="0" max="{{ row.qty }}" name="qty" value="{{ row.qty }}"
+                         class="form-control form-control-sm" style="max-width:100px" required>
+                  <button type="submit" class="btn btn-sm btn-danger"
+                          onclick="return confirm('Списать со склада как брак/возврат поставщику? Сам возврат в 1С проводится отдельно.');">
+                    Подтвердить
+                  </button>
+                </form>
+              </details>
+            </td>
           </tr>
         {% else %}
-          <tr><td colspan="5" class="text-muted">Неразмещенных остатков нет</td></tr>
+          <tr><td colspan="6" class="text-muted">Неразмещенных остатков нет</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -58,6 +73,27 @@
       </table>
     </div>
   </div>
+</div>
+
+<div class="card p-3 mb-4">
+  <h5>Возвраты поставщику (брак)</h5>
+  <p class="text-muted small">Списано со склада здесь — сам документ возврата оформляется в 1С отдельно, количество ниже для сверки.</p>
+  <table class="table table-sm">
+    <thead><tr><th>Дата</th><th>Склад</th><th>Наименование</th><th>Кол-во</th><th>Кто списал</th></tr></thead>
+    <tbody>
+    {% for r in returns %}
+      <tr>
+        <td>{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ r.warehouse.name }}</td>
+        <td>{{ r.nomenclature.name }} {{ r.nomenclature.size or '' }}</td>
+        <td>{{ r.qty }} {{ r.nomenclature.unit }}</td>
+        <td>{{ r.created_by.display_name() if r.created_by else '' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">Возвратов еще не было</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </div>
 
 <div class="card p-3">

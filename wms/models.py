@@ -557,3 +557,23 @@ class ShipmentPlanLine(db.Model):
 
     def remaining_qty(self):
         return max(self.planned_qty - self.fulfilled_qty, 0)
+
+
+class SupplierReturn(db.Model):
+    """Списание брака с неразмещенного остатка через возврат поставщику.
+    Сам документ возврата оформляется в 1С отдельно — здесь только
+    фиксируем количество и товар, чтобы было с чем сверить 1С-документ."""
+
+    __tablename__ = "supplier_returns"
+
+    id = db.Column(db.Integer, primary_key=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
+    qty = db.Column(db.Float, nullable=False)
+    comment = db.Column(db.String(300))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+
+    warehouse = db.relationship("Warehouse")
+    nomenclature = db.relationship("Nomenclature")
+    created_by = db.relationship("User")

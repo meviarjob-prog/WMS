@@ -23,6 +23,7 @@ from ..models import (
     Nomenclature,
     PlacementDocument,
     PlacementLine,
+    SupplierReturn,
     UnplacedStock,
     Warehouse,
 )
@@ -116,13 +117,51 @@ def list_documents():
         .all()
     )
     cell_suggestions = {box.id: suggest_cell(box.warehouse_id, box) for box in open_boxes}
+    returns = SupplierReturn.query.order_by(SupplierReturn.created_at.desc()).limit(20).all()
     return render_template(
         "placement/list.html",
         documents=documents,
         stock_rows=stock_rows,
         open_boxes=open_boxes,
         cell_suggestions=cell_suggestions,
+        returns=returns,
     )
+
+
+@bp.route("/write-off-stock", methods=["POST"])
+def write_off_stock():
+    """Списание брака с неразмещенного остатка через возврат поставщику.
+    Сам документ возврата оформляется в 1С отдельно — здесь только
+    списываем количество со склада и фиксируем его для сверки."""
+    warehouse_id = request.form.get("warehouse_id", type=int)
+    nomenclature_id = request.form.get("nomenclature_id", type=int)
+    qty = request.form.get("qty", type=float)
+    item = Nomenclature.query.get_or_404(nomenclature_id)
+
+    available = UnplacedStock.available(warehouse_id, nomenclature_id)
+    if not qty or qty <= 0 or qty > available:
+        flash(
+            f"Недостаточно неразмещенного остатка «{item.name}»: доступно {available} {item.unit}",
+            "danger",
+        )
+        return redirect(url_for("placement.list_documents"))
+
+    row = UnplacedStock.query.filter_by(
+        warehouse_id=warehouse_id, nomenclature_id=nomenclature_id
+    ).first()
+    row.qty -= qty
+
+    db.session.add(
+        SupplierReturn(
+            warehouse_id=warehouse_id,
+            nomenclature_id=nomenclature_id,
+            qty=qty,
+            created_by_id=current_user.id,
+        )
+    )
+    db.session.commit()
+    flash(f"Списано {qty} {item.unit} «{item.name}» — возврат поставщику", "success")
+    return redirect(url_for("placement.list_documents"))
 
 
 @bp.route("/new", methods=["GET", "POST"])
