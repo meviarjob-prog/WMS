@@ -2,10 +2,12 @@ from datetime import datetime
 
 from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
 from flask_login import current_user
+from sqlalchemy import and_, func, or_
 
 from ..extensions import db
 from ..models import (
     Box,
+    BoxItem,
     Cell,
     CELL_CAPACITY,
     MovementDocument,
@@ -32,13 +34,44 @@ def _apply_shipment_fulfillment(box, warehouse_id):
             plan_line.fulfilled_qty += item.qty
 
 
+def _committed_by_warehouse_and_item():
+    """{(warehouse_id, nomenclature_id): кол-во}, уже "закрытое" другими
+    коробами, которые едут на этот склад, но еще не отмечены "Принято на
+    складе" — черновики перемещения (короб отсканирован, но еще не уехал)
+    и уже отправленные, но не принятые (см. movement.receive). После
+    приемки это количество уже учтено в fulfilled_qty самой строки плана —
+    поэтому принятые сюда не попадают, иначе вычлось бы дважды. Без этого
+    remaining_qty продолжал бы показывать полную потребность склада, даже
+    если она уже полностью закрыта едущими туда коробами, и подсказка
+    маршрутизации короба слала бы туда больше, чем реально нужно."""
+    rows = (
+        db.session.query(
+            MovementDocument.to_warehouse_id,
+            BoxItem.nomenclature_id,
+            func.sum(BoxItem.qty),
+        )
+        .join(MovementLine, MovementLine.document_id == MovementDocument.id)
+        .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
+        .filter(
+            or_(
+                MovementDocument.status == "draft",
+                and_(MovementDocument.status == "completed", MovementDocument.received_at.is_(None)),
+            )
+        )
+        .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
+        .all()
+    )
+    return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
+
+
 def _compute_routing(box):
     """Для содержимого короба ищет склады-города, где по актуальному плану
-    отгрузок есть невыполненная потребность (remaining_qty > 0) хотя бы по
-    одному товару из короба — группирует по складу и сортирует по тому,
-    сколько из содержимого короба реально покрывает эту потребность
-    (matched_qty), по убыванию. Пустой список — значит короб никому не
-    нужен по текущему плану (короб можно пропустить)."""
+    отгрузок есть невыполненная потребность (remaining_qty > 0, за вычетом
+    уже едущих туда коробов) хотя бы по одному товару из короба —
+    группирует по складу и сортирует по тому, сколько из содержимого
+    короба реально покрывает эту потребность (matched_qty), по убыванию.
+    Пустой список — значит короб никому не нужен по текущему плану (короб
+    можно пропустить)."""
     qty_by_item = {}
     for box_item in box.items:
         qty_by_item[box_item.nomenclature_id] = (
@@ -50,10 +83,12 @@ def _compute_routing(box):
     lines = ShipmentPlanLine.query.filter(
         ShipmentPlanLine.nomenclature_id.in_(qty_by_item.keys())
     ).all()
+    committed = _committed_by_warehouse_and_item()
 
     by_warehouse = {}
     for line in lines:
-        remaining = line.remaining_qty()
+        already_committed = committed.get((line.warehouse_id, line.nomenclature_id), 0)
+        remaining = max(line.remaining_qty() - already_committed, 0)
         box_qty = qty_by_item.get(line.nomenclature_id, 0)
         if remaining <= 0 or box_qty <= 0:
             continue
