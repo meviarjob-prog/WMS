@@ -258,6 +258,34 @@ class Box(db.Model):
     def total_qty(self):
         return sum(item.qty for item in self.items)
 
+    @property
+    def barcode_value(self):
+        """Значение, которое реально кодируется в штрихкод короба — только
+        цифры, без префикса "BOX-". Код128 при смешении букв и цифр
+        переключается между наборами B/C прямо посередине кода, и часть
+        сканеров считывает такой штрихкод с ошибкой (путает цифры).
+        Чисто цифровой код кодируется одним набором C без переключений и
+        читается надежно. box_number при этом остается как есть — печатается
+        текстом под штрихкодом и используется как понятный человеку номер."""
+        digits = "".join(ch for ch in self.box_number if ch.isdigit())
+        return digits or self.box_number
+
+    @staticmethod
+    def find_by_scanned_code(code, warehouse_id=None):
+        """Находит короб по отсканированному/введенному значению — принимает
+        как полный номер ("BOX-000123", вручную с клавиатуры), так и чисто
+        цифровой штрихкод ("000123", как реально закодировано в barcode_value
+        начиная с этой правки) — иначе после смены формата штрихкода старые
+        места ввода перестали бы находить короб по сканированию."""
+        code = (code or "").strip()
+        query = Box.query
+        if warehouse_id is not None:
+            query = query.filter_by(warehouse_id=warehouse_id)
+        box = query.filter_by(box_number=code).first()
+        if box is None and code.isdigit():
+            box = query.filter(Box.box_number.like(f"%{code}")).first()
+        return box
+
     def __repr__(self):
         return f"<Box {self.box_number}>"
 

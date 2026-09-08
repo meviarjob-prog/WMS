@@ -61,7 +61,7 @@ def nomenclature_by_barcode(barcode):
 
 @bp.route("/box/by-number/<box_number>")
 def box_by_number(box_number):
-    box = Box.query.filter_by(box_number=box_number.strip()).first()
+    box = Box.find_by_scanned_code(box_number)
     if not box:
         return jsonify({"found": False}), 404
     return jsonify(

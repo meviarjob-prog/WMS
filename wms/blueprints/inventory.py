@@ -128,7 +128,7 @@ def add_box(doc_id):
         return redirect(url_for("inventory.detail", doc_id=doc.id))
 
     box_number = request.form.get("box_number", "").strip()
-    box = Box.query.filter_by(box_number=box_number).first()
+    box = Box.find_by_scanned_code(box_number)
     if not box:
         flash(f"Короб '{box_number}' не найден", "danger")
         return redirect(url_for("inventory.detail", doc_id=doc.id))

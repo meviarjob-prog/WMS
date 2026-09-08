@@ -113,7 +113,7 @@ def select_box(doc_id):
     склада, в т.ч. заготовленный заранее массовым созданием и печатью."""
     doc = ReceivingDocument.query.get_or_404(doc_id)
     box_number = request.form.get("box_number", "").strip()
-    box = Box.query.filter_by(box_number=box_number, warehouse_id=doc.warehouse_id).first()
+    box = Box.find_by_scanned_code(box_number, warehouse_id=doc.warehouse_id)
     if not box:
         flash(f"Короб '{box_number}' не найден на складе «{doc.warehouse.name}»", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id))

@@ -41,7 +41,7 @@ def item_label_pdf(item_id):
 @bp.route("/box/<int:box_id>")
 def box_label(box_id):
     box = Box.query.get_or_404(box_id)
-    img = generate_barcode_data_uri(box.box_number)
+    img = generate_barcode_data_uri(box.barcode_value)
     return render_template("labels/box.html", box=box, barcode_img=img, autoprint=_autoprint())
 
 
@@ -49,7 +49,7 @@ def box_label(box_id):
 def box_label_pdf(box_id):
     box = Box.query.get_or_404(box_id)
     subtitle = box.warehouse.name if box.warehouse else ""
-    pdf = build_label_pdf(box.box_number, f"Короб {box.box_number}", subtitle)
+    pdf = build_label_pdf(box.barcode_value, f"Короб {box.box_number}", subtitle)
     return Response(
         pdf,
         mimetype="application/pdf",
@@ -80,7 +80,7 @@ def boxes_label_batch_pdf():
         if not box:
             continue
         subtitle = box.warehouse.name if box.warehouse else ""
-        entries.append((box.box_number, f"Короб {box.box_number}", subtitle))
+        entries.append((box.barcode_value, f"Короб {box.box_number}", subtitle))
 
     if not entries:
         abort(404, "Короба не найдены")
