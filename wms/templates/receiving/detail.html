@@ -33,10 +33,32 @@
 {% endif %}
 
 {% if doc.status == 'draft' %}
+<div class="card p-3 mb-4">
+  <h5>Короб <span class="text-muted small">(по желанию — если сразу клеите короба и упаковываете товар по факту приемки)</span></h5>
+  {% if active_box %}
+    <div class="alert alert-primary d-flex justify-content-between align-items-center flex-wrap gap-2 mb-0">
+      <div>Работаем с коробом <b>{{ active_box.box_number }}</b>{% if active_box.items.count() %} — уже внутри: {{ active_box.items.count() }} поз.{% endif %}</div>
+      <a class="btn btn-sm btn-outline-primary" href="{{ url_for('receiving.detail', doc_id=doc.id) }}">Работать без короба / сменить короб</a>
+    </div>
+  {% else %}
+    <p class="text-muted small">Отсканируйте короб (уже созданный ранее массовой печатью) или создайте новый — товар будете сканировать сразу в него, минуя неразмещенный остаток.</p>
+    <div class="d-flex gap-2 flex-wrap">
+      <form method="post" action="{{ url_for('receiving.select_box', doc_id=doc.id) }}" class="d-flex gap-2">
+        <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg" placeholder="Отсканируйте или введите номер короба" required data-submit-on-enter>
+        <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#boxNumberInput" title="Сканировать камерой">📷</button>
+        <button type="submit" class="btn btn-primary">Выбрать</button>
+      </form>
+      <form method="post" action="{{ url_for('receiving.create_box', doc_id=doc.id) }}">
+        <button type="submit" class="btn btn-outline-primary">📦 Создать новый короб</button>
+      </form>
+    </div>
+  {% endif %}
+</div>
+
 <div class="row g-4 mb-4">
   <div class="col-md-5">
     <div class="card p-3">
-      <h5>Сканировать штрихкод товара</h5>
+      <h5>Сканировать штрихкод товара{% if active_box %} — в короб {{ active_box.box_number }}{% endif %}</h5>
       <div class="d-flex gap-2">
         <input type="text" id="scanInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод и нажмите Enter" autofocus>
         <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#scanInput" title="Сканировать камерой телефона">📷</button>
@@ -47,7 +69,7 @@
   <div class="col-md-7">
     <div class="card p-3">
       <h5>Добавить товар вручную (поиск "содержит")</h5>
-      <form method="post" action="{{ url_for('receiving.add_line', doc_id=doc.id) }}" class="row g-2 align-items-end">
+      <form method="post" action="{{ url_for('receiving.add_line_to_box', doc_id=doc.id, box_id=active_box.id) if active_box else url_for('receiving.add_line', doc_id=doc.id) }}" class="row g-2 align-items-end">
         <div class="col-md-7">
           <label class="form-label">Товар</label>
           <div class="autocomplete-box" data-autocomplete-nomenclature>
@@ -67,16 +89,42 @@
     </div>
   </div>
 </div>
+
+{% if packed_boxes %}
+<div class="card p-3 mb-4">
+  <h5>Короба, упакованные в этой приемке</h5>
+  <table class="table table-sm mb-0">
+    <thead><tr><th>Короб</th><th></th></tr></thead>
+    <tbody>
+    {% for box in packed_boxes %}
+      <tr>
+        <td>
+          <a href="{{ url_for('boxes.detail', box_id=box.id) }}">{{ box.box_number }}</a>
+          <span class="badge badge-status-{{ box.status }}">{{ 'В ячейке' if box.status == 'stored' else 'Открыт' }}</span>
+        </td>
+        <td>
+          {% if not (active_box and box.id == active_box.id) %}
+          <a class="btn btn-sm btn-outline-primary" href="{{ url_for('receiving.detail', doc_id=doc.id, box=box.id) }}">Сканировать в этот короб</a>
+          {% endif %}
+          <a class="btn btn-sm btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_label', box_id=box.id) }}">🖨 Этикетка короба</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% endif %}
 
 <div class="card p-3">
   <h5>Позиции приемки</h5>
   <table class="table table-sm">
-    <thead><tr><th>Товар</th><th>Кол-во</th>{% if doc.status == 'draft' %}<th></th>{% endif %}</tr></thead>
+    <thead><tr><th>Товар</th><th>Короб</th><th>Кол-во</th>{% if doc.status == 'draft' %}<th></th>{% endif %}</tr></thead>
     <tbody>
     {% for line in lines %}
       <tr>
         <td>{{ line.nomenclature.name }} <span class="text-muted">({{ line.nomenclature.sku }})</span></td>
+        <td>{% if line.box %}<a href="{{ url_for('boxes.detail', box_id=line.box.id) }}">{{ line.box.box_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
         {% if doc.status == 'draft' %}
         <td style="min-width:160px">
           <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
@@ -95,12 +143,12 @@
         {% endif %}
       </tr>
     {% else %}
-      <tr><td colspan="3" class="text-muted">Позиций еще нет</td></tr>
+      <tr><td colspan="4" class="text-muted">Позиций еще нет</td></tr>
     {% endfor %}
     </tbody>
     {% if lines %}
     <tfoot>
-      <tr class="fw-bold"><td>Итого</td><td>{{ doc.total_qty() }}</td>{% if doc.status == 'draft' %}<td></td>{% endif %}</tr>
+      <tr class="fw-bold"><td>Итого</td><td></td><td>{{ doc.total_qty() }}</td>{% if doc.status == 'draft' %}<td></td>{% endif %}</tr>
     </tfoot>
     {% endif %}
   </table>
@@ -113,7 +161,7 @@
   const scanResult = document.getElementById("scanResult");
   if (scanInput) {
     initBarcodeInput(scanInput, (barcode) => {
-      fetch("{{ url_for('receiving.add_line_by_barcode', doc_id=doc.id) }}", {
+      fetch("{{ url_for('receiving.add_line_to_box_by_barcode', doc_id=doc.id, box_id=active_box.id) if active_box else url_for('receiving.add_line_by_barcode', doc_id=doc.id) }}", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ barcode: barcode, qty: 1 }),

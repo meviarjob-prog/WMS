@@ -308,8 +308,14 @@ class ReceivingLine(db.Model):
     )
     nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
     qty = db.Column(db.Float, nullable=False, default=0)
+    # Заполнено, если товар отсканирован сразу в короб при самой приемке
+    # (см. receiving._receive_item_into_box) — тогда он уже лежит в коробе
+    # и при завершении приемки НЕ уходит в неразмещенный остаток. Пусто —
+    # обычная приемка "по количеству", разместить в короб позже вручную.
+    box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=True)
 
     nomenclature = db.relationship("Nomenclature")
+    box = db.relationship("Box")
 
 
 class PlacementDocument(db.Model):
