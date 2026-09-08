@@ -1,7 +1,8 @@
 from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask_login import current_user
 
 from ..extensions import db
-from ..models import Box, BoxItem, Warehouse
+from ..models import Box, BoxItem, Nomenclature, Warehouse
 from ..utils.numbering import next_number
 
 bp = Blueprint("boxes", __name__)
@@ -53,6 +54,68 @@ def detail(box_id):
     box = Box.query.get_or_404(box_id)
     items = box.items.all()
     return render_template("boxes/detail.html", box=box, items=items)
+
+
+@bp.route("/<int:box_id>/items/add", methods=["POST"])
+def add_item(box_id):
+    """Ручная корректировка состава короба администратором — напрямую, в
+    обход документов приемки/размещения/перемещения. Нужна, когда факт не
+    совпал с тем, что отсканировали (не туда положили, ошиблись коробом и
+    т.п.), а документ, которым товар туда попал, уже завершен и его
+    позиции больше не редактируются."""
+    if not current_user.is_admin:
+        flash("Редактировать состав короба может только администратор", "danger")
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    box = Box.query.get_or_404(box_id)
+    nomenclature_id = request.form.get("nomenclature_id", type=int)
+    qty = request.form.get("qty", type=float)
+    item = Nomenclature.query.get(nomenclature_id)
+    if not item or not qty or qty <= 0:
+        flash("Укажите товар и корректное количество", "danger")
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    box_item = BoxItem.query.filter_by(box_id=box.id, nomenclature_id=item.id).first()
+    if box_item:
+        box_item.qty += qty
+    else:
+        box_item = BoxItem(box_id=box.id, nomenclature_id=item.id, qty=qty)
+        db.session.add(box_item)
+    db.session.commit()
+    flash(f"В короб {box.box_number} добавлено: {item.name} ({qty} {item.unit})", "success")
+    return redirect(url_for("boxes.detail", box_id=box_id))
+
+
+@bp.route("/<int:box_id>/items/<int:item_id>/update", methods=["POST"])
+def update_item(box_id, item_id):
+    if not current_user.is_admin:
+        flash("Редактировать состав короба может только администратор", "danger")
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    box_item = BoxItem.query.filter_by(id=item_id, box_id=box_id).first_or_404()
+    qty = request.form.get("qty", type=float)
+    if qty is None or qty <= 0:
+        flash("Укажите корректное количество", "danger")
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    box_item.qty = qty
+    db.session.commit()
+    flash(f"Количество обновлено: {box_item.nomenclature.name} — {qty} {box_item.nomenclature.unit}", "success")
+    return redirect(url_for("boxes.detail", box_id=box_id))
+
+
+@bp.route("/<int:box_id>/items/<int:item_id>/delete", methods=["POST"])
+def delete_item(box_id, item_id):
+    if not current_user.is_admin:
+        flash("Редактировать состав короба может только администратор", "danger")
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    box_item = BoxItem.query.filter_by(id=item_id, box_id=box_id).first_or_404()
+    name = box_item.nomenclature.name
+    db.session.delete(box_item)
+    db.session.commit()
+    flash(f"Из короба удалено: {name}", "success")
+    return redirect(url_for("boxes.detail", box_id=box_id))
 
 
 @bp.route("/bulk-create", methods=["GET", "POST"])
