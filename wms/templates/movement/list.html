@@ -9,6 +9,54 @@
   </div>
 </div>
 
+<div class="card p-3 mb-4">
+  <h5>Куда везти короб</h5>
+  <p class="text-muted small">Сканируете короб — показываем, на какой склад-город его отправлять по текущему плану отгрузок (по остатку невыполненной потребности). Если потребности нет ни у кого — короб можно пропустить.</p>
+  <form method="get" action="{{ url_for('movement.route_box') }}" class="d-flex gap-2" style="max-width:480px">
+    <input type="text" name="box_number" id="routeBoxInput" class="form-control form-control-lg" placeholder="Отсканируйте или введите номер короба" value="{{ route_box_number }}" required autofocus>
+    <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#routeBoxInput" title="Сканировать камерой">📷</button>
+    <button type="submit" class="btn btn-primary">Найти</button>
+  </form>
+
+  {% if route_box_number %}
+    {% if route_not_found %}
+      <div class="alert alert-danger mt-3 mb-0">Короб «{{ route_box_number }}» не найден.</div>
+    {% elif route_box and not routing %}
+      <div class="alert alert-secondary mt-3 mb-0">
+        <b>Пропускаем.</b> Короб {{ route_box.box_number }}{% if route_box.items.count() == 0 %} пуст —{% else %} —{% endif %}
+        потребности по его содержимому нет ни на одном складе-городе по текущему плану отгрузок.
+      </div>
+    {% elif route_box %}
+      {% set total_demand = routing | sum(attribute='total_remaining') %}
+      <div class="mt-3">
+        <div class="mb-2">
+          Короб <b>{{ route_box.box_number }}</b> — общая невыполненная потребность на подходящих складах:
+          <b>{{ total_demand | round(0, 'floor') | int }} шт.</b>
+        </div>
+        <table class="table table-sm">
+          <thead><tr><th>Склад-город</th><th>Покрывает этим коробом</th><th>Нужно всего</th><th></th></tr></thead>
+          <tbody>
+          {% for entry in routing %}
+            <tr{% if loop.first %} class="table-success"{% endif %}>
+              <td>{{ entry.warehouse.name }}{% if loop.first %} <span class="badge bg-success">рекомендуем</span>{% endif %}</td>
+              <td>{{ entry.matched_qty | round(0, 'floor') | int }} шт.</td>
+              <td>{{ entry.total_remaining | round(0, 'floor') | int }} шт.</td>
+              <td>
+                <form method="post" action="{{ url_for('movement.route_box_add') }}">
+                  <input type="hidden" name="box_id" value="{{ route_box.id }}">
+                  <input type="hidden" name="to_warehouse_id" value="{{ entry.warehouse.id }}">
+                  <button type="submit" class="btn btn-sm btn-outline-primary">Добавить в перемещение</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  {% endif %}
+</div>
+
 <div class="card p-3">
   <table class="table">
     <thead><tr><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Автор</th><th>Статус</th><th>Приемка</th><th></th></tr></thead>

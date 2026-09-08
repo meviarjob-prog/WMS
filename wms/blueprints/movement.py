@@ -32,10 +32,131 @@ def _apply_shipment_fulfillment(box, warehouse_id):
             plan_line.fulfilled_qty += item.qty
 
 
+def _compute_routing(box):
+    """Для содержимого короба ищет склады-города, где по актуальному плану
+    отгрузок есть невыполненная потребность (remaining_qty > 0) хотя бы по
+    одному товару из короба — группирует по складу и сортирует по тому,
+    сколько из содержимого короба реально покрывает эту потребность
+    (matched_qty), по убыванию. Пустой список — значит короб никому не
+    нужен по текущему плану (короб можно пропустить)."""
+    qty_by_item = {}
+    for box_item in box.items:
+        qty_by_item[box_item.nomenclature_id] = (
+            qty_by_item.get(box_item.nomenclature_id, 0) + box_item.qty
+        )
+    if not qty_by_item:
+        return []
+
+    lines = ShipmentPlanLine.query.filter(
+        ShipmentPlanLine.nomenclature_id.in_(qty_by_item.keys())
+    ).all()
+
+    by_warehouse = {}
+    for line in lines:
+        remaining = line.remaining_qty()
+        box_qty = qty_by_item.get(line.nomenclature_id, 0)
+        if remaining <= 0 or box_qty <= 0:
+            continue
+        entry = by_warehouse.setdefault(
+            line.warehouse_id,
+            {"warehouse": line.warehouse, "matched_qty": 0.0, "total_remaining": 0.0, "items": []},
+        )
+        entry["matched_qty"] += min(remaining, box_qty)
+        entry["total_remaining"] += remaining
+        entry["items"].append({"nomenclature": line.nomenclature, "box_qty": box_qty, "remaining": remaining})
+
+    return sorted(by_warehouse.values(), key=lambda e: -e["matched_qty"])
+
+
 @bp.route("/")
 def list_documents():
     documents = MovementDocument.query.order_by(MovementDocument.created_at.desc()).all()
-    return render_template("movement/list.html", documents=documents)
+    return render_template(
+        "movement/list.html",
+        documents=documents,
+        route_box_number="",
+        route_box=None,
+        route_not_found=False,
+        routing=[],
+    )
+
+
+@bp.route("/route-box")
+def route_box():
+    """Сканируем короб — показываем, на какой склад-город его нужно
+    отправить по текущему плану отгрузок (или что потребности нет вообще
+    ни у кого, и короб можно пропустить). Только просмотр — сам короб
+    добавляется в конкретное перемещение отдельным действием ниже."""
+    box_number = request.args.get("box_number", "").strip()
+    documents = MovementDocument.query.order_by(MovementDocument.created_at.desc()).all()
+
+    box = None
+    routing = []
+    not_found = False
+    if box_number:
+        box = Box.find_by_scanned_code(box_number)
+        if not box:
+            not_found = True
+        else:
+            routing = _compute_routing(box)
+
+    return render_template(
+        "movement/list.html",
+        documents=documents,
+        route_box_number=box_number,
+        route_box=box,
+        route_not_found=not_found,
+        routing=routing,
+    )
+
+
+def _create_movement_line(doc, box):
+    line = MovementLine(
+        document_id=doc.id,
+        box_id=box.id,
+        from_warehouse_id=box.warehouse_id,
+        from_cell_id=box.cell_id,
+    )
+    db.session.add(line)
+    return line
+
+
+@bp.route("/route-box/add", methods=["POST"])
+def route_box_add():
+    """Быстрое добавление короба (найденного через route_box) в перемещение
+    на рекомендованный склад — без ручного выбора документа: находит
+    подходящий черновик (тот же склад-отправитель и склад назначения) или
+    создает новый."""
+    box_id = request.form.get("box_id", type=int)
+    to_warehouse_id = request.form.get("to_warehouse_id", type=int)
+    box = Box.query.get_or_404(box_id)
+    to_warehouse = Warehouse.query.get_or_404(to_warehouse_id)
+
+    doc = (
+        MovementDocument.query.filter_by(
+            from_warehouse_id=box.warehouse_id, to_warehouse_id=to_warehouse_id, status="draft"
+        )
+        .order_by(MovementDocument.created_at.desc())
+        .first()
+    )
+    if not doc:
+        doc = MovementDocument(
+            number=next_number("movement"),
+            from_warehouse_id=box.warehouse_id,
+            to_warehouse_id=to_warehouse_id,
+            created_by_id=current_user.id,
+        )
+        db.session.add(doc)
+        db.session.flush()
+
+    if doc.lines.filter_by(box_id=box.id).first():
+        flash(f"Короб {box.box_number} уже в списке перемещения {doc.number}", "warning")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    _create_movement_line(doc, box)
+    db.session.commit()
+    flash(f"Короб {box.box_number} добавлен в перемещение {doc.number} на «{to_warehouse.name}»", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
 @bp.route("/new", methods=["GET", "POST"])
@@ -111,13 +232,7 @@ def add_box(doc_id):
         flash(f"Короб {box.box_number} уже в этом списке", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
-    line = MovementLine(
-        document_id=doc.id,
-        box_id=box.id,
-        from_warehouse_id=box.warehouse_id,
-        from_cell_id=box.cell_id,
-    )
-    db.session.add(line)
+    _create_movement_line(doc, box)
 
     if editing_after_completion:
         # Документ уже завершен (и, возможно, принят) — короб добавляется

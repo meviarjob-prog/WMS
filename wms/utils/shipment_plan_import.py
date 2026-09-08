@@ -57,13 +57,16 @@ def _norm(value):
     return str(value).strip() if value is not None else ""
 
 
-def _find_plan_sheet(wb, marketplace):
+def _find_plan_sheets(wb, marketplace):
+    """Все листы этого маркетплейса, а не только первый найденный — иначе
+    при появлении в выгрузке второго листа "Распределение..." для того же
+    маркетплейса (например, под отдельную категорию) он молча терялся бы."""
     markers = _SHEET_ALIASES[marketplace]
-    for name in wb.sheetnames:
-        lower = name.lower()
-        if "распределение" in lower and any(m in lower for m in markers):
-            return name
-    return None
+    return [
+        name
+        for name in wb.sheetnames
+        if "распределение" in name.lower() and any(m in name.lower() for m in markers)
+    ]
 
 
 def _find_header_row(ws, max_scan_rows=40):
@@ -162,24 +165,20 @@ class ParsedPlan:
         self.rows = []  # list[dict]: barcode, article, size, city, qty, fact
 
 
-def parse_plan_sheet(file_stream, marketplace):
-    """Возвращает ParsedPlan либо None, если подходящий лист не найден."""
-    wb = load_workbook(file_stream, data_only=True)
-    sheet_name = _find_plan_sheet(wb, marketplace)
-    if not sheet_name:
-        return None
-
-    ws = wb[sheet_name]
+def _parse_one_sheet(ws):
+    """Разбирает один лист стандартного формата (один "Баркод" на все
+    города). Возвращает (cities, rows) либо (None, None), если на листе не
+    нашлось строки-заголовка с "Баркод"."""
     header_row, barcode_col = _find_header_row(ws)
     if header_row is None:
-        return None
+        return None, None
 
     article_col = _find_label_col(ws, header_row, barcode_col, "артикул")
     size_col = _find_label_col(ws, header_row, barcode_col, "размер")
     city_columns = _find_city_columns(ws, header_row, barcode_col)
 
-    plan = ParsedPlan(sheet_name)
-    plan.cities = [name for _, name, _ in city_columns]
+    cities = [name for _, name, _ in city_columns]
+    rows = []
 
     for r in range(header_row + 1, ws.max_row + 1):
         barcode = _to_barcode_str(ws.cell(row=r, column=barcode_col).value)
@@ -204,7 +203,7 @@ def parse_plan_sheet(file_stream, marketplace):
             # поэтому обрезать факт не нужно — тянем оба значения как есть.
             if qty is None and fact <= 0:
                 continue
-            plan.rows.append(
+            rows.append(
                 {
                     "barcode": barcode,
                     "article": article,
@@ -215,4 +214,33 @@ def parse_plan_sheet(file_stream, marketplace):
                 }
             )
 
+    return cities, rows
+
+
+def parse_plan_sheet(file_stream, marketplace):
+    """Возвращает ParsedPlan либо None, если не найдено ни одного подходящего
+    листа. Если листов, подходящих этому маркетплейсу, несколько (например,
+    основная выгрузка плюс отдельная под какую-то категорию) — объединяет их
+    все в один план, а не берет только первый найденный."""
+    wb = load_workbook(file_stream, data_only=True)
+    sheet_names = _find_plan_sheets(wb, marketplace)
+    if not sheet_names:
+        return None
+
+    plan = ParsedPlan(", ".join(sheet_names))
+    seen_cities = set()
+    matched_any = False
+    for sheet_name in sheet_names:
+        cities, rows = _parse_one_sheet(wb[sheet_name])
+        if cities is None:
+            continue  # лист с таким именем есть, но не стандартного формата — пропускаем
+        matched_any = True
+        for city in cities:
+            if city not in seen_cities:
+                seen_cities.add(city)
+                plan.cities.append(city)
+        plan.rows.extend(rows)
+
+    if not matched_any:
+        return None
     return plan
