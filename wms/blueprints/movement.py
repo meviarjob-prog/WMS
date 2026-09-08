@@ -131,7 +131,14 @@ def add_box(doc_id):
             _apply_shipment_fulfillment(box, doc.to_warehouse_id)
 
     db.session.commit()
-    flash(f"Короб {box.box_number} добавлен в список перемещения", "success")
+    if box.items.count() == 0:
+        # Не блокируем — короб мог осознанно перемещаться пустым (например,
+        # для повторного использования на другом складе), просто
+        # предупреждаем, чтобы не увезти короб по ошибке вместо того, что
+        # реально нужно было переместить.
+        flash(f"Короб {box.box_number} добавлен в список перемещения, но он пустой — в нем нет товара.", "warning")
+    else:
+        flash(f"Короб {box.box_number} добавлен в список перемещения", "success")
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 

@@ -166,10 +166,17 @@
   // фокус страницы после перезагрузки сам уходит в поле товара (autofocus).
   const boxNumberInput = document.getElementById("boxNumberInput");
   if (boxNumberInput) {
-    initBarcodeInput(boxNumberInput, (value) => {
-      boxNumberInput.value = value;
-      boxNumberInput.form.submit();
-    });
+    // Пауза побольше, чем у обычного сканирования штрихкода товара — номер
+    // короба нередко вводят вручную по цифре, и со стандартной паузой
+    // форма улетала раньше, чем человек успевал дописать номер.
+    initBarcodeInput(
+      boxNumberInput,
+      (value) => {
+        boxNumberInput.value = value;
+        boxNumberInput.form.submit();
+      },
+      { debounceMs: 900 }
+    );
   }
 
   const scanInput = document.getElementById("scanInput");
