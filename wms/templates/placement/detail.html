@@ -204,7 +204,6 @@
   {% endfor %}
 </div>
 
-{% set other_open_boxes = open_boxes | rejectattr('placement_document_id', 'equalto', doc.id) | list %}
 {% if other_open_boxes %}
 <div class="card p-3">
   <h5>Другие короба склада без ячейки</h5>

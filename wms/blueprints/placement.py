@@ -192,6 +192,14 @@ def detail(doc_id):
     unpacked_lines = doc.lines.filter_by(box_id=None).all()
     boxes = doc.boxes.order_by(Box.created_at.asc()).all()
     open_boxes = Box.query.filter_by(warehouse_id=doc.warehouse_id, cell_id=None).all()
+    # Пустые короба (заготовлены массовой печатью, но еще ничем не
+    # заполнены) не показываем как "неразмещенные" — размещать в ячейку
+    # там пока нечего, только замусоривают список.
+    other_open_boxes = [
+        box
+        for box in open_boxes
+        if box.placement_document_id != doc.id and box.items.count() > 0
+    ]
     available_stock = (
         UnplacedStock.query.filter_by(warehouse_id=doc.warehouse_id)
         .filter(UnplacedStock.qty > 0)
@@ -219,6 +227,7 @@ def detail(doc_id):
         unpacked_lines=unpacked_lines,
         boxes=boxes,
         open_boxes=open_boxes,
+        other_open_boxes=other_open_boxes,
         available_stock=available_stock,
         active_box=active_box,
         cell_suggestions=cell_suggestions,

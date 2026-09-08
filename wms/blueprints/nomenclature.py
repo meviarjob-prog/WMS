@@ -115,14 +115,17 @@ def list_nomenclature():
     q = request.args.get("q", "").strip()
     query = Nomenclature.query
     if q:
-        like = f"%{q}%"
-        query = query.filter(
-            db.or_(
-                Nomenclature.name.ilike(like),
-                Nomenclature.sku.ilike(like),
-                Nomenclature.barcode.ilike(like),
+        # Каждое слово запроса ищем отдельно (в любом порядке) — так
+        # "кар беж" находит "Кардиган бежевый 44-45".
+        for token in q.split():
+            like = f"%{token}%"
+            query = query.filter(
+                db.or_(
+                    Nomenclature.name.ilike(like),
+                    Nomenclature.sku.ilike(like),
+                    Nomenclature.barcode.ilike(like),
+                )
             )
-        )
     items = query.order_by(Nomenclature.name).all()
     categories = ProductCategory.query.order_by(ProductCategory.name).all()
     return render_template("nomenclature/list.html", items=items, q=q, categories=categories)
