@@ -118,6 +118,16 @@ def select_box(doc_id):
         flash(f"Короб '{box_number}' не найден на складе «{doc.warehouse.name}»", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id))
 
+    item_count = box.items.count()
+    if item_count > 0:
+        # Не блокируем — короб мог использоваться раньше (перемещением,
+        # предыдущей приемкой) и это ожидаемо, просто предупреждаем, чтобы
+        # не спутать с другим коробом по ошибке.
+        flash(
+            f"В коробе {box.box_number} уже есть товар ({item_count} поз.) — "
+            f"отсканированный товар добавится туда же.",
+            "info",
+        )
     return redirect(url_for("receiving.detail", doc_id=doc.id, box=box.id))
 
 
@@ -156,6 +166,7 @@ def add_line_to_box_by_barcode(doc_id, box_id):
         {
             "ok": True,
             "line": {"id": line.id, "name": item.name, "sku": item.sku, "qty": line.qty},
+            "box_item_count": box.items.count(),
         }
     )
 

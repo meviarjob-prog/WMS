@@ -37,14 +37,18 @@
   <h5>Короб <span class="text-muted small">(по желанию — если сразу клеите короба и упаковываете товар по факту приемки)</span></h5>
   {% if active_box %}
     <div class="alert alert-primary d-flex justify-content-between align-items-center flex-wrap gap-2 mb-0">
-      <div>Работаем с коробом <b>{{ active_box.box_number }}</b>{% if active_box.items.count() %} — уже внутри: {{ active_box.items.count() }} поз.{% endif %}</div>
+      <div>Работаем с коробом <b>{{ active_box.box_number }}</b>
+        <span id="activeBoxItemCountWrap"{% if not active_box.items.count() %} style="display:none"{% endif %}>
+          — уже внутри: <span id="activeBoxItemCount">{{ active_box.items.count() }}</span> поз.
+        </span>
+      </div>
       <a class="btn btn-sm btn-outline-primary" href="{{ url_for('receiving.detail', doc_id=doc.id) }}">Работать без короба / сменить короб</a>
     </div>
   {% else %}
-    <p class="text-muted small">Отсканируйте короб (уже созданный ранее массовой печатью) или создайте новый — товар будете сканировать сразу в него, минуя неразмещенный остаток.</p>
+    <p class="text-muted small">Отсканируйте короб (уже созданный ранее массовой печатью) или создайте новый — товар будете сканировать сразу в него, минуя неразмещенный остаток. После скана короба фокус сам перейдет в поле товара.</p>
     <div class="d-flex gap-2 flex-wrap">
       <form method="post" action="{{ url_for('receiving.select_box', doc_id=doc.id) }}" class="d-flex gap-2">
-        <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg" placeholder="Отсканируйте или введите номер короба" required data-submit-on-enter>
+        <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg" placeholder="Отсканируйте или введите номер короба" required autofocus>
         <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#boxNumberInput" title="Сканировать камерой">📷</button>
         <button type="submit" class="btn btn-primary">Выбрать</button>
       </form>
@@ -157,6 +161,17 @@
 
 {% block scripts %}
 <script>
+  // Поле номера короба — сканируем как обычный штрихкод (Enter или пауза
+  // в наборе), без необходимости жать "Выбрать" — короб выбирается, и
+  // фокус страницы после перезагрузки сам уходит в поле товара (autofocus).
+  const boxNumberInput = document.getElementById("boxNumberInput");
+  if (boxNumberInput) {
+    initBarcodeInput(boxNumberInput, (value) => {
+      boxNumberInput.value = value;
+      boxNumberInput.form.submit();
+    });
+  }
+
   const scanInput = document.getElementById("scanInput");
   const scanResult = document.getElementById("scanResult");
   if (scanInput) {
@@ -170,7 +185,18 @@
         .then((data) => {
           if (data.ok) {
             scanResult.innerHTML = '<span class="text-success">Добавлено: ' + data.line.name + '</span>';
+            {% if active_box %}
+            // В короб можно сканировать товар одним за другим без перезагрузки
+            // страницы после каждого — это и есть ускорение приемки в короба;
+            // счетчик позиций короба обновляем на месте.
+            const countWrap = document.getElementById("activeBoxItemCountWrap");
+            const countSpan = document.getElementById("activeBoxItemCount");
+            if (countSpan) countSpan.textContent = data.box_item_count;
+            if (countWrap) countWrap.style.display = "";
+            scanInput.focus();
+            {% else %}
             location.reload();
+            {% endif %}
           } else {
             scanResult.innerHTML = '<span class="text-danger">' + data.error + '</span>';
           }
