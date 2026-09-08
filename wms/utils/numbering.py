@@ -31,7 +31,12 @@ def next_number(key: str, prefix: str = None, width: int = None) -> str:
     db.session.execute(
         text(
             "INSERT INTO counters (key, value) VALUES (:key, 1) "
-            "ON CONFLICT(key) DO UPDATE SET value = value + 1"
+            # "counters." перед value — на Postgres голое "value" в SET
+            # неоднозначно (может относиться и к строке таблицы, и к
+            # вставляемой) и падает с "column reference is ambiguous";
+            # SQLite такое молча разрешает как ссылку на строку таблицы,
+            # поэтому баг был незаметен, пока не появился второй диалект.
+            "ON CONFLICT(key) DO UPDATE SET value = counters.value + 1"
         ),
         {"key": key},
     )

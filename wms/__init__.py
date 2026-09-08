@@ -65,7 +65,12 @@ def _register_sqlite_tuning():
     - WAL-режим и busy_timeout — чтобы несколько пользователей одновременно
       (несколько ПК и телефонов) не ловили "database is locked", а запись
       просто немного подождала своей очереди вместо мгновенной ошибки.
-    """
+
+    Слушатель "connect" глобальный (на весь процесс, а не на конкретный
+    Engine) — если в этом же процессе когда-нибудь подключится не-SQLite
+    БД (Postgres), dbapi_connection у нее не будет иметь create_function,
+    и это же отличие используем, чтобы не выполнять на ней PRAGMA (там их
+    нет и это синтаксическая ошибка) и не регистрировать функции."""
     global _sqlite_functions_registered
     if _sqlite_functions_registered:
         return
@@ -73,13 +78,15 @@ def _register_sqlite_tuning():
 
     @event.listens_for(Engine, "connect")
     def _on_connect(dbapi_connection, connection_record):  # noqa: ANN001
-        if hasattr(dbapi_connection, "create_function"):
-            dbapi_connection.create_function(
-                "LOWER", 1, lambda s: s.lower() if s is not None else None
-            )
-            dbapi_connection.create_function(
-                "UPPER", 1, lambda s: s.upper() if s is not None else None
-            )
+        if not hasattr(dbapi_connection, "create_function"):
+            return  # не SQLite (например, Postgres) — PRAGMA/функции здесь не применимы
+
+        dbapi_connection.create_function(
+            "LOWER", 1, lambda s: s.lower() if s is not None else None
+        )
+        dbapi_connection.create_function(
+            "UPPER", 1, lambda s: s.upper() if s is not None else None
+        )
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA busy_timeout=5000")

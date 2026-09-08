@@ -1,0 +1,4 @@
+# Дополнительно к основному requirements.txt — только если WMS_DATABASE_URL
+# указывает на Postgres (postgresql://...). Для SQLite (по умолчанию, в т.ч.
+# для desktop.py/сборки в exe) не нужен и не устанавливается.
+psycopg2-binary>=2.9,<3.0
