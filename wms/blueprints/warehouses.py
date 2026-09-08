@@ -1,7 +1,7 @@
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..extensions import db
-from ..models import Box, Cell, Warehouse, Zone
+from ..models import Box, Cell, ShipmentPlanLine, Warehouse, Zone
 from ..utils.numbering import next_number
 
 bp = Blueprint("warehouses", __name__)
@@ -31,7 +31,19 @@ def _generate_cells(zone, count):
 
 @bp.route("/")
 def list_warehouses():
-    warehouses = Warehouse.query.order_by(Warehouse.code).all()
+    # Склады-города (marketplace задан) создаются автоматически при загрузке
+    # плана отгрузок и не удаляются, когда город пропадает из очередной
+    # выгрузки (plan.lines.delete() чистит только строки, не сами склады) —
+    # поэтому в списке их показываем, только пока они есть в текущем плане.
+    # Обычные физические склады (marketplace пуст) показываем всегда.
+    active_city_warehouse_ids = {
+        row[0] for row in db.session.query(ShipmentPlanLine.warehouse_id).distinct()
+    }
+    warehouses = [
+        wh
+        for wh in Warehouse.query.order_by(Warehouse.code).all()
+        if wh.marketplace is None or wh.id in active_city_warehouse_ids
+    ]
     return render_template("warehouses/list.html", warehouses=warehouses)
 
 
