@@ -189,7 +189,11 @@ def add_line_to_box(doc_id, box_id):
 
     _receive_item_into_box(doc, box, item, qty)
     flash(f"В короб {box.box_number} добавлено: {item.name} ({qty} {item.unit})", "success")
-    return redirect(url_for("receiving.detail", doc_id=doc.id, box=box_id))
+    # Сбрасываем активный короб — оператор сразу готов сканировать следующий
+    # короб; чтобы добавить что-то еще в этот же короб, достаточно
+    # отсканировать его номер повторно (find_by_scanned_code найдет его
+    # независимо от того, был ли он активен только что).
+    return redirect(url_for("receiving.detail", doc_id=doc.id))
 
 
 @bp.route("/<int:doc_id>/lines/add-by-barcode", methods=["POST"])

@@ -45,7 +45,7 @@
       <a class="btn btn-sm btn-outline-primary" href="{{ url_for('receiving.detail', doc_id=doc.id) }}">Работать без короба / сменить короб</a>
     </div>
   {% else %}
-    <p class="text-muted small">Отсканируйте короб (уже созданный ранее массовой печатью) или создайте новый — товар будете сканировать сразу в него, минуя неразмещенный остаток. После скана короба фокус сам перейдет в поле товара.</p>
+    <p class="text-muted small">Отсканируйте короб (уже созданный ранее массовой печатью) или создайте новый — товар будете сканировать сразу в него, минуя неразмещенный остаток. После скана короба фокус сам перейдет в поле поиска товара; после добавления товара вручную короб сбросится и можно сразу сканировать следующий — чтобы вернуться и добавить что-то еще в этот же короб, просто отсканируйте его снова.</p>
     <div class="d-flex gap-2 flex-wrap">
       <form method="post" action="{{ url_for('receiving.select_box', doc_id=doc.id) }}" class="d-flex gap-2">
         <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg" placeholder="Отсканируйте или введите номер короба" required autofocus>
@@ -64,7 +64,7 @@
     <div class="card p-3">
       <h5>Сканировать штрихкод товара{% if active_box %} — в короб {{ active_box.box_number }}{% endif %}</h5>
       <div class="d-flex gap-2">
-        <input type="text" id="scanInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод и нажмите Enter" autofocus>
+        <input type="text" id="scanInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод и нажмите Enter">
         <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#scanInput" title="Сканировать камерой телефона">📷</button>
       </div>
       <div id="scanResult" class="small mt-2"></div>
@@ -77,7 +77,7 @@
         <div class="col-md-7">
           <label class="form-label">Товар</label>
           <div class="autocomplete-box" data-autocomplete-nomenclature>
-            <input type="text" class="form-control ac-input" placeholder="Артикул, наименование или штрихкод..." autocomplete="off">
+            <input type="text" class="form-control ac-input" placeholder="Артикул, наименование или штрихкод..." autocomplete="off"{% if active_box %} autofocus{% endif %}>
             <input type="hidden" class="ac-value" name="nomenclature_id" required>
             <div class="autocomplete-list"></div>
           </div>
