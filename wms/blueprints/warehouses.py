@@ -34,16 +34,15 @@ def list_warehouses():
     # Склады-города (marketplace задан) создаются автоматически при загрузке
     # плана отгрузок и не удаляются, когда город пропадает из очередной
     # выгрузки (plan.lines.delete() чистит только строки, не сами склады) —
-    # поэтому в списке их показываем, только пока они есть в текущем плане.
-    # Обычные физические склады (marketplace пуст) показываем всегда.
+    # поэтому список показываем полностью, но помечаем у каждого
+    # склада-города, есть ли он в текущем плане, чтобы можно было
+    # ориентироваться и вручную отключить неактуальные.
     active_city_warehouse_ids = {
         row[0] for row in db.session.query(ShipmentPlanLine.warehouse_id).distinct()
     }
-    warehouses = [
-        wh
-        for wh in Warehouse.query.order_by(Warehouse.code).all()
-        if wh.marketplace is None or wh.id in active_city_warehouse_ids
-    ]
+    warehouses = Warehouse.query.order_by(Warehouse.code).all()
+    for wh in warehouses:
+        wh.in_current_plan = wh.marketplace is None or wh.id in active_city_warehouse_ids
     return render_template("warehouses/list.html", warehouses=warehouses)
 
 

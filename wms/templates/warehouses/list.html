@@ -31,7 +31,7 @@
     <div class="card p-3">
       <h5>Список складов</h5>
       <table class="table">
-        <thead><tr><th>Код</th><th>Наименование</th><th>Адрес</th><th>Статус</th><th></th></tr></thead>
+        <thead><tr><th>Код</th><th>Наименование</th><th>Адрес</th><th>Статус</th><th>План отгрузок</th><th></th></tr></thead>
         <tbody>
         {% for wh in warehouses %}
           <tr>
@@ -39,6 +39,17 @@
             <td>{{ wh.name }}</td>
             <td>{{ wh.address or '' }}</td>
             <td>{% if wh.is_active %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}</td>
+            <td>
+              {% if wh.marketplace %}
+                {% if wh.in_current_plan %}
+                  <span class="badge bg-success">В текущем плане</span>
+                {% else %}
+                  <span class="badge bg-warning text-dark" title="Города нет в последней загруженной выгрузке — можно отключить склад">Нет в плане</span>
+                {% endif %}
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
             <td class="text-nowrap">
               <a class="btn btn-sm btn-outline-primary" href="{{ url_for('warehouses.cells', warehouse_id=wh.id) }}">Ячейки</a>
               <form method="post" action="{{ url_for('warehouses.toggle_warehouse', warehouse_id=wh.id) }}" class="d-inline">
@@ -47,7 +58,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="5" class="text-muted">Склады еще не созданы</td></tr>
+          <tr><td colspan="6" class="text-muted">Склады еще не созданы</td></tr>
         {% endfor %}
         </tbody>
       </table>
