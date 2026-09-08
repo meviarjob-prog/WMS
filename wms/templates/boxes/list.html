@@ -47,14 +47,22 @@
     </div>
     <div class="table-responsive">
       <table class="table table-sm table-hover">
-        <thead><tr><th></th><th>Номер короба</th><th>Склад</th><th>Статус</th><th>Создан</th><th></th></tr></thead>
+        <thead><tr><th></th><th>Номер короба</th><th>Склад</th><th>Статус</th><th>Позиций</th><th>Создан</th><th></th></tr></thead>
         <tbody>
         {% for box in boxes %}
-          <tr>
+          {% set item_count = item_counts.get(box.id, 0) %}
+          <tr{% if item_count == 0 %} class="table-warning"{% endif %}>
             <td><input type="checkbox" name="ids" value="{{ box.id }}" checked></td>
             <td><a href="{{ url_for('boxes.detail', box_id=box.id) }}">{{ box.box_number }}</a></td>
             <td>{{ box.warehouse.name if box.warehouse else '' }}</td>
             <td>{{ 'В ячейке' if box.cell_id else 'Открыт' }}</td>
+            <td>
+              {% if item_count == 0 %}
+                <span class="badge bg-warning text-dark" title="Ничего не отсканировано в этот короб — возможно, пропущен">Пусто</span>
+              {% else %}
+                {{ item_count }}
+              {% endif %}
+            </td>
             <td class="text-muted small">{{ box.created_at.strftime('%d.%m.%Y %H:%M') if box.created_at else '' }}</td>
             <td><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('labels.box_label', box_id=box.id) }}" target="_blank">Этикетка</a></td>
           </tr>

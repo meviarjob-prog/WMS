@@ -1,7 +1,7 @@
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..extensions import db
-from ..models import Box, Warehouse
+from ..models import Box, BoxItem, Warehouse
 from ..utils.numbering import next_number
 
 bp = Blueprint("boxes", __name__)
@@ -28,12 +28,23 @@ def list_boxes():
 
     boxes = query.order_by(Box.box_number.desc()).limit(500).all()
 
+    # Кол-во позиций в коробе — одним групповым запросом на все короба
+    # страницы, а не box.items.count() в цикле шаблона на каждую строку.
+    box_ids = [box.id for box in boxes]
+    item_counts = dict(
+        db.session.query(BoxItem.box_id, db.func.count(BoxItem.id))
+        .filter(BoxItem.box_id.in_(box_ids))
+        .group_by(BoxItem.box_id)
+        .all()
+    ) if box_ids else {}
+
     return render_template(
         "boxes/list.html",
         boxes=boxes,
         warehouses=warehouses,
         warehouse_id=warehouse_id,
         query_text=query_text,
+        item_counts=item_counts,
     )
 
 
