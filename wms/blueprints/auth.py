@@ -4,7 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 
 from ..extensions import db
-from ..models import SECTIONS, User
+from ..models import SECTIONS, User, Warehouse
 
 bp = Blueprint("auth", __name__)
 
@@ -48,10 +48,15 @@ def _require_admin():
 @bp.route("/users")
 @login_required
 def users():
+    """Страница «Настройки» администратора: управление пользователями и
+    доступом к разделам, плюс получатели для стикеров отправления
+    перемещений (см. warehouses.update_recipient) — все административные
+    настройки в одном месте, вместо разбросанных по разным разделам."""
     if not _require_admin():
         return redirect(url_for("main.index"))
     all_users = User.query.order_by(User.username).all()
-    return render_template("auth/users.html", users=all_users, sections=SECTIONS)
+    warehouses = Warehouse.query.order_by(Warehouse.code).all()
+    return render_template("auth/users.html", users=all_users, sections=SECTIONS, warehouses=warehouses)
 
 
 @bp.route("/users/create", methods=["POST"])

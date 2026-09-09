@@ -1,9 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Пользователи{% endblock %}
+{% block title %}Настройки{% endblock %}
 {% block content %}
-<h3 class="mb-4">Пользователи</h3>
+<h3 class="mb-4">Настройки</h3>
 
-<div class="row g-4">
+<h5 class="mb-3">Пользователи</h5>
+<div class="row g-4 mb-5">
   <div class="col-md-4">
     <div class="card p-3">
       <h5>Добавить пользователя</h5>
@@ -131,5 +132,29 @@
       </table>
     </div>
   </div>
+</div>
+
+<h5 class="mb-3">Стикеры перемещений — получатели по складам</h5>
+<p class="text-muted small">Печатаются на стикерах отправления (см. «Перемещение» → печать стикеров по выбранным документам) — название/адрес/телефон получателя на складе назначения, в первую очередь для складов-городов маркетплейсов.</p>
+<div class="card p-3">
+  <table class="table table-sm">
+    <thead><tr><th>Код</th><th>Склад</th><th>Получатель</th></tr></thead>
+    <tbody>
+    {% for wh in warehouses %}
+      <tr>
+        <td>{{ wh.code }}</td>
+        <td>{{ wh.name }}</td>
+        <td style="min-width:320px">
+          <form method="post" action="{{ url_for('warehouses.update_recipient', warehouse_id=wh.id) }}" class="d-flex gap-1">
+            <input type="text" name="recipient_info" value="{{ wh.recipient_info or '' }}" class="form-control form-control-sm" placeholder="Название, адрес, телефон">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3" class="text-muted">Склады еще не созданы</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endblock %}

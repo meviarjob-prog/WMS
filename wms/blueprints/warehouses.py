@@ -1,4 +1,5 @@
 from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask_login import current_user
 
 from ..extensions import db
 from ..models import Box, Cell, ShipmentPlanLine, Warehouse, Zone
@@ -74,13 +75,18 @@ def toggle_warehouse(warehouse_id):
 def update_recipient(warehouse_id):
     """Получатель для этого склада-направления — печатается на стикерах
     отправления (см. movement.export_shipping_labels). Настраивается
-    отдельно для каждого склада, в первую очередь для складов-городов
-    маркетплейсов, куда физически едут короба."""
+    администратором на странице «Настройки» отдельно для каждого склада,
+    в первую очередь для складов-городов маркетплейсов, куда физически
+    едут короба."""
+    if not current_user.is_admin:
+        flash("Настраивать получателей может только администратор", "danger")
+        return redirect(url_for("warehouses.list_warehouses"))
+
     wh = Warehouse.query.get_or_404(warehouse_id)
     wh.recipient_info = request.form.get("recipient_info", "").strip() or None
     db.session.commit()
     flash(f"Получатель для «{wh.name}» обновлен", "success")
-    return redirect(url_for("warehouses.list_warehouses"))
+    return redirect(url_for("auth.users"))
 
 
 @bp.route("/<int:warehouse_id>/cells")

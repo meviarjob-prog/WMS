@@ -108,3 +108,50 @@ def test_warehouse_recipient_update(db, client_logged_in):
     assert resp.status_code == 200
     wh = Warehouse.query.get(wh.id)
     assert wh.recipient_info == "ИП Иванов, г. Тверь, ул. Ленина 5"
+
+
+def test_warehouse_recipient_update_requires_admin(db, client):
+    from wms.models import User
+
+    staff = User(username="staffer-r", full_name="Складской", role="warehouse")
+    staff.set_password("x")
+    db.session.add(staff)
+    db.session.commit()
+    with client.session_transaction() as sess:
+        sess["_user_id"] = str(staff.id)
+        sess["_fresh"] = True
+
+    wh = Warehouse(code="WH-L4", name="ОЗОН: Уфа")
+    db.session.add(wh)
+    db.session.commit()
+
+    client.post(f"/warehouses/{wh.id}/recipient", data={"recipient_info": "Не должно сохраниться"})
+
+    wh = Warehouse.query.get(wh.id)
+    assert wh.recipient_info is None
+
+
+def test_settings_page_shows_recipients_section(db, client_logged_in):
+    """Настройка получателей для стикеров вынесена на страницу «Настройки»
+    (админ) — там же, где управление пользователями, а не на «Склады и
+    ячейки»."""
+    wh = Warehouse(code="WH-L5", name="ОЗОН: Пермь", recipient_info="Тестовый получатель")
+    db.session.add(wh)
+    db.session.commit()
+
+    resp = client_logged_in.get("/users")
+    html = resp.get_data(as_text=True)
+
+    assert "Стикеры перемещений" in html
+    assert "Тестовый получатель" in html
+
+
+def test_warehouses_page_no_longer_has_recipient_field(db, client_logged_in):
+    wh = Warehouse(code="WH-L6", name="ОЗОН: Сочи", recipient_info="Не должно быть здесь")
+    db.session.add(wh)
+    db.session.commit()
+
+    resp = client_logged_in.get("/warehouses/")
+    html = resp.get_data(as_text=True)
+
+    assert "Не должно быть здесь" not in html

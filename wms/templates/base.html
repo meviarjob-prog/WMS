@@ -58,7 +58,7 @@
         <li class="nav-item"><a class="nav-link" href="{{ url_for('shipment_plan.dashboard') }}">План отгрузок</a></li>
         {% endif %}
         {% if current_user.is_admin %}
-        <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.users') }}">Пользователи</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.users') }}">Настройки</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('integration_1c.settings') }}">Обмен с 1С</a></li>
         {% endif %}
         {% endif %}
