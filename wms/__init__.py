@@ -14,6 +14,10 @@ from .paths import resource_dir
 
 _sqlite_functions_registered = False
 
+# Инструкция для новых сотрудников (значок "🎓 Обучение" в шапке, см. base.html) —
+# внешняя страница, не часть самого приложения, поэтому просто константа-ссылка.
+ONBOARDING_GUIDE_URL = "https://claude.ai/code/artifact/e9208fb6-04da-4c64-95a0-0780fc8728c3"
+
 
 def _ensure_columns():
     """db.create_all() создает только отсутствующие ТАБЛИЦЫ — если в модель
@@ -249,6 +253,10 @@ def create_app(config_class=Config):
 
         from .models import CELL_CAPACITY
 
-        return {"current_year": datetime.now().year, "CELL_CAPACITY": CELL_CAPACITY}
+        return {
+            "current_year": datetime.now().year,
+            "CELL_CAPACITY": CELL_CAPACITY,
+            "onboarding_guide_url": ONBOARDING_GUIDE_URL,
+        }
 
     return app

@@ -92,3 +92,16 @@ def test_update_sections_route_full_access_clears_restriction(db, client_logged_
     user = User.query.get(user.id)
     assert user.allowed_sections is None
     assert user.has_section_access("placement")
+
+
+def test_onboarding_guide_link_visible_regardless_of_section_access(db, client_logged_in):
+    """Значок «🎓 Обучение» — внешняя ссылка на инструкцию для новых
+    сотрудников, не связана с section access — должна быть видна вообще
+    любому вошедшему пользователю, включая жестко ограниченного по
+    разделам, у которого большая часть меню скрыта."""
+    user = _make_staff_user(allowed_sections="none")
+    _login_as(client_logged_in, user)
+
+    html = client_logged_in.get("/movement/", follow_redirects=True).get_data(as_text=True)
+    assert "Обучение" in html
+    assert 'target="_blank"' in html
