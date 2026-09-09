@@ -186,12 +186,15 @@ def route_box_add():
 
     if doc.lines.filter_by(box_id=box.id).first():
         flash(f"Короб {box.box_number} уже в списке перемещения {doc.number}", "warning")
-        return redirect(url_for("movement.detail", doc_id=doc.id))
+        return redirect(url_for("movement.list_documents"))
 
     _create_movement_line(doc, box)
     db.session.commit()
+    # Не уводим в сам документ перемещения — сборщик сканирует короба один
+    # за другим на этой же странице; открыть документ можно из списка ниже,
+    # когда сборка закончена.
     flash(f"Короб {box.box_number} добавлен в перемещение {doc.number} на «{to_warehouse.name}»", "success")
-    return redirect(url_for("movement.detail", doc_id=doc.id))
+    return redirect(url_for("movement.list_documents"))
 
 
 @bp.route("/new", methods=["GET", "POST"])

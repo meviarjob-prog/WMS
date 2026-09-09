@@ -79,6 +79,23 @@ def test_routing_subtracts_already_committed_boxes(db, client_logged_in):
     assert "30 шт." not in html
 
 
+def test_routing_add_stays_on_scanning_page_not_document(db, client_logged_in):
+    """Сборщик сканирует короба один за другим и не должен всякий раз
+    улетать внутрь документа перемещения — иначе процесс распределения
+    коробов постоянно прерывается."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    box = _make_box(sender, item, qty=10, box_number="BOX-000001")
+
+    resp = client_logged_in.post(
+        "/movement/route-box/add",
+        data={"box_id": box.id, "to_warehouse_id": city.id},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"].rstrip("/") == "/movement"
+
+
 def test_routing_skips_box_with_no_demand_anywhere(db, client_logged_in):
     sender = Warehouse(code="WH-SND2", name="Склад-отправитель 2")
     db.session.add(sender)

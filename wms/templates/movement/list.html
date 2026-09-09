@@ -12,7 +12,7 @@
 <div class="card p-3 mb-4">
   <h5>Куда везти короб</h5>
   <p class="text-muted small">Сканируете короб — показываем, на какой склад-город его отправлять по текущему плану отгрузок (по остатку невыполненной потребности). Если потребности нет ни у кого — короб можно пропустить.</p>
-  <form method="get" action="{{ url_for('movement.route_box') }}" class="d-flex gap-2" style="max-width:480px">
+  <form method="get" action="{{ url_for('movement.route_box') }}" id="routeBoxForm" class="d-flex gap-2" style="max-width:480px">
     <input type="text" name="box_number" id="routeBoxInput" class="form-control form-control-lg" placeholder="Отсканируйте или введите номер короба" value="{{ route_box_number }}" required autofocus>
     <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#routeBoxInput" title="Сканировать камерой">📷</button>
     <button type="submit" class="btn btn-primary">Найти</button>
@@ -92,4 +92,23 @@
     </tbody>
   </table>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Номер короба сканируется так же, как товар (Enter или пауза в наборе) —
+  // не нужно жать "Найти" каждый раз, чтобы процесс сканирования/распределения
+  // коробов шел непрерывно.
+  const routeBoxInput = document.getElementById("routeBoxInput");
+  if (routeBoxInput) {
+    initBarcodeInput(
+      routeBoxInput,
+      (value) => {
+        routeBoxInput.value = value;
+        routeBoxInput.form.submit();
+      },
+      { debounceMs: 900 }
+    );
+  }
+</script>
 {% endblock %}
