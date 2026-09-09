@@ -293,15 +293,14 @@ def dashboard():
         lines = plan.lines.all()
         lines_by_marketplace[marketplace] = lines
 
-        # "Эффективный" остаток — то, что реально еще нужно отправить с
-        # учетом уже отправленных, но не принятых на складе назначения
-        # коробов (in_transit_by_item); используется вместо голого
-        # remaining_qty() везде, где речь о том, что физически осталось
-        # везти, а не о сухом "план минус факт" (для этого второго — экспорт
-        # в Excel и т.п. — remaining_qty() остается как есть).
+        # Сколько по этой позиции уже едет (отправлено перемещением, но еще
+        # не подтверждено кнопкой "Принято на складе") — показывается
+        # отдельным числом рядом с потребностью, но саму потребность не
+        # уменьшает: пока товар физически не проверен на месте, план по
+        # нему остается открытым (тот же принцип, что и у fulfilled_qty,
+        # которая тоже засчитывается только по факту приемки).
         for line in lines:
             line.in_transit_qty = in_transit_by_item.get((line.warehouse_id, line.nomenclature_id), 0)
-            line.effective_remaining = max(line.remaining_qty() - line.in_transit_qty, 0)
 
         by_warehouse = {}
         for line in lines:
@@ -322,7 +321,7 @@ def dashboard():
         problem_barcodes = {
             line.barcode
             for line in lines
-            if line.effective_remaining > 0
+            if line.remaining_qty() > 0
             and (line.nomenclature_id is None or stock.get(line.nomenclature_id, 0) <= 0)
         }
 
@@ -382,7 +381,7 @@ def dashboard():
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
-            product["max_remaining"] = max(product["max_remaining"], line.effective_remaining)
+            product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
 
     picking_list = sorted(
         (p for p in products.values() if p["max_remaining"] > 0),
