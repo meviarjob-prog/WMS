@@ -49,6 +49,24 @@ class ProductCategory(db.Model):
         return f"<ProductCategory {self.name}>"
 
 
+# Разделы, доступ к которым можно ограничивать по отдельности для
+# конкретного пользователя (см. User.allowed_sections) — код совпадает с
+# именем blueprint'а, чтобы before_request мог проверять его напрямую по
+# request.endpoint, без отдельной таблицы соответствий.
+SECTIONS = [
+    ("nomenclature", "Номенклатура (и «Где товар»)"),
+    ("warehouses", "Склады и ячейки"),
+    ("receiving", "Приемка"),
+    ("placement", "Размещение"),
+    ("movement", "Перемещение"),
+    ("inventory", "Инвентаризация"),
+    ("production", "Производство"),
+    ("reports", "Отчеты"),
+    ("shipment_plan", "План отгрузок"),
+]
+SECTION_CODES = {code for code, _ in SECTIONS}
+
+
 class User(UserMixin, db.Model):
     __tablename__ = "users"
 
@@ -67,9 +85,33 @@ class User(UserMixin, db.Model):
     # производстве, ничего больше (проверяется в before_request). Админ
     # (is_admin=True) всегда имеет полный доступ независимо от role.
     role = db.Column(db.String(20), nullable=False, default="warehouse")
+    # Точечное ограничение доступа к разделам для role="warehouse":
+    # NULL/пусто — доступ ко всем разделам (как раньше, обратная
+    # совместимость для уже существующих пользователей); "none" — ни одного
+    # раздела из SECTIONS; иначе — список кодов через запятую. Роль
+    # "production" и is_admin это поле игнорируют — у них доступ уже решен
+    # отдельно (is_production_only / полный доступ администратора).
+    allowed_sections = db.Column(db.Text, nullable=True)
 
     def is_production_only(self):
         return self.role == "production" and not self.is_admin
+
+    def allowed_section_set(self):
+        if not self.allowed_sections:
+            return set(SECTION_CODES)
+        if self.allowed_sections == "none":
+            return set()
+        return set(self.allowed_sections.split(","))
+
+    def has_section_access(self, section):
+        """Раздел не из SECTIONS (например, служебные api/boxes/labels) не
+        ограничивается этим механизмом вообще — управляются им только
+        разделы верхнего меню."""
+        if self.is_admin or section not in SECTION_CODES:
+            return True
+        if not self.allowed_sections:
+            return True
+        return section in self.allowed_sections.split(",")
 
     def set_password(self, raw_password):
         self.password_hash = generate_password_hash(raw_password)
@@ -106,6 +148,11 @@ class Warehouse(db.Model):
     # тот же склад, а не плодить дубликаты каждые 2 недели.
     marketplace = db.Column(db.String(20), nullable=True)
     marketplace_city = db.Column(db.String(100), nullable=True)
+    # Свободный текст (название организации/адрес/телефон) — печатается на
+    # стикерах отправления (см. movement.export_shipping_labels) как
+    # получатель этого склада-направления. Настраивается отдельно для
+    # каждого склада, в т.ч. складов-городов маркетплейсов.
+    recipient_info = db.Column(db.String(300), nullable=True)
 
     cells = db.relationship("Cell", backref="warehouse", lazy="dynamic")
 

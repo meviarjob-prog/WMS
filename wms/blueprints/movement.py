@@ -18,6 +18,7 @@ from ..models import (
 from ..utils.excel_io import export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
+from ..utils.shipping_label_pdf import build_movement_shipping_labels_pdf
 from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
@@ -143,6 +144,44 @@ def route_box():
         route_box=box,
         route_not_found=not_found,
         routing=routing,
+    )
+
+
+@bp.route("/find-box")
+def find_box():
+    """Поиск короба по всем перемещениям — где он числится (в т.ч. пока
+    еще черновиком). Нужно в первую очередь тогда, когда добавить короб в
+    новое перемещение не дает блокировка "уже в другом перемещении" (см.
+    _find_conflicting_movement_line) — здесь видно, в каком именно."""
+    box_number = request.args.get("box_number", "").strip()
+    documents = MovementDocument.query.order_by(MovementDocument.created_at.desc()).all()
+
+    box = None
+    not_found = False
+    lines = []
+    if box_number:
+        box = Box.find_by_scanned_code(box_number)
+        if not box:
+            not_found = True
+        else:
+            lines = (
+                MovementLine.query.filter_by(box_id=box.id)
+                .join(MovementDocument, MovementLine.document_id == MovementDocument.id)
+                .order_by(MovementDocument.created_at.desc())
+                .all()
+            )
+
+    return render_template(
+        "movement/list.html",
+        documents=documents,
+        route_box_number="",
+        route_box=None,
+        route_not_found=False,
+        routing=[],
+        find_box_number=box_number,
+        find_box=box,
+        find_box_not_found=not_found,
+        find_box_lines=lines,
     )
 
 
@@ -527,6 +566,34 @@ def export_waybills():
 
     data = build_movement_waybills_pdf(documents)
     fname = f"waybills_{timestamp_for_filename()}.pdf"
+    return Response(
+        data,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": content_disposition(fname, "inline")},
+    )
+
+
+@bp.route("/shipping-labels.pdf")
+def export_shipping_labels():
+    """Стикеры отправления 58x40мм по выбранным в списке перемещениям —
+    один стикер на каждый короб документа, с получателем склада назначения
+    (настраивается в «Склады и ячейки») и отправителем."""
+    doc_ids = request.args.getlist("doc_ids", type=int)
+    if not doc_ids:
+        flash("Выберите хотя бы одно перемещение для печати стикеров", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    documents = (
+        MovementDocument.query.filter(MovementDocument.id.in_(doc_ids))
+        .order_by(MovementDocument.created_at.desc())
+        .all()
+    )
+    if not documents:
+        flash("Перемещения не найдены", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    data = build_movement_shipping_labels_pdf(documents)
+    fname = f"shipping_labels_{timestamp_for_filename()}.pdf"
     return Response(
         data,
         mimetype="application/pdf",

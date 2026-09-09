@@ -28,17 +28,35 @@
       <ul class="navbar-nav me-auto">
         {% if current_user.is_authenticated and current_user.is_production_only() %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('production.index') }}">Производство</a></li>
-        {% else %}
+        {% elif current_user.is_authenticated %}
+        {% if current_user.has_section_access('nomenclature') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('nomenclature.list_nomenclature') }}">Номенклатура</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('nomenclature.locate') }}">Где товар</a></li>
+        {% endif %}
+        {% if current_user.has_section_access('warehouses') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('warehouses.list_warehouses') }}">Склады и ячейки</a></li>
+        {% endif %}
+        {% if current_user.has_section_access('receiving') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('receiving.list_documents') }}">Приемка</a></li>
+        {% endif %}
+        {% if current_user.has_section_access('placement') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('placement.list_documents') }}">Размещение</a></li>
+        {% endif %}
+        {% if current_user.has_section_access('movement') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('movement.list_documents') }}">Перемещение</a></li>
+        {% endif %}
+        {% if current_user.has_section_access('inventory') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('inventory.list_documents') }}">Инвентаризация</a></li>
+        {% endif %}
+        {% if current_user.has_section_access('production') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('production.index') }}">Производство</a></li>
+        {% endif %}
+        {% if current_user.has_section_access('reports') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('reports.index') }}">Отчеты</a></li>
+        {% endif %}
+        {% if current_user.has_section_access('shipment_plan') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('shipment_plan.dashboard') }}">План отгрузок</a></li>
+        {% endif %}
         {% if current_user.is_admin %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.users') }}">Пользователи</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('integration_1c.settings') }}">Обмен с 1С</a></li>

@@ -40,13 +40,63 @@
   <div class="col-md-8">
     <div class="card p-3">
       <table class="table table-sm">
-        <thead><tr><th>Логин</th><th>Имя</th><th>Права</th><th>Роль</th><th>Смена, мин</th><th>Статус</th><th></th></tr></thead>
+        <thead><tr><th>Логин</th><th>Имя</th><th>Права</th><th>Разделы</th><th>Роль</th><th>Смена, мин</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for u in users %}
           <tr>
             <td>{{ u.username }}</td>
             <td>{{ u.full_name or '' }}</td>
             <td>{% if u.is_admin %}<span class="badge bg-primary">Админ</span>{% else %}Сотрудник{% endif %}</td>
+            <td>
+              {% if u.is_admin %}
+                <span class="text-muted small">Полный (админ)</span>
+              {% else %}
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#sectionsModal{{ u.id }}">
+                  {% if not u.allowed_sections %}Полный доступ
+                  {% elif u.allowed_sections == 'none' %}Доступа нет
+                  {% else %}Настроено ({{ u.allowed_section_set()|length }}){% endif %}
+                </button>
+
+                <div class="modal fade" id="sectionsModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+                  <div class="modal-dialog">
+                    <div class="modal-content">
+                      <form method="post" action="{{ url_for('auth.update_sections', user_id=u.id) }}">
+                        <div class="modal-header">
+                          <h5 class="modal-title">Доступ к разделам — {{ u.display_name() }}</h5>
+                          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+                        </div>
+                        <div class="modal-body">
+                          {% set allowed = u.allowed_section_set() %}
+                          <div class="form-check mb-2">
+                            <input class="form-check-input" type="radio" name="mode" value="full" id="modeFull{{ u.id }}"
+                                   {% if not u.allowed_sections %}checked{% endif %}
+                                   onchange="document.getElementById('sectionsList{{ u.id }}').classList.add('d-none')">
+                            <label class="form-check-label" for="modeFull{{ u.id }}">Полный доступ ко всем разделам</label>
+                          </div>
+                          <div class="form-check mb-2">
+                            <input class="form-check-input" type="radio" name="mode" value="restricted" id="modeRestricted{{ u.id }}"
+                                   {% if u.allowed_sections %}checked{% endif %}
+                                   onchange="document.getElementById('sectionsList{{ u.id }}').classList.remove('d-none')">
+                            <label class="form-check-label" for="modeRestricted{{ u.id }}">Только выбранные разделы</label>
+                          </div>
+                          <div id="sectionsList{{ u.id }}" class="{% if not u.allowed_sections %}d-none{% endif %} ps-3 border-start">
+                            {% for code, label in sections %}
+                            <div class="form-check">
+                              <input class="form-check-input" type="checkbox" name="section_{{ code }}" id="sec-{{ u.id }}-{{ code }}" {% if code in allowed %}checked{% endif %}>
+                              <label class="form-check-label" for="sec-{{ u.id }}-{{ code }}">{{ label }}</label>
+                            </div>
+                            {% endfor %}
+                          </div>
+                        </div>
+                        <div class="modal-footer">
+                          <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                </div>
+              {% endif %}
+            </td>
             <td style="min-width:200px">
               <form method="post" action="{{ url_for('auth.update_role', user_id=u.id) }}" class="d-flex gap-1">
                 <select name="role" class="form-select form-select-sm" {% if u.id == current_user.id and not u.is_admin %}disabled{% endif %}>

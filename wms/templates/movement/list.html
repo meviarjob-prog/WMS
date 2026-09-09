@@ -57,6 +57,46 @@
   {% endif %}
 </div>
 
+<div class="card p-3 mb-4">
+  <h5>Найти короб</h5>
+  <p class="text-muted small">Не получается добавить короб в перемещение? Проверьте, в каком документе он уже числится.</p>
+  <form method="get" action="{{ url_for('movement.find_box') }}" class="d-flex gap-2" style="max-width:480px">
+    <input type="text" name="box_number" id="findBoxInput" class="form-control" placeholder="Номер короба" value="{{ find_box_number|default('') }}" required>
+    <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#findBoxInput" title="Сканировать камерой">📷</button>
+    <button type="submit" class="btn btn-outline-primary">Найти</button>
+  </form>
+
+  {% if find_box_number|default('') %}
+    {% if find_box_not_found|default(false) %}
+      <div class="alert alert-danger mt-3 mb-0">Короб «{{ find_box_number }}» не найден.</div>
+    {% elif find_box_lines|default([]) %}
+      <table class="table table-sm mt-3 mb-0">
+        <thead><tr><th>Перемещение</th><th>Откуда</th><th>Куда</th><th>Статус</th><th>Приемка</th><th></th></tr></thead>
+        <tbody>
+        {% for line in find_box_lines %}
+          <tr>
+            <td>{{ line.document.number }}</td>
+            <td>{{ line.document.from_warehouse.name }}</td>
+            <td>{{ line.document.to_warehouse.name }}</td>
+            <td><span class="badge badge-status-{{ line.document.status }}">{{ 'Черновик' if line.document.status == 'draft' else 'Завершен' }}</span></td>
+            <td>
+              {% if line.document.status != 'completed' %}—
+              {% elif line.document.received_at %}Принято
+              {% else %}<span class="text-warning-emphasis">В пути</span>{% endif %}
+            </td>
+            <td><a href="{{ url_for('movement.detail', doc_id=line.document.id) }}">Открыть</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="alert alert-secondary mt-3 mb-0">
+        Короб <b>{{ find_box.box_number }}</b> — сейчас на складе «{{ find_box.warehouse.name }}», ни в одном перемещении не числится.
+      </div>
+    {% endif %}
+  {% endif %}
+</div>
+
 <div class="card p-3">
   <form method="get" action="{{ url_for('movement.export_waybills') }}" id="waybillsForm">
     <div class="d-flex justify-content-between align-items-center mb-2">
@@ -64,7 +104,10 @@
         <input type="checkbox" class="form-check-input" id="selectAllDocs">
         <label class="form-check-label" for="selectAllDocs">Выбрать все</label>
       </div>
-      <button type="submit" class="btn btn-outline-secondary btn-sm" id="printWaybillsBtn" disabled>🖨️ Печать накладных по выбранным (<span id="selectedDocsCount">0</span>)</button>
+      <div class="d-flex gap-2">
+        <button type="submit" formaction="{{ url_for('movement.export_shipping_labels') }}" class="btn btn-outline-secondary btn-sm" id="printLabelsBtn" disabled>🏷️ Стикеры на короба (<span id="selectedDocsCount2">0</span>)</button>
+        <button type="submit" class="btn btn-outline-secondary btn-sm" id="printWaybillsBtn" disabled>🖨️ Печать накладных по выбранным (<span id="selectedDocsCount">0</span>)</button>
+      </div>
     </div>
     <table class="table">
       <thead><tr><th></th><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th></th></tr></thead>
@@ -129,14 +172,19 @@
   const selectAllDocs = document.getElementById("selectAllDocs");
   const docCheckboxes = Array.from(document.querySelectorAll(".doc-checkbox"));
   const printWaybillsBtn = document.getElementById("printWaybillsBtn");
+  const printLabelsBtn = document.getElementById("printLabelsBtn");
   const selectedDocsCount = document.getElementById("selectedDocsCount");
+  const selectedDocsCount2 = document.getElementById("selectedDocsCount2");
 
   function updatePrintButtonState() {
     const checkedCount = docCheckboxes.filter((cb) => cb.checked).length;
-    printWaybillsBtn.disabled = checkedCount === 0;
-    printWaybillsBtn.classList.toggle("btn-outline-secondary", checkedCount === 0);
-    printWaybillsBtn.classList.toggle("btn-primary", checkedCount > 0);
+    [printWaybillsBtn, printLabelsBtn].forEach((btn) => {
+      btn.disabled = checkedCount === 0;
+      btn.classList.toggle("btn-outline-secondary", checkedCount === 0);
+      btn.classList.toggle("btn-primary", checkedCount > 0);
+    });
     selectedDocsCount.textContent = checkedCount;
+    selectedDocsCount2.textContent = checkedCount;
   }
 
   if (selectAllDocs) {

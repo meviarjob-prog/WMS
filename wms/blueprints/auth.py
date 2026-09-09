@@ -4,7 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required, login_user, logout_user
 
 from ..extensions import db
-from ..models import User
+from ..models import SECTIONS, User
 
 bp = Blueprint("auth", __name__)
 
@@ -51,7 +51,7 @@ def users():
     if not _require_admin():
         return redirect(url_for("main.index"))
     all_users = User.query.order_by(User.username).all()
-    return render_template("auth/users.html", users=all_users)
+    return render_template("auth/users.html", users=all_users, sections=SECTIONS)
 
 
 @bp.route("/users/create", methods=["POST"])
@@ -137,6 +137,28 @@ def update_role(user_id):
     user.role = role
     db.session.commit()
     flash(f"Роль для «{user.username}» обновлена", "success")
+    return redirect(url_for("auth.users"))
+
+
+@bp.route("/users/<int:user_id>/sections", methods=["POST"])
+@login_required
+def update_sections(user_id):
+    """Точечный доступ к разделам (см. User.allowed_sections) — отдельно от
+    role: и "warehouse", и "production" по факту не используют этот
+    механизм для production (там доступ и так ограничен одним разделом),
+    но поле физически применимо к любому не-админу."""
+    if not _require_admin():
+        return redirect(url_for("main.index"))
+
+    user = User.query.get_or_404(user_id)
+    mode = request.form.get("mode", "full")
+    if mode == "full":
+        user.allowed_sections = None
+    else:
+        selected = [code for code, _ in SECTIONS if request.form.get(f"section_{code}") == "on"]
+        user.allowed_sections = ",".join(selected) if selected else "none"
+    db.session.commit()
+    flash(f"Доступ к разделам для «{user.username}» обновлен", "success")
     return redirect(url_for("auth.users"))
 
 

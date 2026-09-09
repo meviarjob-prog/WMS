@@ -70,6 +70,19 @@ def toggle_warehouse(warehouse_id):
     return redirect(url_for("warehouses.list_warehouses"))
 
 
+@bp.route("/<int:warehouse_id>/recipient", methods=["POST"])
+def update_recipient(warehouse_id):
+    """Получатель для этого склада-направления — печатается на стикерах
+    отправления (см. movement.export_shipping_labels). Настраивается
+    отдельно для каждого склада, в первую очередь для складов-городов
+    маркетплейсов, куда физически едут короба."""
+    wh = Warehouse.query.get_or_404(warehouse_id)
+    wh.recipient_info = request.form.get("recipient_info", "").strip() or None
+    db.session.commit()
+    flash(f"Получатель для «{wh.name}» обновлен", "success")
+    return redirect(url_for("warehouses.list_warehouses"))
+
+
 @bp.route("/<int:warehouse_id>/cells")
 def cells(warehouse_id):
     wh = Warehouse.query.get_or_404(warehouse_id)

@@ -1,7 +1,7 @@
 import os
 import secrets
 
-from flask import Flask, redirect, request, url_for
+from flask import Flask, flash, redirect, request, url_for
 from flask_login import current_user
 from sqlalchemy import event, inspect, text
 from sqlalchemy.engine import Engine
@@ -235,6 +235,12 @@ def create_app(config_class=Config):
         # больше (даже при прямом вводе адреса другой страницы).
         if current_user.is_production_only() and not request.endpoint.startswith("production."):
             return redirect(url_for("production.index"))
+        # Точечное ограничение разделов (см. User.allowed_sections) — тоже
+        # проверяем при прямом вводе адреса, не только скрываем пункт меню.
+        section = request.endpoint.split(".")[0]
+        if not current_user.has_section_access(section):
+            flash("Этот раздел вам не доступен — обратитесь к администратору", "danger")
+            return redirect(url_for("main.index"))
         return None
 
     @app.context_processor
