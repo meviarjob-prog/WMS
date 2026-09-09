@@ -438,6 +438,12 @@ class MovementDocument(db.Model):
     # по товару из этого документа не засчитывается (висит как "в пути"),
     # чтобы отгрузки не считались успешными до фактической приемки.
     received_at = db.Column(db.DateTime, nullable=True)
+    # Ручная отметка бухгалтера "внесено в 1С" — независима от synced_to_1c_at
+    # выше (тот выставляется автоматически самой интеграцией, когда 1С
+    # забирает документ через API). Бухгалтерия может вести учет отдельно
+    # (например, вручную создавать документ в другой конфигурации) и просто
+    # отмечает здесь галочкой сам факт для контроля, без завязки на API.
+    accounting_entered_at = db.Column(db.DateTime, nullable=True)
 
     from_warehouse = db.relationship("Warehouse", foreign_keys=[from_warehouse_id])
     to_warehouse = db.relationship("Warehouse", foreign_keys=[to_warehouse_id])

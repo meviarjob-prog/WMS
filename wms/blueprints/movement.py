@@ -436,6 +436,17 @@ def receive(doc_id):
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
+@bp.route("/<int:doc_id>/toggle-accounting", methods=["POST"])
+def toggle_accounting(doc_id):
+    """Ручная отметка бухгалтера "внесено в 1С" — просто галочка для
+    контроля, никак не влияет на сам документ и не связана с автоматической
+    выгрузкой (см. MovementDocument.accounting_entered_at)."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    doc.accounting_entered_at = None if doc.accounting_entered_at else datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for("movement.list_documents"))
+
+
 @bp.route("/<int:doc_id>/export.xlsx")
 def export_document(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)

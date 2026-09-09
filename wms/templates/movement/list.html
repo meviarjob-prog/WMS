@@ -59,7 +59,7 @@
 
 <div class="card p-3">
   <table class="table">
-    <thead><tr><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Автор</th><th>Статус</th><th>Приемка</th><th></th></tr></thead>
+    <thead><tr><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th></th></tr></thead>
     <tbody>
     {% for d in documents %}
       <tr>
@@ -81,13 +81,19 @@
             </form>
           {% endif %}
         </td>
+        <td class="text-center">
+          <form method="post" action="{{ url_for('movement.toggle_accounting', doc_id=d.id) }}"
+                title="{{ 'Внесено в 1С бухгалтерией ' + d.accounting_entered_at.strftime('%d.%m.%Y %H:%M') if d.accounting_entered_at else 'Отметить: бухгалтерия внесла документ в 1С' }}">
+            <button type="submit" class="btn btn-sm btn-link p-0" style="font-size:1.15rem; line-height:1; text-decoration:none;">{{ '✅' if d.accounting_entered_at else '☐' }}</button>
+          </form>
+        </td>
         <td>
           <a href="{{ url_for('movement.detail', doc_id=d.id) }}">Открыть</a>
           · <a href="{{ url_for('movement.export_document', doc_id=d.id) }}">Excel</a>
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="9" class="text-muted">Перемещений еще нет</td></tr>
+      <tr><td colspan="10" class="text-muted">Перемещений еще нет</td></tr>
     {% endfor %}
     </tbody>
   </table>
