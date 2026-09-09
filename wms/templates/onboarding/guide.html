@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}Первый день на складе{% endblock %}
+
+{% block extra_head %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  #onboardingGuide{
+    --og-bg:#eef1f6; --og-surface:#ffffff; --og-surface-alt:#f4f6fb; --og-border:#dde2ea;
+    --og-text:#1a2233; --og-text-muted:#5b6577; --og-text-faint:#8993a6;
+    --og-accent:#2952cc; --og-accent-dark:#1d3d9e; --og-accent-soft:#e7edfc;
+    --og-success:#1f8a4c; --og-success-soft:#e5f5ea; --og-success-border:#bfe5cc;
+    --og-warning:#a8690a; --og-warning-soft:#fbf0dc; --og-warning-border:#eed7a3;
+    --og-danger:#c53030; --og-danger-soft:#fbe9e9; --og-danger-border:#f0c4c4;
+    --og-info:#2b6cb0; --og-info-soft:#e7f1fb; --og-info-border:#c3ddf5;
+    --og-shot-bg:#0d1117; --og-shadow:0 1px 2px rgba(20,30,60,.05),0 8px 24px -12px rgba(20,30,60,.12);
+    --og-shadow-lg:0 2px 6px rgba(20,30,60,.08),0 24px 48px -16px rgba(20,30,60,.22);
+
+    background:var(--og-bg); color:var(--og-text); font-family:"Inter",system-ui,sans-serif;
+    font-size:15.5px; line-height:1.65; margin:-1.5rem -1rem; padding:0 1rem;
+  }
+  #onboardingGuide h1, #onboardingGuide h2, #onboardingGuide h3{font-family:"Manrope","Inter",sans-serif; font-weight:800; text-wrap:balance; color:var(--og-text); margin:0;}
+  #onboardingGuide code, #onboardingGuide .mono{font-family:"JetBrains Mono",monospace; font-weight:500;}
+  #onboardingGuide a{color:var(--og-accent);}
+
+  #onboardingGuide .og-shell{display:grid; grid-template-columns:248px minmax(0,760px); gap:40px; max-width:1080px; margin:0 auto; padding:32px 0 96px;}
+  @media (max-width:900px){ #onboardingGuide .og-shell{grid-template-columns:1fr; padding:20px 0 64px;} }
+
+  #onboardingGuide .og-sidebar{position:sticky; top:12px; align-self:start; max-height:calc(100vh - 24px); overflow-y:auto; padding:24px 0;}
+  @media (max-width:900px){ #onboardingGuide .og-sidebar{position:static; max-height:none; padding-top:0;} }
+  #onboardingGuide .og-brand{display:flex; align-items:center; gap:10px; margin-bottom:22px;}
+  #onboardingGuide .og-brand-mark{width:38px; height:38px; border-radius:10px; background:var(--og-accent); color:#fff; display:flex; align-items:center; justify-content:center; font-size:19px; flex:none;}
+  #onboardingGuide .og-brand-text{line-height:1.25;}
+  #onboardingGuide .og-brand-text b{font-family:"Manrope",sans-serif; font-weight:800; font-size:15px; display:block;}
+  #onboardingGuide .og-brand-text span{font-size:12px; color:var(--og-text-muted);}
+  #onboardingGuide nav.og-toc{display:flex; flex-direction:column; gap:2px;}
+  #onboardingGuide nav.og-toc a{display:flex; align-items:center; gap:9px; padding:6px 10px; border-radius:8px; color:var(--og-text-muted); text-decoration:none; font-size:13.5px; font-weight:500;}
+  #onboardingGuide nav.og-toc a:hover{background:var(--og-surface-alt); color:var(--og-text);}
+  #onboardingGuide nav.og-toc .og-n{font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--og-text-faint); width:16px; flex:none;}
+
+  #onboardingGuide main{min-width:0;}
+  #onboardingGuide .og-doc-header{margin-bottom:8px;}
+  #onboardingGuide .og-doc-header .og-eyebrow{font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--og-accent); margin-bottom:10px;}
+  #onboardingGuide .og-doc-header h1{font-size:32px; letter-spacing:-.01em;}
+  #onboardingGuide .og-doc-header p{color:var(--og-text-muted); font-size:15.5px; max-width:58ch; margin-top:10px;}
+
+  #onboardingGuide .og-step-block{padding:40px 0; border-top:1px solid var(--og-border);}
+  #onboardingGuide .og-step-block:first-of-type{border-top:none; padding-top:20px;}
+  #onboardingGuide .og-step-head{display:flex; align-items:center; gap:12px; margin-bottom:8px;}
+  #onboardingGuide .og-step-num{font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:700; color:#fff; background:var(--og-accent); width:26px; height:26px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex:none;}
+  #onboardingGuide .og-step-head h2{font-size:21px;}
+  #onboardingGuide .og-step-lede{color:var(--og-text-muted); margin:10px 0 18px; max-width:62ch;}
+
+  #onboardingGuide .og-shot{border-radius:12px; overflow:hidden; box-shadow:var(--og-shadow-lg); border:1px solid var(--og-border); background:var(--og-shot-bg); margin:18px 0 10px;}
+  #onboardingGuide .og-shot img{display:block; width:100%; height:auto;}
+  #onboardingGuide .og-shot-caption{font-size:12.5px; color:var(--og-text-faint); margin-bottom:22px;}
+
+  #onboardingGuide ol.og-steps{list-style:none; padding-left:0; counter-reset:s; display:flex; flex-direction:column; gap:9px; margin:14px 0 20px;}
+  #onboardingGuide ol.og-steps li{counter-increment:s; position:relative; padding:10px 14px 10px 42px; background:var(--og-surface); border:1px solid var(--og-border); border-radius:10px; box-shadow:var(--og-shadow); font-size:14.5px;}
+  #onboardingGuide ol.og-steps li::before{content:counter(s); position:absolute; left:12px; top:50%; transform:translateY(-50%); width:20px; height:20px; border-radius:6px; background:var(--og-accent-soft); color:var(--og-accent-dark); font-family:"JetBrains Mono",monospace; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center;}
+
+  #onboardingGuide .og-callout{border-radius:10px; border:1px solid; padding:12px 15px; margin:14px 0; font-size:14px; display:flex; gap:9px;}
+  #onboardingGuide .og-callout .og-cico{flex:none;}
+  #onboardingGuide .og-callout.warn{background:var(--og-warning-soft); border-color:var(--og-warning-border);} #onboardingGuide .og-callout.warn b{color:var(--og-warning);}
+  #onboardingGuide .og-callout.danger{background:var(--og-danger-soft); border-color:var(--og-danger-border);} #onboardingGuide .og-callout.danger b{color:var(--og-danger);}
+  #onboardingGuide .og-callout.info{background:var(--og-info-soft); border-color:var(--og-info-border);} #onboardingGuide .og-callout.info b{color:var(--og-info);}
+  #onboardingGuide .og-callout.new{background:var(--og-success-soft); border-color:var(--og-success-border);} #onboardingGuide .og-callout.new b{color:var(--og-success);}
+
+  #onboardingGuide .og-badge{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:999px; border:1px solid; line-height:1.5; white-space:nowrap; vertical-align:middle;}
+  #onboardingGuide .og-badge.new{color:var(--og-success); background:var(--og-success-soft); border-color:var(--og-success-border);}
+
+  #onboardingGuide .og-checklist{background:var(--og-surface); border:1px solid var(--og-border); border-radius:12px; padding:18px 20px; box-shadow:var(--og-shadow); margin:14px 0;}
+  #onboardingGuide .og-checklist h3{font-size:15px; margin-bottom:10px;}
+  #onboardingGuide .og-checklist ul{margin:0; padding-left:0; list-style:none; display:flex; flex-direction:column; gap:7px;}
+  #onboardingGuide .og-checklist li{font-size:14px; display:flex; gap:8px; align-items:flex-start;}
+  #onboardingGuide .og-checklist li::before{content:"\2610"; color:var(--og-accent); flex:none; font-size:15px; line-height:1.3;}
+
+  #onboardingGuide .og-tbl-wrap{overflow-x:auto; border:1px solid var(--og-border); border-radius:10px; background:var(--og-surface); box-shadow:var(--og-shadow); margin:14px 0;}
+  #onboardingGuide table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  #onboardingGuide th, #onboardingGuide td{text-align:left; padding:8px 12px; border-bottom:1px solid var(--og-border);}
+  #onboardingGuide th{font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--og-text-faint); font-weight:700;}
+
+  #onboardingGuide footer.og-doc-footer{margin-top:40px; padding-top:20px; border-top:1px solid var(--og-border); font-size:12.5px; color:var(--og-text-faint);}
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="onboardingGuide">
+  <div class="og-shell">
+    <aside class="og-sidebar">
+      <div class="og-brand">
+        <div class="og-brand-mark">📦</div>
+        <div class="og-brand-text"><b>WMS Мевиар</b><span>Первый день на складе</span></div>
+      </div>
+      <nav class="og-toc">
+        <a href="#login"><span class="og-n">01</span> Вход в систему</a>
+        <a href="#nomenclature"><span class="og-n">02</span> Номенклатура</a>
+        <a href="#receiving"><span class="og-n">03</span> Приёмка</a>
+        <a href="#placement"><span class="og-n">04</span> Размещение</a>
+        <a href="#movement"><span class="og-n">05</span> Перемещение</a>
+        <a href="#findbox"><span class="og-n">06</span> Поиск короба</a>
+        <a href="#waybills"><span class="og-n">07</span> Стикеры и накладные</a>
+        <a href="#plan"><span class="og-n">08</span> План отгрузок</a>
+        <a href="#settings"><span class="og-n">09</span> Настройки (админ)</a>
+        <a href="#inventory"><span class="og-n">10</span> Инвентаризация</a>
+        <a href="#locate"><span class="og-n">11</span> Где товар</a>
+        <a href="#checklist"><span class="og-n">12</span> Памятка на первую неделю</a>
+      </nav>
+    </aside>
+
+    <main>
+      <div class="og-doc-header">
+        <div class="og-eyebrow">Обучение · WMS Мевиар</div>
+        <h1>Первый день на складе</h1>
+        <p>Здесь — реальные экраны системы, по которым вы будете работать каждый день. Идите по порядку: каждый раздел — это одна задача, от входа в систему до печати накладной.</p>
+      </div>
+
+      <section class="og-step-block" id="login">
+        <div class="og-step-head"><div class="og-step-num">1</div><h2>Вход в систему</h2></div>
+        <p class="og-step-lede">Логин и временный пароль вам выдаст администратор. Откройте адрес склада в браузере телефона или компьютера — откроется этот экран.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/01_login.png') }}" alt="Экран входа в WMS"></div>
+        <div class="og-shot-caption">Экран входа — логин и пароль, кнопка «Войти».</div>
+        <div class="og-callout info"><span class="og-cico">🔑</span><div>После первого входа сразу смените пароль: значок 👤 с вашим именем в правом верхнем углу → «Сменить пароль».</div></div>
+      </section>
+
+      <section class="og-step-block" id="nomenclature">
+        <div class="og-step-head"><div class="og-step-num">2</div><h2>Номенклатура — справочник товаров</h2></div>
+        <p class="og-step-lede">Верхнее меню — это разделы, между которыми вы будете переключаться весь день. Начнём с «Номенклатуры»: тут можно найти любой товар по названию, артикулу или штрихкоду.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/02_nomenclature.png') }}" alt="Список номенклатуры"></div>
+        <div class="og-shot-caption">Раздел «Номенклатура»: поиск и список товаров склада.</div>
+        <p>Запомните расположение меню — оно одинаковое на всех страницах: Номенклатура · Где товар · Склады и ячейки · Приёмка · Размещение · Перемещение · Инвентаризация · Производство · Отчёты · План отгрузок.</p>
+      </section>
+
+      <section class="og-step-block" id="receiving">
+        <div class="og-step-head"><div class="og-step-num">3</div><h2>Приёмка товара</h2></div>
+        <p class="og-step-lede">Когда приезжает поставка — начинаем с «Приёмки». Список документов выглядит так:</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/03_receiving_list.png') }}" alt="Список документов приёмки"></div>
+        <div class="og-shot-caption">Список приёмок — кнопка «Новая приемка» создаёт документ.</div>
+        <p>Внутри документа — два способа принять товар. Можно просто отсканировать штрихкод и указать количество (товар уйдёт в общий неразмещённый остаток). А можно упаковать товар сразу в короб — это быстрее, если короба под рукой:</p>
+        <ol class="og-steps">
+          <li>Отсканируйте номер короба (или нажмите «Создать новый короб») — курсор сам встанет в поле поиска товара.</li>
+          <li>Сканируйте товар один за другим — каждый скан сразу добавляется в короб, страница не перезагружается.</li>
+          <li>Если штрихкод не читается — введите товар вручную в поле справа; после добавления короб сам сбросится, готов сканировать следующий.</li>
+        </ol>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/04_receiving_detail.png') }}" alt="Документ приёмки с коробом и позициями"></div>
+        <div class="og-shot-caption">Документ приёмки: короб BOX-000106 упакован, ниже — все позиции документа с итогом.</div>
+        <div class="og-callout info"><span class="og-cico">✅</span><div>Когда всё принято — жмите «Завершить приемку». Товар без короба уйдёт в неразмещённый остаток (его нужно будет разложить по коробам через «Размещение»), а то, что уже упаковано в короб — останется в нём, нужно только расставить по ячейкам.</div></div>
+      </section>
+
+      <section class="og-step-block" id="placement">
+        <div class="og-step-head"><div class="og-step-num">4</div><h2>Размещение по ячейкам</h2></div>
+        <p class="og-step-lede">Раздел «Размещение» — здесь неразмещённый остаток раскладывается по коробам, а короба расставляются по ячейкам склада.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/05_placement_list.png') }}" alt="Экран размещения: остаток и открытые короба"></div>
+        <div class="og-shot-caption">Слева — что ещё не упаковано, справа — короба без ячейки с готовой подсказкой, куда их поставить.</div>
+        <ol class="og-steps">
+          <li>Столбец «Рекомендация» — система сама подсказывает лучшую ячейку (там же лежит такой товар или соседняя ячейка в том же ряду).</li>
+          <li>Впишите код ячейки (или согласитесь с подсказкой) и нажмите «OK» — короб размещён.</li>
+          <li>Если короба ещё нет — создайте его в конкретном документе размещения и упаковывайте туда остаток штрихкод за штрихкодом, как в приёмке.</li>
+        </ol>
+      </section>
+
+      <section class="og-step-block" id="movement">
+        <div class="og-step-head"><div class="og-step-num">5</div><h2>Перемещение между складами</h2></div>
+        <p class="og-step-lede">Когда товар нужно отправить с основного склада на склад-город маркетплейса (ОЗОН, ВБ) — используется «Перемещение». Самый быстрый способ — карточка «Куда везти короб» вверху страницы: сканируете короб, система сама подсказывает город по текущему плану отгрузок.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/06_movement_list.png') }}" alt="Список перемещений и Куда везти короб"></div>
+        <div class="og-shot-caption">«Куда везти короб» сверху и список документов перемещения снизу.</div>
+        <div class="og-callout danger"><span class="og-cico">⛔</span><div><b>Важно:</b> один короб нельзя добавить сразу в два разных перемещения. Если он уже отсканирован в одно из них (в т.ч. уже отправлен, но еще не принят на месте), система заблокирует повторное добавление и покажет, в каком именно документе короб уже числится.</div></div>
+        <p>Открыв конкретный документ, можно добавлять короба вручную и назначать ячейку на складе назначения сразу — или оставить это на потом через «Размещение»:</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/09_movement_detail.png') }}" alt="Документ перемещения с коробом"></div>
+        <div class="og-shot-caption">Документ перемещения PER-000031: короб добавлен, товары видны сразу в строке.</div>
+      </section>
+
+      <section class="og-step-block" id="findbox">
+        <div class="og-step-head"><div class="og-step-num">6</div><h2>Поиск короба <span class="og-badge new">новое</span></h2></div>
+        <p class="og-step-lede">Не помните, в какое перемещение попал конкретный короб? На странице «Перемещение» есть карточка «Найти короб» — вводите номер и сразу видите все документы, где он упоминался.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/13_find_box.png') }}" alt="Результат поиска короба по перемещениям"></div>
+        <div class="og-shot-caption">Короб BOX-000105 найден в перемещении PER-000029: видно откуда, куда, статус документа и отметку о приёмке.</div>
+      </section>
+
+      <section class="og-step-block" id="waybills">
+        <div class="og-step-head"><div class="og-step-num">7</div><h2>Стикеры и накладные <span class="og-badge new">новое</span></h2></div>
+        <p class="og-step-lede">В списке перемещений у каждой строки — флажок. Отметьте нужные документы — появятся сразу две кнопки печати.</p>
+        <ol class="og-steps">
+          <li>Отметьте галочками нужные перемещения (или нажмите «Выбрать все») — обе кнопки станут синими и покажут счётчик выбранного.</li>
+          <li>«🏷️ Стикеры на короба» печатает наклейку 58×40мм на каждый короб документа (по количеству коробов): город назначения, получатель и отправитель. Это отдельная наклейка для перемещения — не «Этикетка короба» с его штрихкодом.</li>
+          <li>«🖨️ Печать накладных по выбранным» — как раньше: PDF с таблицей «Штрихкод / Наименование / Кол-во» по каждому документу.</li>
+        </ol>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/14_movement_print_buttons.png') }}" alt="Выбраны перемещения, обе кнопки печати активны"></div>
+        <div class="og-shot-caption">Выбрано 2 документа — «🏷️ Стикеры на короба (2)» и «🖨️ Печать накладных по выбранным (2)» обе активны.</div>
+        <div class="og-callout info"><span class="og-cico">✍️</span><div>Отправителя (сразу на все направления) и получателя для каждого склада-города настраивает администратор на странице «Настройки».</div></div>
+      </section>
+
+      <section class="og-step-block" id="plan">
+        <div class="og-step-head"><div class="og-step-num">8</div><h2>План отгрузок — зачем нужны рекомендации</h2></div>
+        <p class="og-step-lede">Раздел «План отгрузок» объясняет, откуда берётся подсказка в «Куда везти короб»: сколько нужно по плану и сколько уже готово. Пока короб едет и не нажата кнопка «Принято на складе» — потребность слева не уменьшается, а количество в пути показано отдельно, в скобках справа от остатка.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/10_shipment_plan.png') }}" alt="Дашборд плана отгрузок"></div>
+        <div class="og-shot-caption">Москва: план 28, остаток 28, в скобках (12) — уже отправлено перемещением, но пока не подтверждено приёмкой.</div>
+        <p>Загружает план и следит за темпом обычно администратор — вам как складскому сотруднику достаточно понимать: если в «Куда везти короб» город не предлагается — значит потребности по этому товару там пока нет.</p>
+      </section>
+
+      <section class="og-step-block" id="settings">
+        <div class="og-step-head"><div class="og-step-num">9</div><h2>Настройки — раздел администратора <span class="og-badge new">новое</span></h2></div>
+        <p class="og-step-lede">Все административные настройки собраны в одном месте: пользователи, доступ к разделам меню и параметры стикеров перемещения. Обычному складскому сотруднику пункт «Настройки» в меню не виден.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/15_settings.png') }}" alt="Страница Настройки: пользователи и стикеры перемещений"></div>
+        <div class="og-shot-caption">Сверху — пользователи и их роли, снизу — отправитель на все направления и получатели по складам-городам.</div>
+        <ol class="og-steps">
+          <li>«Пользователи» — создание учёток, роль (склад / производство), плановая смена, сброс пароля, включение и отключение сотрудника.</li>
+          <li>Кнопка в столбце «Разделы» открывает окно, где доступ сотрудника можно ограничить только нужными пунктами меню — например, только «Размещение» и «Перемещение».</li>
+          <li>«Стикеры перемещений» — единый отправитель сразу на все направления и отдельный получатель для каждого склада-города.</li>
+        </ol>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/16_settings_sections_modal.png') }}" alt="Окно настройки доступа к разделам для сотрудника"></div>
+        <div class="og-shot-caption">Окно «Доступ к разделам»: у Иванова И.И. открыты только «Размещение» и «Перемещение».</div>
+      </section>
+
+      <section class="og-step-block" id="inventory">
+        <div class="og-step-head"><div class="og-step-num">10</div><h2>Инвентаризация</h2></div>
+        <p class="og-step-lede">Пересчёт склада — сканируете короба один за другим, содержимое суммируется в позиции автоматически.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/11b_inventory_detail.png') }}" alt="Документ инвентаризации со сканированными коробами"></div>
+        <div class="og-shot-caption">Три короба отсканированы — слева итоговый список товара, справа — история сканирования.</div>
+        <div class="og-callout warn"><span class="og-cico">👥</span><div>Считаете склад вдвоём? Каждый заводит свой лист («Новая инвентаризация», тот же склад), а потом на странице списка выбираются оба листа и кнопкой «Свести выбранные в один» объединяются — короб, отсканированный по ошибке в оба листа, посчитается один раз.</div></div>
+      </section>
+
+      <section class="og-step-block" id="locate">
+        <div class="og-step-head"><div class="og-step-num">11</div><h2>«Где товар» — быстрый поиск</h2></div>
+        <p class="og-step-lede">Нужно быстро найти конкретный товар физически — не ищите по ячейкам вручную, отсканируйте штрихкод здесь.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/12_locate.png') }}" alt="Результат поиска товара по местам хранения"></div>
+        <div class="og-shot-caption">Видно каждый короб с этим товаром, его ячейку и склад, плюс неразмещённый остаток отдельно.</div>
+      </section>
+
+      <section class="og-step-block" id="checklist">
+        <div class="og-step-head"><div class="og-step-num">12</div><h2>Памятка на первую неделю</h2></div>
+        <div class="og-checklist">
+          <h3>Прежде чем звать старшего смены — проверьте:</h3>
+          <ul>
+            <li>Короб не находится «не по адресу» — сообщение об этом покажет, на каком складе он числится на самом деле.</li>
+            <li>Короб уже не добавлен в другое перемещение — уберите его из старого документа, прежде чем класть в новый.</li>
+            <li>В размещении хватает неразмещённого остатка на нужное количество — если нет, товар мог быть уже упакован раньше.</li>
+            <li>Документ не «Завершён» — завершённый документ на складе меняет только администратор.</li>
+          </ul>
+        </div>
+        <div class="og-tbl-wrap">
+          <table>
+            <tr><th>Если видите...</th><th>Что это значит</th></tr>
+            <tr><td>Жёлтый бейдж «Черновик»</td><td>Документ ещё редактируется, можно менять и удалять.</td></tr>
+            <tr><td>Зелёный бейдж «Завершён»</td><td>Документ закрыт, повлиял на остатки — правки только у администратора.</td></tr>
+            <tr><td>«(N)» в скобках рядом с числом в плане отгрузок</td><td>Часть уже отправлена перемещением, но ещё не принята на месте — потребность слева при этом не уменьшается.</td></tr>
+            <tr><td>Сообщение с текстом «уже отсканирован в другое перемещение»</td><td>Короб занят другим документом — так и должно быть, это защита от задвоения.</td></tr>
+          </table>
+        </div>
+      </section>
+
+      <footer class="og-doc-footer">WMS Мевиар — материал для обучения новых сотрудников склада. Скриншоты сделаны на демонстрационных данных.</footer>
+    </main>
+  </div>
+</div>
+{% endblock %}

@@ -14,10 +14,6 @@ from .paths import resource_dir
 
 _sqlite_functions_registered = False
 
-# Инструкция для новых сотрудников (значок "🎓 Обучение" в шапке, см. base.html) —
-# внешняя страница, не часть самого приложения, поэтому просто константа-ссылка.
-ONBOARDING_GUIDE_URL = "https://claude.ai/code/artifact/e9208fb6-04da-4c64-95a0-0780fc8728c3"
-
 
 def _ensure_columns():
     """db.create_all() создает только отсутствующие ТАБЛИЦЫ — если в модель
@@ -188,6 +184,7 @@ def create_app(config_class=Config):
     from .blueprints.api import bp as api_bp
     from .blueprints.shipment_plan import bp as shipment_plan_bp
     from .blueprints.integration_1c import bp as integration_1c_bp
+    from .blueprints.onboarding import bp as onboarding_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
@@ -204,6 +201,7 @@ def create_app(config_class=Config):
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(shipment_plan_bp, url_prefix="/shipment-plan")
     app.register_blueprint(integration_1c_bp, url_prefix="/integrations/1c")
+    app.register_blueprint(onboarding_bp, url_prefix="/onboarding")
 
     with app.app_context():
         from . import models  # noqa: F401
@@ -236,8 +234,14 @@ def create_app(config_class=Config):
         if not current_user.is_authenticated:
             return redirect(url_for("auth.login", next=request.full_path))
         # Роль "производство" — доступ только к сканированию ЧЗ, ничего
-        # больше (даже при прямом вводе адреса другой страницы).
-        if current_user.is_production_only() and not request.endpoint.startswith("production."):
+        # больше (даже при прямом вводе адреса другой страницы) — кроме
+        # страницы обучения, она должна быть доступна всем сотрудникам
+        # независимо от роли.
+        if (
+            current_user.is_production_only()
+            and not request.endpoint.startswith("production.")
+            and not request.endpoint.startswith("onboarding.")
+        ):
             return redirect(url_for("production.index"))
         # Точечное ограничение разделов (см. User.allowed_sections) — тоже
         # проверяем при прямом вводе адреса, не только скрываем пункт меню.
@@ -253,10 +257,6 @@ def create_app(config_class=Config):
 
         from .models import CELL_CAPACITY
 
-        return {
-            "current_year": datetime.now().year,
-            "CELL_CAPACITY": CELL_CAPACITY,
-            "onboarding_guide_url": ONBOARDING_GUIDE_URL,
-        }
+        return {"current_year": datetime.now().year, "CELL_CAPACITY": CELL_CAPACITY}
 
     return app
