@@ -21,16 +21,16 @@ def _draw_shipping_label(c, *, destination_name, recipient_info, sender_name):
         ty -= 5 * mm
 
     ty -= 2 * mm
-    c.setFont(FONT_REGULAR, 7.5)
+    c.setFont(FONT_REGULAR, 9.5)
     if recipient_info:
-        for line in textwrap.wrap(f"Получатель: {recipient_info}", width=36)[:3]:
+        for line in textwrap.wrap(f"Получатель: {recipient_info}", width=30)[:3]:
             c.drawCentredString(LABEL_WIDTH / 2, ty, line)
-            ty -= 3.6 * mm
+            ty -= 4.3 * mm
         ty -= 1.5 * mm
 
-    for line in textwrap.wrap(f"Отправитель: {sender_name}", width=36)[:2]:
+    for line in textwrap.wrap(f"Отправитель: {sender_name}", width=30)[:2]:
         c.drawCentredString(LABEL_WIDTH / 2, ty, line)
-        ty -= 3.6 * mm
+        ty -= 4.3 * mm
 
 
 def build_movement_shipping_labels_pdf(documents, sender_override=None) -> bytes:
