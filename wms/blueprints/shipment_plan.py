@@ -203,20 +203,28 @@ def _unplaced_by_nomenclature(warehouse_ids):
     }
 
 
-def _in_transit_by_warehouse():
-    """{warehouse_id: кол-во} товара, уже отправленного перемещением на этот
-    склад-город (документ завершен), но еще не подтвержденного кнопкой
-    "Принято на складе" — висит как "в пути", в план отгрузок пока не
-    засчитано (см. movement.receive)."""
+def _in_transit_by_warehouse_and_item():
+    """{(warehouse_id, nomenclature_id): кол-во} товара, уже отправленного
+    перемещением на этот склад-город (документ завершен), но еще не
+    подтвержденного кнопкой "Принято на складе" — висит как "в пути".
+    fulfilled_qty у строки плана дописывается только при приемке (см.
+    movement.receive), поэтому без этой раскладки по товарам "Что нужно
+    отправить" ниже продолжал бы требовать полное количество по плану, как
+    будто ничего еще не выехало — раньше это было видно только в сводке по
+    городу целиком, а не по конкретной позиции."""
     rows = (
-        db.session.query(MovementDocument.to_warehouse_id, func.sum(BoxItem.qty))
+        db.session.query(
+            MovementDocument.to_warehouse_id,
+            BoxItem.nomenclature_id,
+            func.sum(BoxItem.qty),
+        )
         .join(MovementLine, MovementLine.document_id == MovementDocument.id)
         .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
         .filter(MovementDocument.status == "completed", MovementDocument.received_at.is_(None))
-        .group_by(MovementDocument.to_warehouse_id)
+        .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
         .all()
     )
-    return {wh_id: qty or 0 for wh_id, qty in rows}
+    return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
 
 
 def _pace_analysis(plan, total_planned, total_fulfilled):
@@ -267,7 +275,10 @@ def dashboard():
     sender_ids = _sender_warehouse_ids()
     stock = _stock_by_nomenclature(sender_ids)
     unplaced_stock = _unplaced_by_nomenclature(sender_ids)
-    in_transit_by_warehouse = _in_transit_by_warehouse()
+    in_transit_by_item = _in_transit_by_warehouse_and_item()
+    in_transit_by_warehouse = {}
+    for (wh_id, _nom_id), qty in in_transit_by_item.items():
+        in_transit_by_warehouse[wh_id] = in_transit_by_warehouse.get(wh_id, 0) + qty
 
     marketplaces_data = []
     lines_by_marketplace = {}
@@ -281,6 +292,16 @@ def dashboard():
 
         lines = plan.lines.all()
         lines_by_marketplace[marketplace] = lines
+
+        # "Эффективный" остаток — то, что реально еще нужно отправить с
+        # учетом уже отправленных, но не принятых на складе назначения
+        # коробов (in_transit_by_item); используется вместо голого
+        # remaining_qty() везде, где речь о том, что физически осталось
+        # везти, а не о сухом "план минус факт" (для этого второго — экспорт
+        # в Excel и т.п. — remaining_qty() остается как есть).
+        for line in lines:
+            line.in_transit_qty = in_transit_by_item.get((line.warehouse_id, line.nomenclature_id), 0)
+            line.effective_remaining = max(line.remaining_qty() - line.in_transit_qty, 0)
 
         by_warehouse = {}
         for line in lines:
@@ -301,7 +322,7 @@ def dashboard():
         problem_barcodes = {
             line.barcode
             for line in lines
-            if line.remaining_qty() > 0
+            if line.effective_remaining > 0
             and (line.nomenclature_id is None or stock.get(line.nomenclature_id, 0) <= 0)
         }
 
@@ -361,7 +382,7 @@ def dashboard():
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
-            product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
+            product["max_remaining"] = max(product["max_remaining"], line.effective_remaining)
 
     picking_list = sorted(
         (p for p in products.values() if p["max_remaining"] > 0),

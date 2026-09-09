@@ -120,16 +120,18 @@
             {% set line = p.ozon.get(city) %}
             <td class="text-end">
               {% if not line %}<span class="text-muted">—</span>
-              {% elif line.remaining_qty() <= 0 %}<span class="text-muted">0</span>
-              {% else %}<b>{{ line.remaining_qty() | round(0) }}</b>{% endif %}
+              {% elif line.effective_remaining <= 0 %}<span class="text-muted">0</span>
+              {% else %}<b>{{ line.effective_remaining | round(0) }}</b>{% endif %}
+              {% if line and line.in_transit_qty %}<br><span class="text-warning-emphasis" style="font-size:11px" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе»">−{{ line.in_transit_qty | round(0) }} в пути</span>{% endif %}
             </td>
           {% endfor %}
           {% for city in wb_cities %}
             {% set line = p.wb.get(city) %}
             <td class="text-end{% if loop.first %} border-start border-2{% endif %}">
               {% if not line %}<span class="text-muted">—</span>
-              {% elif line.remaining_qty() <= 0 %}<span class="text-muted">0</span>
-              {% else %}<b>{{ line.remaining_qty() | round(0) }}</b>{% endif %}
+              {% elif line.effective_remaining <= 0 %}<span class="text-muted">0</span>
+              {% else %}<b>{{ line.effective_remaining | round(0) }}</b>{% endif %}
+              {% if line and line.in_transit_qty %}<br><span class="text-warning-emphasis" style="font-size:11px" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе»">−{{ line.in_transit_qty | round(0) }} в пути</span>{% endif %}
             </td>
           {% endfor %}
         </tr>
