@@ -24,8 +24,8 @@
           {% if mp.plan.uploaded_by %}({{ mp.plan.uploaded_by.display_name() }}){% endif %}
         </p>
         <p class="mb-2">
-          План <b>{{ mp.total_planned | round(0) }}</b> —
-          выполнено <b>{{ mp.total_fulfilled | round(0) }}</b>
+          План <b>{{ mp.total_planned | round(0) | int }}</b> —
+          выполнено <b>{{ mp.total_fulfilled | round(0) | int }}</b>
           ({{ (100 * mp.total_fulfilled / mp.total_planned) | round(1) if mp.total_planned else 0 }}%)
           {% if mp.problems_count %}
             — <span class="badge bg-danger">{{ mp.problems_count }} без остатка на складе</span>
@@ -50,13 +50,13 @@
             {% elif pace.status == 'no_data' %}
               ⏳ Пока нет отгрузок за период — темп посчитать не из чего.
             {% elif pace.status == 'overdue' %}
-              ⚠ Срок (14 дней) истёк, а осталось отгрузить <b>{{ pace.remaining | round(0) }}</b> шт.
+              ⚠ Срок (14 дней) истёк, а осталось отгрузить <b>{{ pace.remaining | round(0) | int }}</b> шт.
             {% elif pace.status == 'on_track' %}
-              ✅ Успеваем — при темпе <b>{{ pace.rate | round(1) }} шт/день</b> на остаток ({{ pace.remaining | round(0) }} шт) уйдёт ещё
+              ✅ Успеваем — при темпе <b>{{ pace.rate | round(1) }} шт/день</b> на остаток ({{ pace.remaining | round(0) | int }} шт) уйдёт ещё
               <b>~{{ pace.days_needed | round(1) }} дн.</b>, а времени до срока — {{ pace.days_left }} дн.
             {% else %}
               ⚠ Не успеваем при текущем темпе — <b>{{ pace.rate | round(1) }} шт/день</b> даёт
-              <b>~{{ pace.days_needed | round(1) }} дн.</b> на остаток ({{ pace.remaining | round(0) }} шт),
+              <b>~{{ pace.days_needed | round(1) }} дн.</b> на остаток ({{ pace.remaining | round(0) | int }} шт),
               а до срока осталось {{ pace.days_left }} дн. Нужно ускориться минимум до
               <b>{{ pace.required_rate | round(1) }} шт/день</b>.
             {% endif %}
@@ -69,10 +69,10 @@
           {% for row in mp.cities %}
             <tr>
               <td>{{ row.warehouse.marketplace_city }}</td>
-              <td>{{ row.planned | round(0) }}</td>
-              <td>{{ (row.planned - row.fulfilled) | round(0) }}</td>
-              <td>{% if row.in_transit %}<span class="text-warning-emphasis">{{ row.in_transit | round(0) }}</span>{% else %}—{% endif %}</td>
-              <td>{{ (100 * row.fulfilled / row.planned) | round(0) if row.planned else 0 }}%</td>
+              <td>{{ row.planned | round(0) | int }}</td>
+              <td>{{ (row.planned - row.fulfilled) | round(0) | int }}</td>
+              <td>{% if row.in_transit %}<span class="text-warning-emphasis">{{ row.in_transit | round(0) | int }}</span>{% else %}—{% endif %}</td>
+              <td>{{ ((100 * row.fulfilled / row.planned) | round(0) | int) if row.planned else 0 }}%</td>
             </tr>
           {% endfor %}
           </tbody>
@@ -114,15 +114,15 @@
           <td>{{ p.size or '' }}</td>
           <td>{{ p.barcode }}</td>
           <td class="text-nowrap">{% if p.no_stock %}<span class="badge bg-danger" title="Нет на складе-отправителе">нет на складе</span>{% endif %}</td>
-          <td class="text-end">{% if p.unplaced %}{{ p.unplaced | round(0) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
-          <td class="text-end">{% if p.ready_to_ship %}<b>{{ p.ready_to_ship | round(0) }}</b>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td class="text-end">{% if p.unplaced %}{{ p.unplaced | round(0) | int }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td class="text-end">{% if p.ready_to_ship %}<b>{{ p.ready_to_ship | round(0) | int }}</b>{% else %}<span class="text-muted">—</span>{% endif %}</td>
           {% for city in ozon_cities %}
             {% set line = p.ozon.get(city) %}
             <td class="text-end">
               {% if not line %}<span class="text-muted">—</span>
               {% elif line.remaining_qty() <= 0 %}<span class="text-muted">0</span>
-              {% else %}<b>{{ line.remaining_qty() | round(0) }}</b>{% endif %}
-              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе» — в потребность слева не засчитано">&nbsp;({{ line.in_transit_qty | round(0) }})</span>{% endif %}
+              {% else %}<b>{{ line.remaining_qty() | round(0) | int }}</b>{% endif %}
+              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе» — в потребность слева не засчитано">&nbsp;({{ line.in_transit_qty | round(0) | int }})</span>{% endif %}
             </td>
           {% endfor %}
           {% for city in wb_cities %}
@@ -130,8 +130,8 @@
             <td class="text-end{% if loop.first %} border-start border-2{% endif %}">
               {% if not line %}<span class="text-muted">—</span>
               {% elif line.remaining_qty() <= 0 %}<span class="text-muted">0</span>
-              {% else %}<b>{{ line.remaining_qty() | round(0) }}</b>{% endif %}
-              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе» — в потребность слева не засчитано">&nbsp;({{ line.in_transit_qty | round(0) }})</span>{% endif %}
+              {% else %}<b>{{ line.remaining_qty() | round(0) | int }}</b>{% endif %}
+              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе» — в потребность слева не засчитано">&nbsp;({{ line.in_transit_qty | round(0) | int }})</span>{% endif %}
             </td>
           {% endfor %}
         </tr>
