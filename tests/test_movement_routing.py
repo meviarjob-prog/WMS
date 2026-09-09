@@ -234,3 +234,40 @@ def test_add_box_same_document_duplicate_message_unaffected(db, client_logged_in
     html = resp.get_data(as_text=True)
     assert "уже в этом списке" in html
     assert doc.lines.count() == 1
+
+
+def test_route_box_add_blocks_box_already_in_transit_completed_movement(db, client_logged_in):
+    """Короб, чье первое перемещение уже "Завершено" (и, значит,
+    box.warehouse_id уже переставлен на склад назначения), но еще НЕ
+    отмечено "Принято на складе" — то есть физически еще в пути — раньше
+    можно было молча добавить в ЕЩЕ ОДНО перемещение через "Куда везти
+    короб": склад-отправитель нового документа берется из текущего
+    (уже переставленного) box.warehouse_id, поэтому проверка "короб не на
+    складе-отправителе" не срабатывала, а _find_conflicting_movement_line
+    смотрела только на черновики. Один физический короб оказывался
+    одновременно "отправлен" в два разных города."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    other_city = Warehouse(
+        code="WH-CTY4", name="ОЗОН: Третий город", marketplace="ozon", marketplace_city="Третий город"
+    )
+    db.session.add(other_city)
+    db.session.commit()
+    box = _make_box(sender, item, qty=10, box_number="BOX-000012")
+
+    client_logged_in.post("/movement/route-box/add", data={"box_id": box.id, "to_warehouse_id": city.id})
+    doc1 = MovementDocument.query.filter_by(from_warehouse_id=sender.id, to_warehouse_id=city.id).first()
+    client_logged_in.post(f"/movement/{doc1.id}/complete")
+    doc1 = MovementDocument.query.get(doc1.id)
+    assert doc1.status == "completed"
+    assert doc1.received_at is None
+
+    resp = client_logged_in.post(
+        "/movement/route-box/add",
+        data={"box_id": box.id, "to_warehouse_id": other_city.id},
+        follow_redirects=True,
+    )
+
+    html = resp.get_data(as_text=True)
+    assert "уже отсканирован в другое перемещение" in html
+    assert "в пути" in html
+    assert MovementLine.query.filter_by(box_id=box.id).count() == 1

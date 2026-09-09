@@ -208,18 +208,33 @@ def _create_movement_line(doc, box):
 
 
 def _find_conflicting_movement_line(box, exclude_doc_id=None):
-    """Ищет строку с этим же коробом в ДРУГОМ черновике перемещения. Пока
-    перемещение не завершено (status="draft"), box.warehouse_id еще не
-    меняется — он меняется только в complete() — поэтому проверка
-    "короб не на складе-отправителе" никак не ловит короб, отсканированный
-    сразу в два разных черновика. Без этой отдельной проверки один и тот же
-    короб мог молча "уехать" сразу в два перемещения одновременно."""
+    """Ищет строку с этим же коробом в ДРУГОМ еще не принятом перемещении —
+    черновике или уже завершенном, но "в пути" (received_at не заполнен).
+    box.warehouse_id обновляется на склад назначения уже в complete(), а не
+    в receive() (см. комментарий там) — поэтому короб, отправленный, но еще
+    не принятый на месте, выглядит для проверки "короб не на складе-
+    отправителе" как будто он уже там, и эта проверка не ловит его
+    повторное добавление в другое перемещение (например, через "Куда везти
+    короб" — там склад-отправитель нового документа берется из ТЕКУЩЕГО
+    box.warehouse_id, то есть автоматически совпадет). Без этой отдельной
+    проверки один и тот же физический короб мог молча "уехать" сразу в два
+    разных перемещения одновременно."""
     query = MovementLine.query.join(
         MovementDocument, MovementLine.document_id == MovementDocument.id
-    ).filter(MovementLine.box_id == box.id, MovementDocument.status == "draft")
+    ).filter(
+        MovementLine.box_id == box.id,
+        or_(
+            MovementDocument.status == "draft",
+            and_(MovementDocument.status == "completed", MovementDocument.received_at.is_(None)),
+        ),
+    )
     if exclude_doc_id is not None:
         query = query.filter(MovementDocument.id != exclude_doc_id)
     return query.first()
+
+
+def _conflict_status_label(document):
+    return "черновик" if document.status == "draft" else "в пути, еще не принят"
 
 
 @bp.route("/route-box/add", methods=["POST"])
@@ -258,7 +273,8 @@ def route_box_add():
     if conflict:
         flash(
             f"Короб {box.box_number} уже отсканирован в другое перемещение "
-            f"{conflict.document.number} (черновик) — сначала уберите его оттуда.",
+            f"{conflict.document.number} ({_conflict_status_label(conflict.document)}) — "
+            f"сначала уберите его оттуда.",
             "danger",
         )
         return redirect(url_for("movement.list_documents"))
@@ -349,7 +365,8 @@ def add_box(doc_id):
     if conflict:
         flash(
             f"Короб {box.box_number} уже отсканирован в другое перемещение "
-            f"{conflict.document.number} (черновик) — сначала уберите его оттуда.",
+            f"{conflict.document.number} ({_conflict_status_label(conflict.document)}) — "
+            f"сначала уберите его оттуда.",
             "danger",
         )
         return redirect(url_for("movement.detail", doc_id=doc.id))
