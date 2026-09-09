@@ -18,6 +18,7 @@ from ..models import (
 from ..utils.excel_io import export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
+from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
 
@@ -501,4 +502,33 @@ def export_all():
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": content_disposition(fname)},
+    )
+
+
+@bp.route("/waybills.pdf")
+def export_waybills():
+    """Печать накладных по выбранным в списке перемещениям (флажки в
+    таблице) — по одной накладной на документ: номер и дата перемещения в
+    шапке, штрихкод/наименование/количество (по всем коробам документа
+    вместе) в табличной части."""
+    doc_ids = request.args.getlist("doc_ids", type=int)
+    if not doc_ids:
+        flash("Выберите хотя бы одно перемещение для печати накладной", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    documents = (
+        MovementDocument.query.filter(MovementDocument.id.in_(doc_ids))
+        .order_by(MovementDocument.created_at.desc())
+        .all()
+    )
+    if not documents:
+        flash("Перемещения не найдены", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    data = build_movement_waybills_pdf(documents)
+    fname = f"waybills_{timestamp_for_filename()}.pdf"
+    return Response(
+        data,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": content_disposition(fname, "inline")},
     )

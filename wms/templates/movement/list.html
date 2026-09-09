@@ -58,45 +58,52 @@
 </div>
 
 <div class="card p-3">
-  <table class="table">
-    <thead><tr><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th></th></tr></thead>
-    <tbody>
-    {% for d in documents %}
-      <tr>
-        <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
-        <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
-        <td>{{ d.from_warehouse.name }}</td>
-        <td>{{ d.to_warehouse.name }}</td>
-        <td>{{ d.lines.count() }}</td>
-        <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
-        <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
-        <td class="text-nowrap">
-          {% if d.status != 'completed' %}
-            <span class="text-muted">—</span>
-          {% elif d.received_at %}
-            <span class="badge bg-success" title="{{ d.received_at.strftime('%d.%m.%Y %H:%M') }}">Принято {{ d.received_at.strftime('%d.%m') }}</span>
-          {% else %}
-            <form method="post" action="{{ url_for('movement.receive', doc_id=d.id) }}">
-              <button type="submit" class="btn btn-sm btn-warning" title="Товар считается «в пути», пока не нажата эта кнопка">📥 Принято на складе</button>
-            </form>
-          {% endif %}
-        </td>
-        <td class="text-center">
-          <form method="post" action="{{ url_for('movement.toggle_accounting', doc_id=d.id) }}"
-                title="{{ 'Внесено в 1С бухгалтерией ' + d.accounting_entered_at.strftime('%d.%m.%Y %H:%M') if d.accounting_entered_at else 'Отметить: бухгалтерия внесла документ в 1С' }}">
-            <button type="submit" class="btn btn-sm btn-link p-0" style="font-size:1.15rem; line-height:1; text-decoration:none;">{{ '✅' if d.accounting_entered_at else '☐' }}</button>
-          </form>
-        </td>
-        <td>
-          <a href="{{ url_for('movement.detail', doc_id=d.id) }}">Открыть</a>
-          · <a href="{{ url_for('movement.export_document', doc_id=d.id) }}">Excel</a>
-        </td>
-      </tr>
-    {% else %}
-      <tr><td colspan="10" class="text-muted">Перемещений еще нет</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <form method="get" action="{{ url_for('movement.export_waybills') }}" id="waybillsForm">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="form-check">
+        <input type="checkbox" class="form-check-input" id="selectAllDocs">
+        <label class="form-check-label" for="selectAllDocs">Выбрать все</label>
+      </div>
+      <button type="submit" class="btn btn-outline-secondary btn-sm" id="printWaybillsBtn" disabled>🖨️ Печать накладных по выбранным (<span id="selectedDocsCount">0</span>)</button>
+    </div>
+    <table class="table">
+      <thead><tr><th></th><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th></th></tr></thead>
+      <tbody>
+      {% for d in documents %}
+        <tr>
+          <td><input type="checkbox" class="form-check-input doc-checkbox" name="doc_ids" value="{{ d.id }}"></td>
+          <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+          <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>{{ d.from_warehouse.name }}</td>
+          <td>{{ d.to_warehouse.name }}</td>
+          <td>{{ d.lines.count() }}</td>
+          <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
+          <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
+          <td class="text-nowrap">
+            {% if d.status != 'completed' %}
+              <span class="text-muted">—</span>
+            {% elif d.received_at %}
+              <span class="badge bg-success" title="{{ d.received_at.strftime('%d.%m.%Y %H:%M') }}">Принято {{ d.received_at.strftime('%d.%m') }}</span>
+            {% else %}
+              <button type="submit" formmethod="post" formaction="{{ url_for('movement.receive', doc_id=d.id) }}" class="btn btn-sm btn-warning" title="Товар считается «в пути», пока не нажата эта кнопка">📥 Принято на складе</button>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            <button type="submit" formmethod="post" formaction="{{ url_for('movement.toggle_accounting', doc_id=d.id) }}"
+                  title="{{ 'Внесено в 1С бухгалтерией ' + d.accounting_entered_at.strftime('%d.%m.%Y %H:%M') if d.accounting_entered_at else 'Отметить: бухгалтерия внесла документ в 1С' }}"
+                  class="btn btn-sm btn-link p-0" style="font-size:1.15rem; line-height:1; text-decoration:none;">{{ '✅' if d.accounting_entered_at else '☐' }}</button>
+          </td>
+          <td>
+            <a href="{{ url_for('movement.detail', doc_id=d.id) }}">Открыть</a>
+            · <a href="{{ url_for('movement.export_document', doc_id=d.id) }}">Excel</a>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="11" class="text-muted">Перемещений еще нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </form>
 </div>
 {% endblock %}
 
@@ -116,5 +123,31 @@
       { debounceMs: 900 }
     );
   }
+
+  // Печать накладных доступна только когда выбран хотя бы один документ;
+  // "Выбрать все" отмечает/снимает все флажки разом.
+  const selectAllDocs = document.getElementById("selectAllDocs");
+  const docCheckboxes = Array.from(document.querySelectorAll(".doc-checkbox"));
+  const printWaybillsBtn = document.getElementById("printWaybillsBtn");
+  const selectedDocsCount = document.getElementById("selectedDocsCount");
+
+  function updatePrintButtonState() {
+    const checkedCount = docCheckboxes.filter((cb) => cb.checked).length;
+    printWaybillsBtn.disabled = checkedCount === 0;
+    printWaybillsBtn.classList.toggle("btn-outline-secondary", checkedCount === 0);
+    printWaybillsBtn.classList.toggle("btn-primary", checkedCount > 0);
+    selectedDocsCount.textContent = checkedCount;
+  }
+
+  if (selectAllDocs) {
+    selectAllDocs.addEventListener("change", () => {
+      docCheckboxes.forEach((cb) => { cb.checked = selectAllDocs.checked; });
+      updatePrintButtonState();
+    });
+  }
+  docCheckboxes.forEach((cb) => cb.addEventListener("change", () => {
+    if (!cb.checked) selectAllDocs.checked = false;
+    updatePrintButtonState();
+  }));
 </script>
 {% endblock %}
