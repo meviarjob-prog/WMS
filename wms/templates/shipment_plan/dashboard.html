@@ -111,7 +111,7 @@
       {% for p in picking_list %}
         <tr{% if p.no_stock %} class="table-danger"{% endif %} data-search-text="{{ (p.article or '') ~ ' ' ~ p.barcode }}">
           <td>{{ p.article }}</td>
-          <td>{{ p.size }}</td>
+          <td>{{ p.size or '' }}</td>
           <td>{{ p.barcode }}</td>
           <td class="text-nowrap">{% if p.no_stock %}<span class="badge bg-danger" title="Нет на складе-отправителе">нет на складе</span>{% endif %}</td>
           <td class="text-end">{% if p.unplaced %}{{ p.unplaced | round(0) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
