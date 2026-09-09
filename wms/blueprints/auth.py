@@ -49,14 +49,23 @@ def _require_admin():
 @login_required
 def users():
     """Страница «Настройки» администратора: управление пользователями и
-    доступом к разделам, плюс получатели для стикеров отправления
-    перемещений (см. warehouses.update_recipient) — все административные
+    доступом к разделам, плюс получатели и отправитель для стикеров
+    отправления перемещений (см. warehouses.update_recipient и
+    movement.update_shipping_label_sender) — все административные
     настройки в одном месте, вместо разбросанных по разным разделам."""
     if not _require_admin():
         return redirect(url_for("main.index"))
+    from .movement import get_shipping_label_sender_override
+
     all_users = User.query.order_by(User.username).all()
     warehouses = Warehouse.query.order_by(Warehouse.code).all()
-    return render_template("auth/users.html", users=all_users, sections=SECTIONS, warehouses=warehouses)
+    return render_template(
+        "auth/users.html",
+        users=all_users,
+        sections=SECTIONS,
+        warehouses=warehouses,
+        shipping_label_sender=get_shipping_label_sender_override(),
+    )
 
 
 @bp.route("/users/create", methods=["POST"])

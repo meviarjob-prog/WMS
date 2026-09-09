@@ -134,8 +134,20 @@
   </div>
 </div>
 
-<h5 class="mb-3">Стикеры перемещений — получатели по складам</h5>
-<p class="text-muted small">Печатаются на стикерах отправления (см. «Перемещение» → печать стикеров по выбранным документам) — название/адрес/телефон получателя на складе назначения, в первую очередь для складов-городов маркетплейсов.</p>
+<h5 class="mb-3">Стикеры перемещений</h5>
+<p class="text-muted small">Печатаются на стикерах отправления (см. «Перемещение» → печать стикеров по выбранным документам).</p>
+
+<div class="card p-3 mb-3">
+  <h6>Отправитель — сразу на все направления</h6>
+  <p class="text-muted small mb-2">Если задано — печатается на всех стикерах вместо названия фактического склада-отправителя каждого документа. Пустое поле возвращает поведение по умолчанию (свой склад-отправитель на каждом направлении).</p>
+  <form method="post" action="{{ url_for('movement.update_shipping_label_sender') }}" class="d-flex gap-1" style="max-width:480px">
+    <input type="text" name="sender" value="{{ shipping_label_sender or '' }}" class="form-control form-control-sm" placeholder="Название, адрес, телефон (необязательно)">
+    <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+  </form>
+</div>
+
+<h6>Получатели по складам</h6>
+<p class="text-muted small">Название/адрес/телефон получателя на складе назначения, в первую очередь для складов-городов маркетплейсов.</p>
 <div class="card p-3">
   <table class="table table-sm">
     <thead><tr><th>Код</th><th>Склад</th><th>Получатель</th></tr></thead>

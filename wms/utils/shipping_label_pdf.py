@@ -33,21 +33,26 @@ def _draw_shipping_label(c, *, destination_name, recipient_info, sender_name):
         ty -= 3.6 * mm
 
 
-def build_movement_shipping_labels_pdf(documents) -> bytes:
+def build_movement_shipping_labels_pdf(documents, sender_override=None) -> bytes:
     """Печатает столько одинаковых стикеров, сколько коробов в документе —
     по одному на каждый короб перемещения, но без привязки к конкретному
     коробу (все стикеры одного документа идентичны: только маршрут и
-    получатель, без номера/штрихкода короба)."""
+    получатель, без номера/штрихкода короба).
+
+    sender_override — если задан, печатается как "Отправитель" вместо
+    названия фактического склада-отправителя, сразу для всех документов
+    (единый отправитель на все направления, настраивается в «Настройки»)."""
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
     for document in documents:
         box_count = document.lines.count()
+        sender_name = sender_override or document.from_warehouse.name
         for _ in range(box_count):
             _draw_shipping_label(
                 c,
                 destination_name=document.to_warehouse.name,
                 recipient_info=document.to_warehouse.recipient_info,
-                sender_name=document.from_warehouse.name,
+                sender_name=sender_name,
             )
             c.showPage()
     c.save()

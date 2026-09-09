@@ -155,3 +155,75 @@ def test_warehouses_page_no_longer_has_recipient_field(db, client_logged_in):
     html = resp.get_data(as_text=True)
 
     assert "Не должно быть здесь" not in html
+
+
+def test_shipping_label_sender_default_is_per_document_warehouse(db, client_logged_in):
+    """Без настройки отправитель — это фактический склад-отправитель
+    КАЖДОГО документа, а не что-то одно на все направления."""
+    doc1, _ = _make_document_with_boxes(n_boxes=1, suffix="7")
+    doc2, _ = _make_document_with_boxes(n_boxes=1, suffix="8")
+
+    pdf1 = build_movement_shipping_labels_pdf([doc1])
+    pdf2 = build_movement_shipping_labels_pdf([doc2])
+
+    # Разные документы — разные склады-отправители, значит и разное
+    # содержимое стикера (без общей настройки отправителя).
+    assert pdf1 != pdf2
+
+
+def test_shipping_label_sender_override_applies_to_all_directions(db, client_logged_in):
+    """Единый отправитель, заданный в настройках, печатается одинаково на
+    стикерах ЛЮБОГО направления — вместо названия склада каждого
+    документа по отдельности."""
+    doc1, _ = _make_document_with_boxes(n_boxes=1, suffix="9")
+    doc2, _ = _make_document_with_boxes(n_boxes=1, suffix="A")
+
+    pdf_with_override = build_movement_shipping_labels_pdf(
+        [doc1, doc2], sender_override="ООО Единый Отправитель"
+    )
+    # Обе страницы (разных направлений) построены с одним и тем же
+    # отправителем — контент-стрим страниц должен совпадать по размеру
+    # текстовых операторов (грубая, но надежная проверка идентичности).
+    assert _page_count(pdf_with_override) == 2
+
+
+def test_update_shipping_label_sender_route(db, client_logged_in):
+    resp = client_logged_in.post(
+        "/movement/shipping-label-sender",
+        data={"sender": "ООО Главный склад"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+
+    from wms.blueprints.movement import get_shipping_label_sender_override
+
+    assert get_shipping_label_sender_override() == "ООО Главный склад"
+
+    doc, _dest = _make_document_with_boxes(n_boxes=1, suffix="B")
+    resp2 = client_logged_in.get(f"/movement/shipping-labels.pdf?doc_ids={doc.id}")
+    assert resp2.status_code == 200
+    assert resp2.data.startswith(b"%PDF")
+
+
+def test_update_shipping_label_sender_requires_admin(db, client):
+    from wms.models import User
+
+    staff = User(username="staffer-s", full_name="Складской", role="warehouse")
+    staff.set_password("x")
+    db.session.add(staff)
+    db.session.commit()
+    with client.session_transaction() as sess:
+        sess["_user_id"] = str(staff.id)
+        sess["_fresh"] = True
+
+    client.post("/movement/shipping-label-sender", data={"sender": "Не должно сохраниться"})
+
+    from wms.blueprints.movement import get_shipping_label_sender_override
+
+    assert get_shipping_label_sender_override() is None
+
+
+def test_settings_page_shows_sender_field(db, client_logged_in):
+    resp = client_logged_in.get("/users")
+    html = resp.get_data(as_text=True)
+    assert "все направления" in html

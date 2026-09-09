@@ -6,6 +6,7 @@ from sqlalchemy import and_, func, or_
 
 from ..extensions import db
 from ..models import (
+    AppSetting,
     Box,
     BoxItem,
     Cell,
@@ -22,6 +23,16 @@ from ..utils.shipping_label_pdf import build_movement_shipping_labels_pdf
 from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
+
+SHIPPING_LABEL_SENDER_KEY = "movement_shipping_label_sender"
+
+
+def get_shipping_label_sender_override():
+    """Если задано — печатается на стикерах отправления как "Отправитель"
+    вместо названия конкретного склада-отправителя документа, сразу для
+    всех направлений (не нужно менять по одному на каждый склад)."""
+    setting = AppSetting.query.get(SHIPPING_LABEL_SENDER_KEY)
+    return setting.value if setting and setting.value else None
 
 
 def _apply_shipment_fulfillment(box, warehouse_id):
@@ -577,7 +588,8 @@ def export_waybills():
 def export_shipping_labels():
     """Стикеры отправления 58x40мм по выбранным в списке перемещениям —
     один стикер на каждый короб документа, с получателем склада назначения
-    (настраивается в «Склады и ячейки») и отправителем."""
+    (настраивается в «Настройки») и отправителем (там же — либо название
+    склада-отправителя документа, либо единый текст на все направления)."""
     doc_ids = request.args.getlist("doc_ids", type=int)
     if not doc_ids:
         flash("Выберите хотя бы одно перемещение для печати стикеров", "danger")
@@ -592,10 +604,31 @@ def export_shipping_labels():
         flash("Перемещения не найдены", "danger")
         return redirect(url_for("movement.list_documents"))
 
-    data = build_movement_shipping_labels_pdf(documents)
+    data = build_movement_shipping_labels_pdf(documents, sender_override=get_shipping_label_sender_override())
     fname = f"shipping_labels_{timestamp_for_filename()}.pdf"
     return Response(
         data,
         mimetype="application/pdf",
         headers={"Content-Disposition": content_disposition(fname, "inline")},
     )
+
+
+@bp.route("/shipping-label-sender", methods=["POST"])
+def update_shipping_label_sender():
+    """Единый "Отправитель" для стикеров отправления сразу на все
+    направления — чтобы не менять склад-отправитель на каждом из них по
+    отдельности. Пустое значение возвращает поведение по умолчанию:
+    название фактического склада-отправителя каждого документа."""
+    if not current_user.is_admin:
+        flash("Настраивать отправителя может только администратор", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    value = request.form.get("sender", "").strip() or None
+    setting = AppSetting.query.get(SHIPPING_LABEL_SENDER_KEY)
+    if not setting:
+        setting = AppSetting(key=SHIPPING_LABEL_SENDER_KEY)
+        db.session.add(setting)
+    setting.value = value
+    db.session.commit()
+    flash("Отправитель для стикеров перемещений обновлен", "success")
+    return redirect(url_for("auth.users"))
