@@ -57,3 +57,33 @@ def test_find_by_scanned_code_no_match_returns_none(db):
     _make_warehouse()
     assert Box.find_by_scanned_code("999999") is None
     assert Box.find_by_scanned_code("") is None
+
+
+def test_find_by_scanned_code_digit_scan_does_not_full_scan(db):
+    """Раньше цифровой код (реальный скан штрихкода) ВСЕГДА проваливался в
+    LIKE '%code' с ведущим '%' — такой LIKE не может использовать индекс и
+    означает полное сканирование таблицы boxes на каждый скан короба. При
+    десятках-сотнях тысяч коробов это и давало заметные тормоза в приемке/
+    размещении/перемещении. Проверяем, что для штатного случая (код той же
+    ширины, что и в номерах коробов) запрос идет точным совпадением, а не
+    LIKE — соответствующий SQL не должен встречаться вовсе."""
+    wh = _make_warehouse()
+    box = Box(box_number="BOX-000123", warehouse_id=wh.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+
+    from sqlalchemy import event
+
+    statements = []
+
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(db.engine, "before_cursor_execute", _capture)
+    try:
+        found = Box.find_by_scanned_code("000123")
+    finally:
+        event.remove(db.engine, "before_cursor_execute", _capture)
+
+    assert found.id == box.id
+    assert not any("LIKE" in s.upper() for s in statements), statements

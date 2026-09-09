@@ -147,7 +147,7 @@ class Cell(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
-    zone_id = db.Column(db.Integer, db.ForeignKey("zones.id"), nullable=True)
+    zone_id = db.Column(db.Integer, db.ForeignKey("zones.id"), nullable=True, index=True)
     code = db.Column(db.String(50), nullable=False)
     description = db.Column(db.String(200))
     is_active = db.Column(db.Boolean, nullable=False, default=True)
@@ -242,10 +242,10 @@ class Box(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     box_number = db.Column(db.String(30), unique=True, nullable=False)
-    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
-    cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"), nullable=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False, index=True)
+    cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"), nullable=True, index=True)
     placement_document_id = db.Column(
-        db.Integer, db.ForeignKey("placement_documents.id"), nullable=True
+        db.Integer, db.ForeignKey("placement_documents.id"), nullable=True, index=True
     )
     status = db.Column(db.String(20), nullable=False, default="open")  # open | stored
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -282,7 +282,30 @@ class Box(db.Model):
         if warehouse_id is not None:
             query = query.filter_by(warehouse_id=warehouse_id)
         box = query.filter_by(box_number=code).first()
-        if box is None and code.isdigit():
+        if box is not None:
+            return box
+        if code.isdigit():
+            # Реальный скан штрихкода — это именно цифровой код (см.
+            # barcode_value), а не полный box_number, так что первый поиск
+            # выше почти никогда не находит совпадение и раньше ВСЕГДА
+            # проваливался в LIKE "%code" — а такой LIKE с ведущим "%" не
+            # может использовать индекс и означает полное сканирование
+            # таблицы boxes на КАЖДЫЙ скан короба. При десятках-сотнях тысяч
+            # коробов это и давало заметные тормоза именно там, где сканируют
+            # чаще всего (приемка, размещение, перемещение). Номер короба
+            # всегда имеет вид "<префикс><цифры фиксированной ширины>"
+            # (см. utils.numbering.SERIES["box"]), поэтому сначала пробуем
+            # восстановить точный номер и найти его обычным (быстрым,
+            # индексированным) точным совпадением.
+            from .utils.numbering import SERIES
+
+            prefix, width = SERIES["box"]
+            if len(code) == width:
+                box = query.filter_by(box_number=f"{prefix}{code}").first()
+                if box is not None:
+                    return box
+            # Редкий случай (код нестандартной ширины/легаси-номер) —
+            # полное сканирование как раньше, только если быстрый путь не сработал.
             box = query.filter(Box.box_number.like(f"%{code}")).first()
         return box
 
@@ -294,8 +317,8 @@ class BoxItem(db.Model):
     __tablename__ = "box_items"
 
     id = db.Column(db.Integer, primary_key=True)
-    box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=False)
-    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
+    box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=False, index=True)
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False, index=True)
     qty = db.Column(db.Float, nullable=False, default=0)
 
     nomenclature = db.relationship("Nomenclature")
@@ -332,7 +355,7 @@ class ReceivingLine(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     document_id = db.Column(
-        db.Integer, db.ForeignKey("receiving_documents.id"), nullable=False
+        db.Integer, db.ForeignKey("receiving_documents.id"), nullable=False, index=True
     )
     nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
     qty = db.Column(db.Float, nullable=False, default=0)
@@ -380,7 +403,7 @@ class PlacementLine(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     document_id = db.Column(
-        db.Integer, db.ForeignKey("placement_documents.id"), nullable=False
+        db.Integer, db.ForeignKey("placement_documents.id"), nullable=False, index=True
     )
     nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
     qty = db.Column(db.Float, nullable=False, default=0)
@@ -401,7 +424,7 @@ class MovementDocument(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     number = db.Column(db.String(30), unique=True, nullable=False)
     from_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
-    to_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    to_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False, index=True)
     status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -433,7 +456,7 @@ class MovementLine(db.Model):
     __tablename__ = "movement_lines"
 
     id = db.Column(db.Integer, primary_key=True)
-    document_id = db.Column(db.Integer, db.ForeignKey("movement_documents.id"), nullable=False)
+    document_id = db.Column(db.Integer, db.ForeignKey("movement_documents.id"), nullable=False, index=True)
     box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=False)
 
     from_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"))
@@ -578,10 +601,10 @@ class ShipmentPlanLine(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     plan_id = db.Column(db.Integer, db.ForeignKey("shipment_plans.id"), nullable=False)
-    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False, index=True)
     # Пусто, если штрихкод из плана не найден в номенклатуре — строка все
     # равно сохраняется, чтобы такие позиции было видно на дашборде.
-    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=True)
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=True, index=True)
     barcode = db.Column(db.String(50), nullable=False)
     article = db.Column(db.String(200))
     size = db.Column(db.String(50))

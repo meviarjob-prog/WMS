@@ -58,6 +58,36 @@ def _ensure_columns():
                 print(f"[schema] Не удалось добавить {table.name}.{column.name}: {exc}")
 
 
+def _ensure_indexes():
+    """Аналогично _ensure_columns(), но для индексов: index=True в модели
+    заставляет create_all() создать индекс только для НОВОЙ таблицы — для
+    уже существующей (обычный случай на работающем сервере) create_all()
+    таблицу не трогает вообще, и индекс, добавленный в код позже, сам по
+    себе на старой базе не появится. Без него запрос, для которого индекс
+    и добавляли, продолжит делать полное сканирование таблицы — тем
+    медленнее, чем больше в ней строк успело накопиться.
+    CREATE INDEX IF NOT EXISTS идемпотентен, поэтому просто повторяем его
+    при каждом старте вместо сверки с уже существующими индексами."""
+    inspector = inspect(db.engine)
+    for table in db.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        for column in table.columns:
+            if not column.index:
+                continue
+            index_name = f"ix_{table.name}_{column.name}"
+            try:
+                with db.engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            f'CREATE INDEX IF NOT EXISTS "{index_name}" '
+                            f'ON "{table.name}" ("{column.name}")'
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[schema] Не удалось создать индекс {index_name}: {exc}")
+
+
 def _register_sqlite_tuning():
     """SQLite-специфичные настройки:
     - LOWER/UPPER на Python-реализации (сравнение LIKE/ILIKE по умолчанию
@@ -177,6 +207,7 @@ def create_app(config_class=Config):
 
         db.create_all()
         _ensure_columns()
+        _ensure_indexes()
         _bootstrap_admin()
         bootstrap_categories()
 
