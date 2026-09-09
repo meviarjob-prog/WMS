@@ -7,6 +7,7 @@ from wms.models import (
     Box,
     BoxItem,
     MovementDocument,
+    MovementLine,
     Nomenclature,
     ShipmentPlan,
     ShipmentPlanLine,
@@ -127,3 +128,83 @@ def test_routing_add_creates_draft_movement_and_reuses_it(db, client_logged_in):
     ).all()
     assert len(docs) == 1  # второй вызов не создал новый документ
     assert docs[0].lines.count() == 2
+
+
+def test_route_box_add_blocks_box_already_in_other_draft_movement(db, client_logged_in):
+    """Один короб нельзя одновременно отсканировать сразу в два разных
+    черновика перемещения — пока черновик не завершен, warehouse_id короба
+    не меняется, поэтому такое задвоение раньше проходило молча."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    other_city = Warehouse(
+        code="WH-CTY2", name="ОЗОН: Другой город", marketplace="ozon", marketplace_city="Другой город"
+    )
+    db.session.add(other_city)
+    db.session.commit()
+    box = _make_box(sender, item, qty=10, box_number="BOX-000009")
+
+    client_logged_in.post("/movement/route-box/add", data={"box_id": box.id, "to_warehouse_id": city.id})
+
+    resp = client_logged_in.post(
+        "/movement/route-box/add",
+        data={"box_id": box.id, "to_warehouse_id": other_city.id},
+        follow_redirects=True,
+    )
+
+    html = resp.get_data(as_text=True)
+    assert "уже отсканирован в другое перемещение" in html
+    assert MovementLine.query.filter_by(box_id=box.id).count() == 1
+
+
+def test_add_box_blocks_box_already_in_other_draft_movement(db, client_logged_in):
+    """Та же блокировка при добавлении короба вручную на странице
+    конкретного документа перемещения (не только через «Куда везти
+    короб»)."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    box = _make_box(sender, item, qty=10, box_number="BOX-000010")
+
+    client_logged_in.post(
+        "/movement/new", data={"from_warehouse_id": sender.id, "to_warehouse_id": city.id}
+    )
+    doc1 = MovementDocument.query.filter_by(from_warehouse_id=sender.id, to_warehouse_id=city.id).first()
+    client_logged_in.post(f"/movement/{doc1.id}/boxes/add", data={"box_number": box.box_number})
+    assert doc1.lines.count() == 1
+
+    other_city = Warehouse(code="WH-CTY3", name="Другой склад назначения")
+    db.session.add(other_city)
+    db.session.commit()
+    client_logged_in.post(
+        "/movement/new", data={"from_warehouse_id": sender.id, "to_warehouse_id": other_city.id}
+    )
+    doc2 = MovementDocument.query.filter_by(
+        from_warehouse_id=sender.id, to_warehouse_id=other_city.id
+    ).first()
+
+    resp = client_logged_in.post(
+        f"/movement/{doc2.id}/boxes/add", data={"box_number": box.box_number}, follow_redirects=True
+    )
+
+    html = resp.get_data(as_text=True)
+    assert "уже отсканирован в другое перемещение" in html
+    assert doc2.lines.count() == 0
+
+
+def test_add_box_same_document_duplicate_message_unaffected(db, client_logged_in):
+    """Повторное сканирование короба в ТОТ ЖЕ документ — это отдельный,
+    уже существующий (и не блокирующий по смыслу теста) случай, который
+    новая проверка не должна затронуть."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    box = _make_box(sender, item, qty=10, box_number="BOX-000011")
+
+    client_logged_in.post(
+        "/movement/new", data={"from_warehouse_id": sender.id, "to_warehouse_id": city.id}
+    )
+    doc = MovementDocument.query.filter_by(from_warehouse_id=sender.id, to_warehouse_id=city.id).first()
+    client_logged_in.post(f"/movement/{doc.id}/boxes/add", data={"box_number": box.box_number})
+
+    resp = client_logged_in.post(
+        f"/movement/{doc.id}/boxes/add", data={"box_number": box.box_number}, follow_redirects=True
+    )
+
+    html = resp.get_data(as_text=True)
+    assert "уже в этом списке" in html
+    assert doc.lines.count() == 1

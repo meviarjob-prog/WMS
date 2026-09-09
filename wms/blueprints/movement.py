@@ -156,6 +156,21 @@ def _create_movement_line(doc, box):
     return line
 
 
+def _find_conflicting_movement_line(box, exclude_doc_id=None):
+    """Ищет строку с этим же коробом в ДРУГОМ черновике перемещения. Пока
+    перемещение не завершено (status="draft"), box.warehouse_id еще не
+    меняется — он меняется только в complete() — поэтому проверка
+    "короб не на складе-отправителе" никак не ловит короб, отсканированный
+    сразу в два разных черновика. Без этой отдельной проверки один и тот же
+    короб мог молча "уехать" сразу в два перемещения одновременно."""
+    query = MovementLine.query.join(
+        MovementDocument, MovementLine.document_id == MovementDocument.id
+    ).filter(MovementLine.box_id == box.id, MovementDocument.status == "draft")
+    if exclude_doc_id is not None:
+        query = query.filter(MovementDocument.id != exclude_doc_id)
+    return query.first()
+
+
 @bp.route("/route-box/add", methods=["POST"])
 def route_box_add():
     """Быстрое добавление короба (найденного через route_box) в перемещение
@@ -186,6 +201,15 @@ def route_box_add():
 
     if doc.lines.filter_by(box_id=box.id).first():
         flash(f"Короб {box.box_number} уже в списке перемещения {doc.number}", "warning")
+        return redirect(url_for("movement.list_documents"))
+
+    conflict = _find_conflicting_movement_line(box, exclude_doc_id=doc.id)
+    if conflict:
+        flash(
+            f"Короб {box.box_number} уже отсканирован в другое перемещение "
+            f"{conflict.document.number} (черновик) — сначала уберите его оттуда.",
+            "danger",
+        )
         return redirect(url_for("movement.list_documents"))
 
     _create_movement_line(doc, box)
@@ -268,6 +292,15 @@ def add_box(doc_id):
 
     if doc.lines.filter_by(box_id=box.id).first():
         flash(f"Короб {box.box_number} уже в этом списке", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    conflict = _find_conflicting_movement_line(box, exclude_doc_id=doc.id)
+    if conflict:
+        flash(
+            f"Короб {box.box_number} уже отсканирован в другое перемещение "
+            f"{conflict.document.number} (черновик) — сначала уберите его оттуда.",
+            "danger",
+        )
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
     _create_movement_line(doc, box)
