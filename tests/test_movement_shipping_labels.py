@@ -1,28 +1,36 @@
-"""Стикеры отправления 58x40мм по выбранным перемещениям — один стикер на
-каждый короб документа, с получателем склада назначения (настраивается в
-«Склады и ячейки», см. warehouses.update_recipient) и отправителем."""
+"""Стикеры отправления 58x40мм по выбранным перемещениям — по количеству
+коробов в документе печатается столько же одинаковых стикеров (маршрут +
+получатель + отправитель), без привязки к конкретному коробу — стикер не
+несет ни номера, ни штрихкода короба (это отдельная от «Этикетки короба»
+наклейка, см. warehouses.update_recipient для настройки получателя)."""
+
+import re
 
 from wms.extensions import db
 from wms.models import Box, BoxItem, MovementDocument, MovementLine, Nomenclature, Warehouse
 from wms.utils.shipping_label_pdf import build_movement_shipping_labels_pdf
 
 
-def _make_document_with_boxes(n_boxes=2):
-    sender = Warehouse(code="WH-L1", name="Склад-отправитель")
-    dest = Warehouse(code="WH-L2", name="ОЗОН: Казань", recipient_info="ООО Ромашка, ул. Тестовая 1, +7 900 000-00-00")
+def _make_document_with_boxes(n_boxes=2, suffix="1"):
+    sender = Warehouse(code=f"WH-L{suffix}A", name="Склад-отправитель")
+    dest = Warehouse(
+        code=f"WH-L{suffix}B",
+        name="ОЗОН: Казань",
+        recipient_info="ООО Ромашка, ул. Тестовая 1, +7 900 000-00-00",
+    )
     db.session.add_all([sender, dest])
     db.session.commit()
 
-    item = Nomenclature(sku="SKU-L1", barcode="7770000101", name="Товар для стикера", unit="шт")
+    item = Nomenclature(sku=f"SKU-L{suffix}", barcode=f"777000010{suffix}", name="Товар для стикера", unit="шт")
     db.session.add(item)
     db.session.commit()
 
-    doc = MovementDocument(number="PER-L1", from_warehouse_id=sender.id, to_warehouse_id=dest.id)
+    doc = MovementDocument(number=f"PER-L{suffix}", from_warehouse_id=sender.id, to_warehouse_id=dest.id)
     db.session.add(doc)
     db.session.commit()
 
     for i in range(n_boxes):
-        box = Box(box_number=f"BOX-00090{i}", warehouse_id=sender.id, status="open")
+        box = Box(box_number=f"BOX-0009{suffix}{i}", warehouse_id=sender.id, status="open")
         db.session.add(box)
         db.session.commit()
         db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=3))
@@ -49,14 +57,41 @@ def test_export_shipping_labels_returns_pdf(db, client_logged_in):
     assert resp.data.startswith(b"%PDF")
 
 
-def test_build_shipping_labels_one_per_box(db, client_logged_in):
+def _page_count(pdf_bytes):
+    # Считаем маркеры начала страницы PDF (не "/Pages" — родительский узел
+    # дерева страниц, который иначе тоже подошел бы под простой substring).
+    return len(re.findall(rb"/Type\s*/Page(?!s)", pdf_bytes))
+
+
+def test_build_shipping_labels_count_matches_box_count(db, client_logged_in):
     doc, _dest = _make_document_with_boxes(n_boxes=3)
 
     pdf_bytes = build_movement_shipping_labels_pdf([doc])
 
-    # Три отдельных страницы (по короб на стикер) — считаем маркеры начала
-    # страницы PDF, это надежнее, чем парсить содержимое.
-    assert pdf_bytes.count(b"/Type /Page") + pdf_bytes.count(b"/Type/Page") >= 3
+    assert _page_count(pdf_bytes) == 3
+
+
+def test_build_shipping_labels_across_documents_sums_box_counts(db, client_logged_in):
+    doc1, _dest1 = _make_document_with_boxes(n_boxes=2, suffix="1")
+    doc2, _dest2 = _make_document_with_boxes(n_boxes=4, suffix="2")
+
+    pdf_bytes = build_movement_shipping_labels_pdf([doc1, doc2])
+
+    assert _page_count(pdf_bytes) == 6
+
+
+def test_shipping_label_has_no_box_specific_barcode(db, client_logged_in):
+    """Стикеры одного документа не привязаны к конкретному коробу — на них
+    нет ни штрихкода, ни номера короба, поэтому в PDF не должно быть
+    встроенного изображения (у обычной "Этикетки короба" оно всегда есть):
+    никакого /XObject в ресурсах страницы (сам /Image — не показатель, это
+    просто стандартная декларация возможностей ProcSet, которую reportlab
+    пишет всегда, даже на чисто текстовую страницу)."""
+    doc, _dest = _make_document_with_boxes(n_boxes=2)
+
+    pdf_bytes = build_movement_shipping_labels_pdf([doc])
+
+    assert b"/XObject" not in pdf_bytes
 
 
 def test_warehouse_recipient_update(db, client_logged_in):

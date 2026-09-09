@@ -80,6 +80,32 @@ def test_routing_subtracts_already_committed_boxes(db, client_logged_in):
     assert "30 шт." not in html
 
 
+def test_routing_subtracts_boxes_already_in_transit(db, client_logged_in):
+    """Тот же принцип, что и для черновика, но короб уже физически уехал
+    (перемещение завершено), просто еще не подтвержден кнопкой "Принято на
+    складе" — такой короб тоже должен считаться "закрывающим" потребность
+    при расчете подсказки для следующего короба, иначе подсказка отправит
+    туда больше, чем реально нужно."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    box1 = _make_box(sender, item, qty=10, box_number="BOX-000001")
+    box2 = _make_box(sender, item, qty=5, box_number="BOX-000002")
+
+    client_logged_in.post(
+        "/movement/route-box/add", data={"box_id": box1.id, "to_warehouse_id": city.id}
+    )
+    doc = MovementDocument.query.filter_by(from_warehouse_id=sender.id, to_warehouse_id=city.id).first()
+    client_logged_in.post(f"/movement/{doc.id}/complete")
+    doc = MovementDocument.query.get(doc.id)
+    assert doc.status == "completed"
+    assert doc.received_at is None  # именно "в пути", не принято
+
+    resp = client_logged_in.get(f"/movement/route-box?box_number={box2.box_number}")
+    html = resp.get_data(as_text=True)
+
+    assert "20 шт." in html
+    assert "30 шт." not in html
+
+
 def test_routing_add_stays_on_scanning_page_not_document(db, client_logged_in):
     """Сборщик сканирует короба один за другим и не должен всякий раз
     улетать внутрь документа перемещения — иначе процесс распределения
