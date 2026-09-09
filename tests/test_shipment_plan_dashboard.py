@@ -91,7 +91,7 @@ def test_picking_list_keeps_full_demand_and_shows_in_transit_separately(db, clie
     snippet = html[idx : idx + 3000]
 
     assert ">30.0<" in snippet
-    assert "10.0 в пути" in snippet
+    assert "(10.0)" in snippet
     assert ">20.0<" not in snippet
 
 
@@ -108,4 +108,4 @@ def test_picking_list_keeps_item_even_when_fully_in_transit(db, client_logged_in
     idx = html.find("ART-1")
     snippet = html[idx : idx + 3000]
     assert ">10.0<" in snippet
-    assert "10.0 в пути" in snippet
+    assert "(10.0)" in snippet

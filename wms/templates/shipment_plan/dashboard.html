@@ -122,7 +122,7 @@
               {% if not line %}<span class="text-muted">—</span>
               {% elif line.remaining_qty() <= 0 %}<span class="text-muted">0</span>
               {% else %}<b>{{ line.remaining_qty() | round(0) }}</b>{% endif %}
-              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе» — в потребность слева не засчитано">&nbsp;({{ line.in_transit_qty | round(0) }} в пути)</span>{% endif %}
+              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе» — в потребность слева не засчитано">&nbsp;({{ line.in_transit_qty | round(0) }})</span>{% endif %}
             </td>
           {% endfor %}
           {% for city in wb_cities %}
@@ -131,7 +131,7 @@
               {% if not line %}<span class="text-muted">—</span>
               {% elif line.remaining_qty() <= 0 %}<span class="text-muted">0</span>
               {% else %}<b>{{ line.remaining_qty() | round(0) }}</b>{% endif %}
-              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе» — в потребность слева не засчитано">&nbsp;({{ line.in_transit_qty | round(0) }} в пути)</span>{% endif %}
+              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Уже отправлено перемещением, но еще не подтверждено кнопкой «Принято на складе» — в потребность слева не засчитано">&nbsp;({{ line.in_transit_qty | round(0) }})</span>{% endif %}
             </td>
           {% endfor %}
         </tr>
