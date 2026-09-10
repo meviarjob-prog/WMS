@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Накладная {{ doc.number }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('receiving.list_documents') }}">&larr; Приемка</a></p>
+
+<h4 class="mb-1">Накладная № {{ doc.number }}</h4>
+<div class="text-muted mb-3">
+  {% if doc.supplier %}{{ doc.supplier }} · {% endif %}{{ doc.warehouse.name }}
+  {% if doc.status == 'completed' %} · <span class="badge bg-success">Завершена</span>{% endif %}
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div class="fw-bold" id="confirmProgress">Отмечено: {{ confirmed_count }} из {{ lines|length }}</div>
+  {% if doc.status == 'draft' %}
+  <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}"
+        onsubmit="return confirm('Завершить приемку? Неотмеченные позиции тоже зачтутся по указанному количеству.');">
+    <button type="submit" class="btn btn-success btn-sm">✅ Завершить приемку</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="list-group">
+{% for line in lines %}
+  <div class="list-group-item d-flex align-items-center gap-3 py-3"
+       data-confirm-url="{{ url_for('receiving.confirm_line', doc_id=doc.id, line_id=line.id) }}">
+    <div class="flex-grow-1">
+      <div>{{ line.nomenclature.name }}</div>
+      {% if line.expected_qty is not none %}
+        <div class="text-muted small">По накладной: {{ line.expected_qty | round(3) }} {{ line.nomenclature.unit }}</div>
+      {% endif %}
+    </div>
+    <input type="number" step="0.001" min="0" class="form-control form-control-lg qty-input" style="width:140px"
+           value="{{ line.qty | round(3) }}" {% if doc.status != 'draft' %}disabled{% endif %}>
+    <div class="form-check form-switch mb-0">
+      <input class="form-check-input confirm-checkbox" type="checkbox" role="switch" style="width:3em; height:1.5em"
+             {% if line.confirmed %}checked{% endif %} {% if doc.status != 'draft' %}disabled{% endif %}>
+    </div>
+  </div>
+{% else %}
+  <div class="list-group-item text-muted">Позиций еще нет</div>
+{% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll(".list-group-item[data-confirm-url]").forEach((row) => {
+    const confirmUrl = row.dataset.confirmUrl;
+    const qtyInput = row.querySelector(".qty-input");
+    const checkbox = row.querySelector(".confirm-checkbox");
+
+    function save() {
+      fetch(confirmUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ qty: qtyInput.value, confirmed: checkbox.checked }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.ok) {
+            document.getElementById("confirmProgress").textContent =
+              "Отмечено: " + data.confirmed_count + " из " + data.total_count;
+          }
+        });
+    }
+
+    if (qtyInput) qtyInput.addEventListener("change", save);
+    if (checkbox) checkbox.addEventListener("change", save);
+  });
+</script>
+{% endblock %}

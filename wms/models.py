@@ -376,6 +376,25 @@ class BoxItem(db.Model):
     nomenclature = db.relationship("Nomenclature")
 
 
+class Supplier(db.Model):
+    """Справочник поставщиков — заполняется автоматически при загрузке
+    приходной накладной (см. receiving.import_invoice), чтобы не вводить
+    реквизиты вручную каждый раз для одного и того же поставщика. Поиск
+    существующего при загрузке — сначала по ИНН (надежный уникальный
+    идентификатор), и только если его нет в файле — по точному названию."""
+
+    __tablename__ = "suppliers"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(300), nullable=False)
+    inn = db.Column(db.String(20), unique=True, nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<Supplier {self.name}>"
+
+
 class ReceivingDocument(db.Model):
     """Приемка товара — только количество по позициям, без коробов и ячеек.
     Размещение принятого товара в короба/ячейки выполняется отдельной
@@ -387,6 +406,10 @@ class ReceivingDocument(db.Model):
     number = db.Column(db.String(30), unique=True, nullable=False)
     warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     supplier = db.Column(db.String(200))
+    # Заполняется при загрузке приходной накладной (см. supplier — свободный
+    # текст остается для отображения и для случаев ручного создания приемки,
+    # когда справочника поставщиков еще может не быть).
+    supplier_id = db.Column(db.Integer, db.ForeignKey("suppliers.id"), nullable=True)
     status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -394,6 +417,7 @@ class ReceivingDocument(db.Model):
 
     warehouse = db.relationship("Warehouse")
     created_by = db.relationship("User")
+    supplier_ref = db.relationship("Supplier")
     lines = db.relationship(
         "ReceivingLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
     )
@@ -416,6 +440,16 @@ class ReceivingLine(db.Model):
     # и при завершении приемки НЕ уходит в неразмещенный остаток. Пусто —
     # обычная приемка "по количеству", разместить в короб позже вручную.
     box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=True)
+    # Заполняется только при создании строки из накладной (см.
+    # receiving.import_invoice) — сколько заявлено поставщиком, для
+    # сравнения при приемке. NULL — строка добавлена вручную/сканированием,
+    # сверять не с чем.
+    expected_qty = db.Column(db.Float, nullable=True)
+    # Отметка кладовщика "принято" на мобильной форме приемки по накладной
+    # (см. receiving.confirm_invoice) — не влияет на остатки сама по себе,
+    # только на прогресс сверки; остатки формирует qty при завершении
+    # приемки, как обычно.
+    confirmed = db.Column(db.Boolean, nullable=False, default=False)
 
     nomenclature = db.relationship("Nomenclature")
     box = db.relationship("Box")

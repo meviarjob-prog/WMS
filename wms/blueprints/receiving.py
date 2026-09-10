@@ -14,10 +14,11 @@ from flask_login import current_user
 from sqlalchemy import func
 
 from ..extensions import db
-from ..models import Box, BoxItem, Nomenclature, ReceivingDocument, ReceivingLine, UnplacedStock
+from ..models import Box, BoxItem, Nomenclature, ReceivingDocument, ReceivingLine, Supplier, UnplacedStock
 from ..utils.excel_io import export_receiving_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
+from ..utils.receiving_invoice_import import InvoiceParseError, parse_invoice
 
 bp = Blueprint("receiving", __name__)
 
@@ -53,6 +54,147 @@ def new_document():
     db.session.commit()
     flash(f"Документ приемки {doc.number} создан", "success")
     return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+
+def _find_or_create_supplier(name, inn, phone):
+    supplier = None
+    if inn:
+        supplier = Supplier.query.filter_by(inn=inn).first()
+    if not supplier:
+        supplier = Supplier.query.filter_by(name=name).first()
+    if not supplier:
+        supplier = Supplier(name=name, inn=inn, phone=phone)
+        db.session.add(supplier)
+        db.session.flush()
+    return supplier
+
+
+@bp.route("/import-invoice", methods=["GET", "POST"])
+def import_invoice_form():
+    """Загрузка приходной накладной из 1С (см.
+    utils.receiving_invoice_import) — вместо ручного создания документа и
+    добавления позиций одна за другой: номер накладной становится номером
+    приемки, поставщик определяется из файла (и заводится в справочник,
+    если его еще нет), товары и количество подставляются из накладной.
+    Дальше кладовщик сверяет их на мобильной форме (см. confirm_invoice)."""
+    from ..models import Warehouse
+
+    if request.method == "GET":
+        warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
+        return render_template("receiving/import_invoice.html", warehouses=warehouses)
+
+    warehouse_id = request.form.get("warehouse_id", type=int)
+    if not warehouse_id:
+        flash("Выберите склад приемки", "danger")
+        return redirect(url_for("receiving.import_invoice_form"))
+
+    file = request.files.get("file")
+    if not file or file.filename == "":
+        flash("Выберите файл накладной (.xlsx)", "danger")
+        return redirect(url_for("receiving.import_invoice_form"))
+
+    try:
+        invoice = parse_invoice(file.stream)
+    except InvoiceParseError as exc:
+        flash(f"Не удалось разобрать файл накладной: {exc}", "danger")
+        return redirect(url_for("receiving.import_invoice_form"))
+
+    if ReceivingDocument.query.filter_by(number=invoice.invoice_number).first():
+        flash(f"Накладная № {invoice.invoice_number} уже была загружена раньше", "danger")
+        return redirect(url_for("receiving.import_invoice_form"))
+
+    supplier = _find_or_create_supplier(invoice.supplier_name, invoice.supplier_inn, invoice.supplier_phone)
+
+    doc = ReceivingDocument(
+        number=invoice.invoice_number,
+        warehouse_id=warehouse_id,
+        supplier=supplier.name,
+        supplier_id=supplier.id,
+        created_by_id=current_user.id,
+    )
+    db.session.add(doc)
+    db.session.flush()
+
+    matched = 0
+    unmatched_names = []
+    for row in invoice.rows:
+        item = Nomenclature.query.filter_by(sku=row["code"]).first() if row["code"] else None
+        if not item:
+            unmatched_names.append(row["name"])
+            continue
+        db.session.add(
+            ReceivingLine(
+                document_id=doc.id,
+                nomenclature_id=item.id,
+                qty=row["qty"],
+                expected_qty=row["qty"],
+            )
+        )
+        matched += 1
+    db.session.commit()
+
+    message = f"Накладная № {doc.number} загружена: {matched} поз. от «{supplier.name}»"
+    if unmatched_names:
+        shown = ", ".join(unmatched_names[:5])
+        more = "…" if len(unmatched_names) > 5 else ""
+        message += (
+            f". Не найдено по коду в номенклатуре: {len(unmatched_names)} поз. "
+            f"({shown}{more}) — добавьте их в документ вручную"
+        )
+    flash(message, "warning" if unmatched_names else "success")
+    return redirect(url_for("receiving.confirm_invoice", doc_id=doc.id))
+
+
+@bp.route("/<int:doc_id>/confirm")
+def confirm_invoice(doc_id):
+    """Упрощенная мобильная форма приемки по загруженной накладной —
+    специально без коробов/ячеек и прочих возможностей обычной приемки:
+    список товаров, ожидаемое количество, поле для фактического и галочка
+    "принято", чтобы кладовщику было удобно свериться с телефона."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    lines = doc.lines.order_by(ReceivingLine.id).all()
+    confirmed_count = sum(1 for line in lines if line.confirmed)
+    return render_template(
+        "receiving/confirm_invoice.html", doc=doc, lines=lines, confirmed_count=confirmed_count
+    )
+
+
+@bp.route("/<int:doc_id>/lines/<int:line_id>/confirm", methods=["POST"])
+def confirm_line(doc_id, line_id):
+    """AJAX: сохраняет фактическое количество и отметку "принято" для одной
+    строки накладной — без перезагрузки страницы, чтобы сверка на телефоне
+    шла быстро, строка за строкой."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if doc.status != "draft":
+        return jsonify({"ok": False, "error": "Документ уже завершен"}), 400
+
+    line = ReceivingLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
+    data = request.get_json(silent=True) or {}
+    try:
+        qty = float(data.get("qty"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Некорректное количество"}), 400
+    if qty < 0:
+        return jsonify({"ok": False, "error": "Количество не может быть отрицательным"}), 400
+
+    if line.box_id:
+        box_item = BoxItem.query.filter_by(box_id=line.box_id, nomenclature_id=line.nomenclature_id).first()
+        if box_item:
+            box_item.qty += qty - line.qty
+            if box_item.qty <= 0:
+                db.session.delete(box_item)
+
+    line.qty = qty
+    line.confirmed = bool(data.get("confirmed"))
+    db.session.commit()
+
+    return jsonify(
+        {
+            "ok": True,
+            "confirmed_count": doc.lines.filter_by(confirmed=True).count(),
+            "total_count": doc.lines.count(),
+        }
+    )
 
 
 @bp.route("/<int:doc_id>")

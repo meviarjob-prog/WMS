@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Загрузить накладную{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('receiving.list_documents') }}">&larr; Приемка</a></p>
+<h3 class="mb-4">Загрузить приходную накладную</h3>
+
+{% if not warehouses %}
+  <div class="alert alert-warning">Сначала создайте хотя бы один склад: <a href="{{ url_for('warehouses.list_warehouses') }}">Склады</a></div>
+{% else %}
+<div class="col-md-6">
+  <div class="card p-3">
+    <p class="text-muted small">
+      Файл накладной (.xlsx) из 1С — номер накладной станет номером приемки, поставщик
+      определится из файла автоматически (и добавится в справочник, если его еще нет), а
+      список товаров и количество подставятся из накладной. Дальше кладовщик открывает
+      документ на телефоне и сверяет товар по списку.
+    </p>
+    <form method="post" enctype="multipart/form-data">
+      <div class="mb-3">
+        <label class="form-label">Склад приемки</label>
+        <select name="warehouse_id" class="form-select" required>
+          {% for wh in warehouses %}
+            <option value="{{ wh.id }}">{{ wh.code }} — {{ wh.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Файл накладной (.xlsx)</label>
+        <input type="file" name="file" accept=".xlsx" class="form-control" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Загрузить</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
