@@ -11,7 +11,7 @@
     <div class="text-muted">Склад: {{ doc.warehouse.name }} {% if doc.supplier %}· Поставщик: {{ doc.supplier }}{% endif %}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
   </div>
   <div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('receiving.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
+    <a class="btn btn-outline-secondary d-none d-md-inline-block" href="{{ url_for('receiving.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
     {% if doc.status == 'draft' %}
     <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}" class="d-inline">
       <button type="submit" class="btn btn-success">✅ Завершить приемку</button>
@@ -34,7 +34,12 @@
 
 {% if doc.status == 'draft' %}
 <div class="card p-3 mb-4">
-  <h5>Короб <span class="text-muted small">(по желанию — если сразу клеите короба и упаковываете товар по факту приемки)</span></h5>
+  {% set hint_box = "Отсканируйте короб (уже созданный ранее массовой печатью) или создайте новый — товар будете сканировать сразу в него, минуя неразмещенный остаток. После скана короба фокус сам перейдет в поле поиска товара; после добавления товара вручную короб сбросится и можно сразу сканировать следующий — чтобы вернуться и добавить что-то еще в этот же короб, просто отсканируйте его снова." %}
+  <h5 class="d-flex align-items-center gap-2">
+    Короб <span class="text-muted small d-none d-md-inline">(по желанию — если сразу клеите короба и упаковываете товар по факту приемки)</span>
+    <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+            data-bs-placement="bottom" data-bs-content="{{ hint_box }}" aria-label="Подсказка">?</button>
+  </h5>
   {% if active_box %}
     <div class="alert alert-primary d-flex justify-content-between align-items-center flex-wrap gap-2 mb-0">
       <div>Работаем с коробом <b>{{ active_box.box_number }}</b>
@@ -45,7 +50,7 @@
       <a class="btn btn-sm btn-outline-primary" href="{{ url_for('receiving.detail', doc_id=doc.id) }}">Работать без короба / сменить короб</a>
     </div>
   {% else %}
-    <p class="text-muted small">Отсканируйте короб (уже созданный ранее массовой печатью) или создайте новый — товар будете сканировать сразу в него, минуя неразмещенный остаток. После скана короба фокус сам перейдет в поле поиска товара; после добавления товара вручную короб сбросится и можно сразу сканировать следующий — чтобы вернуться и добавить что-то еще в этот же короб, просто отсканируйте его снова.</p>
+    <p class="text-muted small d-none d-md-block">{{ hint_box }}</p>
     <div class="d-flex gap-2 flex-wrap">
       <form method="post" action="{{ url_for('receiving.select_box', doc_id=doc.id) }}" class="d-flex gap-2">
         <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg" placeholder="Отсканируйте или введите номер короба" required autofocus>
@@ -97,7 +102,7 @@
 {% if packed_boxes %}
 <div class="card p-3 mb-4">
   <h5>Короба, упакованные в этой приемке</h5>
-  <table class="table table-sm mb-0">
+  <table class="table table-sm mb-0 d-none d-md-table">
     <thead><tr><th>Короб</th><th></th></tr></thead>
     <tbody>
     {% for box in packed_boxes %}
@@ -116,13 +121,30 @@
     {% endfor %}
     </tbody>
   </table>
+
+  <div class="list-group d-md-none">
+    {% for box in packed_boxes %}
+      <div class="list-group-item py-2 px-2">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <a href="{{ url_for('boxes.detail', box_id=box.id) }}" class="fw-bold text-decoration-none">{{ box.box_number }}</a>
+          <span class="badge badge-status-{{ box.status }}">{{ 'В ячейке' if box.status == 'stored' else 'Открыт' }}</span>
+        </div>
+        <div class="d-flex gap-2 mt-1">
+          {% if not (active_box and box.id == active_box.id) %}
+          <a class="btn btn-sm btn-outline-primary" href="{{ url_for('receiving.detail', doc_id=doc.id, box=box.id) }}">Сканировать сюда</a>
+          {% endif %}
+          <a class="btn btn-sm btn-outline-secondary" target="_blank" href="{{ url_for('labels.box_label', box_id=box.id) }}">🖨</a>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
 </div>
 {% endif %}
 {% endif %}
 
 <div class="card p-3">
   <h5>Позиции приемки</h5>
-  <table class="table table-sm">
+  <table class="table table-sm d-none d-md-table">
     <thead><tr><th>Товар</th><th>Короб</th><th>Кол-во</th>{% if doc.status == 'draft' %}<th></th>{% endif %}</tr></thead>
     <tbody>
     {% for line in lines %}
@@ -156,6 +178,40 @@
     </tfoot>
     {% endif %}
   </table>
+
+  <div class="list-group d-md-none">
+    {% for line in lines %}
+      <div class="list-group-item py-2 px-2">
+        <div>{{ line.nomenclature.name }} <span class="text-muted small">({{ line.nomenclature.sku }})</span></div>
+        <div class="d-flex justify-content-between align-items-center gap-2 mt-1">
+          <div class="small text-muted">
+            {% if line.box %}<a href="{{ url_for('boxes.detail', box_id=line.box.id) }}">{{ line.box.box_number }}</a>{% else %}без короба{% endif %}
+          </div>
+          {% if doc.status == 'draft' %}
+          <div class="d-flex gap-2 flex-shrink-0">
+            <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1 align-items-center">
+              {% set q = line.qty %}
+              <input type="number" name="qty" step="0.001" min="0.001" value="{{ q | int if q == q | int else q }}" class="form-control form-control-sm" style="width:4.5em">
+              <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+            </form>
+            <form method="post" action="{{ url_for('receiving.delete_line', doc_id=doc.id, line_id=line.id) }}">
+              <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
+            </form>
+          </div>
+          {% else %}
+          <div class="small">{{ line.qty }} {{ line.nomenclature.unit }}</div>
+          {% endif %}
+        </div>
+      </div>
+    {% else %}
+      <div class="list-group-item text-muted">Позиций еще нет</div>
+    {% endfor %}
+    {% if lines %}
+      <div class="list-group-item fw-bold d-flex justify-content-between">
+        <span>Итого</span><span>{{ doc.total_qty() }}</span>
+      </div>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}
 
