@@ -45,24 +45,27 @@
         При создании или импорте товара его вид определяется автоматически
         по вхождению одного из ключевых слов в название (без учета
         регистра). Если ничего не подошло — присваивается вид-заглушка
-        (отмечен ниже).
+        (отмечен ниже). «Порог в коробе» — если при приемке в короб суммарно
+        набралось больше этого количества товара такого вида, приемщику
+        показывается предупреждение (пусто — без предупреждения).
       </p>
       <table class="table table-sm">
-        <thead><tr><th>Вид</th><th>Ключевые слова</th><th>Норма, мин</th><th></th></tr></thead>
+        <thead><tr><th>Вид</th><th>Ключевые слова</th><th>Норма, мин</th><th>Порог в коробе, шт</th><th></th></tr></thead>
         <tbody>
         {% for cat in categories %}
           <tr>
             <td>{{ cat.name }}{% if cat.is_default %} <span class="badge bg-secondary">по умолчанию</span>{% endif %}</td>
-            <td colspan="3">
+            <td colspan="4">
               <form method="post" action="{{ url_for('production.update_category', category_id=cat.id) }}" class="d-flex gap-2 align-items-center">
                 <input type="text" name="keywords" class="form-control form-control-sm" value="{{ cat.keywords or '' }}" style="max-width:220px">
-                <input type="number" step="0.1" min="0" name="norm_minutes" class="form-control form-control-sm" value="{{ cat.norm_minutes if cat.norm_minutes is not none else '' }}" style="width:90px">
+                <input type="number" step="0.1" min="0" name="norm_minutes" class="form-control form-control-sm" value="{{ cat.norm_minutes if cat.norm_minutes is not none else '' }}" style="width:90px" title="Норма, мин">
+                <input type="number" step="1" min="0" name="box_qty_warning" class="form-control form-control-sm" value="{{ cat.box_qty_warning if cat.box_qty_warning is not none else '' }}" style="width:90px" title="Порог в коробе, шт">
                 <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
               </form>
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="4" class="text-muted">Видов товара еще нет</td></tr>
+          <tr><td colspan="5" class="text-muted">Видов товара еще нет</td></tr>
         {% endfor %}
         </tbody>
       </table>

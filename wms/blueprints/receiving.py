@@ -11,6 +11,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user
+from sqlalchemy import func
 
 from ..extensions import db
 from ..models import Box, BoxItem, Nomenclature, ReceivingDocument, ReceivingLine, UnplacedStock
@@ -90,6 +91,27 @@ def _add_or_increment_line(doc, nomenclature, qty):
     return line
 
 
+def _box_category_warning(box, item):
+    """Если суммарное количество товара ВИДА item в этом коробе превысило
+    порог, заданный у вида (см. ProductCategory.box_qty_warning, настройка —
+    «Производство» → «Настройки») — предупреждение для приемщика: похоже
+    на лишний скан/ошибку, а не настоящую такую партию в одном коробе.
+    None — вид не задан, порог не настроен, либо порог еще не превышен."""
+    category = item.category
+    if not category or not category.box_qty_warning:
+        return None
+
+    total = (
+        db.session.query(func.sum(BoxItem.qty))
+        .join(Nomenclature, BoxItem.nomenclature_id == Nomenclature.id)
+        .filter(BoxItem.box_id == box.id, Nomenclature.category_id == category.id)
+        .scalar()
+    ) or 0
+    if total <= category.box_qty_warning:
+        return None
+    return {"category": category.name, "qty": total, "threshold": category.box_qty_warning}
+
+
 def _receive_item_into_box(doc, box, item, qty):
     """Приемка сразу в короб — товар физически упаковывается в момент
     приемки, минуя неразмещенный остаток (см. complete(): строки с box_id
@@ -104,7 +126,8 @@ def _receive_item_into_box(doc, box, item, qty):
     line = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=qty, box_id=box.id)
     db.session.add(line)
     db.session.commit()
-    return line
+    warning = _box_category_warning(box, item)
+    return line, warning
 
 
 @bp.route("/<int:doc_id>/boxes/select", methods=["POST"])
@@ -161,14 +184,15 @@ def add_line_to_box_by_barcode(doc_id, box_id):
     if not item:
         return jsonify({"ok": False, "error": f"Товар со штрихкодом '{barcode}' не найден"}), 404
 
-    line = _receive_item_into_box(doc, box, item, qty)
-    return jsonify(
-        {
-            "ok": True,
-            "line": {"id": line.id, "name": item.name, "sku": item.sku, "qty": line.qty},
-            "box_item_count": box.items.count(),
-        }
-    )
+    line, warning = _receive_item_into_box(doc, box, item, qty)
+    resp = {
+        "ok": True,
+        "line": {"id": line.id, "name": item.name, "sku": item.sku, "qty": line.qty},
+        "box_item_count": box.items.count(),
+    }
+    if warning:
+        resp["warning"] = warning
+    return jsonify(resp)
 
 
 @bp.route("/<int:doc_id>/boxes/<int:box_id>/lines/add", methods=["POST"])
@@ -187,8 +211,14 @@ def add_line_to_box(doc_id, box_id):
         flash("Товар не найден", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id, box=box_id))
 
-    _receive_item_into_box(doc, box, item, qty)
+    _line, warning = _receive_item_into_box(doc, box, item, qty)
     flash(f"В короб {box.box_number} добавлено: {item.name} ({qty} {item.unit})", "success")
+    if warning:
+        flash(
+            f"В коробе {box.box_number} уже {warning['qty']:g} шт. вида «{warning['category']}» "
+            f"— больше обычного порога ({warning['threshold']:g}). Проверьте, не попало ли лишнее.",
+            "warning",
+        )
     # Сбрасываем активный короб — оператор сразу готов сканировать следующий
     # короб; чтобы добавить что-то еще в этот же короб, достаточно
     # отсканировать его номер повторно (find_by_scanned_code найдет его

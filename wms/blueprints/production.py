@@ -205,6 +205,7 @@ def update_category(category_id):
     category = ProductCategory.query.get_or_404(category_id)
     category.keywords = request.form.get("keywords", "").strip()
     category.norm_minutes = request.form.get("norm_minutes", type=float)
+    category.box_qty_warning = request.form.get("box_qty_warning", type=float)
     db.session.commit()
     flash(f"Вид «{category.name}» обновлен", "success")
     return redirect(url_for("production.settings"))

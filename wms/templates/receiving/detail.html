@@ -191,7 +191,15 @@
         .then((r) => r.json())
         .then((data) => {
           if (data.ok) {
-            scanResult.innerHTML = '<span class="text-success">Добавлено: ' + data.line.name + '</span>';
+            let html = '<span class="text-success">Добавлено: ' + data.line.name + '</span>';
+            if (data.warning) {
+              html +=
+                '<div class="alert alert-warning py-2 px-3 mt-2 mb-0">' +
+                '⚠ В коробе уже ' + data.warning.qty + ' шт. вида «' + data.warning.category + '»' +
+                ' — больше обычного порога (' + data.warning.threshold + '). Проверьте, не попало ли лишнее.' +
+                '</div>';
+            }
+            scanResult.innerHTML = html;
             {% if active_box %}
             // В короб можно сканировать товар одним за другим без перезагрузки
             // страницы после каждого — это и есть ускорение приемки в короба;

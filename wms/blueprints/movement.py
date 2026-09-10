@@ -13,6 +13,8 @@ from ..models import (
     CELL_CAPACITY,
     MovementDocument,
     MovementLine,
+    MovementReceiptDiscrepancy,
+    Nomenclature,
     ShipmentPlanLine,
     Warehouse,
 )
@@ -534,6 +536,82 @@ def receive(doc_id):
     doc.received_at = datetime.utcnow()
     db.session.commit()
     flash(f"Перемещение {doc.number} принято на складе «{doc.to_warehouse.name}»", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+def _expected_qty_by_nomenclature(doc):
+    """Сколько какого товара по факту едет в этом перемещении — сумма по
+    всем коробам документа."""
+    expected = {}
+    for line in doc.lines:
+        for item in line.box.items:
+            expected[item.nomenclature_id] = expected.get(item.nomenclature_id, 0) + item.qty
+    return expected
+
+
+@bp.route("/<int:doc_id>/receive-with-discrepancy", methods=["GET", "POST"])
+def receive_with_discrepancy(doc_id):
+    """Альтернатива обычной "Принято на складе" — на месте приняли не
+    столько, сколько отправили (недостача или излишек). По каждому товару
+    указывается фактически принятое количество; именно оно, а не то, что
+    было упаковано в коробах, зачисляется в выполнение плана отгрузок, а
+    само расхождение сохраняется отдельной строкой (см.
+    MovementReceiptDiscrepancy) для учета, а не молча теряется."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status != "completed":
+        flash("Сначала завершите перемещение", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if doc.received_at is not None:
+        flash("Перемещение уже отмечено как принятое", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    expected = _expected_qty_by_nomenclature(doc)
+    if not expected:
+        flash("В списке нет коробов с товаром", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if request.method == "GET":
+        nomenclature_by_id = {
+            n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(expected.keys())).all()
+        }
+        rows = sorted(
+            (
+                {"nomenclature": nomenclature_by_id[nid], "expected_qty": qty}
+                for nid, qty in expected.items()
+                if nid in nomenclature_by_id
+            ),
+            key=lambda r: r["nomenclature"].name,
+        )
+        return render_template("movement/receive_discrepancy.html", doc=doc, rows=rows)
+
+    for nomenclature_id, expected_qty in expected.items():
+        received_qty = request.form.get(f"qty_{nomenclature_id}", type=float)
+        if received_qty is None or received_qty < 0:
+            received_qty = expected_qty
+
+        plan_line = ShipmentPlanLine.query.filter_by(
+            warehouse_id=doc.to_warehouse_id, nomenclature_id=nomenclature_id
+        ).first()
+        if plan_line:
+            plan_line.fulfilled_qty += received_qty
+
+        if received_qty != expected_qty:
+            db.session.add(
+                MovementReceiptDiscrepancy(
+                    document_id=doc.id,
+                    nomenclature_id=nomenclature_id,
+                    expected_qty=expected_qty,
+                    received_qty=received_qty,
+                )
+            )
+
+    doc.received_at = datetime.utcnow()
+    db.session.commit()
+    flash(
+        f"Перемещение {doc.number} принято с расхождением на складе «{doc.to_warehouse.name}»",
+        "warning",
+    )
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 

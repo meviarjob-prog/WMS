@@ -20,8 +20,11 @@
     <form method="post" action="{{ url_for('movement.receive', doc_id=doc.id) }}" class="d-inline">
       <button type="submit" class="btn btn-warning" title="До этой кнопки товар считается «в пути» и не засчитывается в план отгрузок">📥 Принято на складе</button>
     </form>
+    <a class="btn btn-outline-warning" href="{{ url_for('movement.receive_with_discrepancy', doc_id=doc.id) }}"
+       title="Если на месте приняли не столько, сколько отправили — недостача или излишек">⚠️ Принято с расхождением</a>
     {% else %}
     <span class="badge bg-success">Принято на складе {{ doc.received_at.strftime('%d.%m.%Y %H:%M') }}</span>
+    {% if doc.discrepancies %}<span class="badge bg-warning text-dark">С расхождением</span>{% endif %}
     {% endif %}
     {% if doc.status == 'draft' and current_user.is_admin %}
     <form method="post" action="{{ url_for('movement.delete_document', doc_id=doc.id) }}" class="d-inline" onsubmit="return confirm('Удалить список перемещения {{ doc.number }} целиком? Действие необратимо.');">
@@ -36,6 +39,25 @@
 <div class="alert alert-warning">
   ⚠ Документ уже завершен. Как администратор вы можете добавлять/убирать короба и менять ячейку назначения —
   изменения сразу же применяются к реальному расположению короба (и к выполнению плана отгрузок, если перемещение уже принято на складе).
+</div>
+{% endif %}
+
+{% if doc.discrepancies %}
+<div class="card p-3 mb-4 border-warning">
+  <h5>⚠️ Расхождения при приемке</h5>
+  <table class="table table-sm mb-0">
+    <thead><tr><th>Товар</th><th>Отправлено</th><th>Принято</th><th>Расхождение</th></tr></thead>
+    <tbody>
+    {% for d in doc.discrepancies %}
+      <tr>
+        <td>{{ d.nomenclature.name }} <span class="text-muted">({{ d.nomenclature.sku }})</span></td>
+        <td>{{ d.expected_qty | round(3) }}</td>
+        <td>{{ d.received_qty | round(3) }}</td>
+        <td class="{{ 'text-danger' if d.diff() < 0 else 'text-success' }}">{{ '%+g' % d.diff() }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endif %}
 

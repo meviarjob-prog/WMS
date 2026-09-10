@@ -7,10 +7,10 @@ from ..extensions import db
 from ..models import ProductCategory
 
 DEFAULT_CATEGORIES = [
-    # (name, keywords, is_default)
-    ("Свитер", "свитер,свитера,свитеры", False),
-    ("Кардиган", "кардиган,кардиганы", False),
-    ("Шапка", "шапка,шапки", True),
+    # (name, keywords, is_default, box_qty_warning)
+    ("Свитер", "свитер,свитера,свитеры", False, 30),
+    ("Кардиган", "кардиган,кардиганы", False, 25),
+    ("Шапка", "шапка,шапки", True, 300),
 ]
 
 
@@ -18,13 +18,39 @@ def bootstrap_categories():
     """Создает стартовый набор видов товара, если их еще нет вообще —
     не трогает уже существующие (админ мог их отредактировать/удалить)."""
     if ProductCategory.query.count() > 0:
+        _backfill_box_qty_warning()
         return
 
-    for name, keywords, is_default in DEFAULT_CATEGORIES:
+    for name, keywords, is_default, box_qty_warning in DEFAULT_CATEGORIES:
         db.session.add(
-            ProductCategory(name=name, keywords=keywords, is_default=is_default)
+            ProductCategory(
+                name=name,
+                keywords=keywords,
+                is_default=is_default,
+                box_qty_warning=box_qty_warning,
+            )
         )
     db.session.commit()
+
+
+_DEFAULT_BOX_QTY_WARNING_BY_NAME = {
+    name: box_qty_warning for name, _keywords, _is_default, box_qty_warning in DEFAULT_CATEGORIES
+}
+
+
+def _backfill_box_qty_warning():
+    """На уже работающих складах эти виды товара созданы раньше, чем
+    появился порог предупреждения в коробе — проставляем порог по
+    умолчанию для трех известных видов, если он еще не задан (вручную
+    заданный админом порог не трогаем)."""
+    changed = False
+    for category in ProductCategory.query.filter(ProductCategory.box_qty_warning.is_(None)).all():
+        default = _DEFAULT_BOX_QTY_WARNING_BY_NAME.get(category.name)
+        if default is not None:
+            category.box_qty_warning = default
+            changed = True
+    if changed:
+        db.session.commit()
 
 
 def classify_by_name(name):

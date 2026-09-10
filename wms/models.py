@@ -44,6 +44,11 @@ class ProductCategory(db.Model):
     # Категория-заглушка: присваивается товару, если ни одно ключевое слово
     # других категорий не подошло. Должна быть ровно одна такая категория.
     is_default = db.Column(db.Boolean, nullable=False, default=False)
+    # Порог количества этого вида товара в ОДНОМ коробе при приемке — если
+    # суммарно в коробе превышено, приемщику показывается предупреждение
+    # (см. receiving._box_category_warning): вероятно, лишний скан или
+    # ошибка, а не настоящая такая партия. NULL — предупреждение не нужно.
+    box_qty_warning = db.Column(db.Float, nullable=True)
 
     def __repr__(self):
         return f"<ProductCategory {self.name}>"
@@ -498,6 +503,33 @@ class MovementDocument(db.Model):
     lines = db.relationship(
         "MovementLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
     )
+
+
+class MovementReceiptDiscrepancy(db.Model):
+    """Расхождение между тем, что отправлено (по коробам документа), и тем,
+    что реально приняли на складе назначения — по одной строке на товар.
+    Заполняется через "Принято с расхождением" (см. movement.receive_with_discrepancy)
+    вместо обычной кнопки "Принято на складе", когда факт не совпадает —
+    недостача или излишек. Обычная приемка без расхождений таких строк не
+    создает вообще."""
+
+    __tablename__ = "movement_receipt_discrepancies"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(
+        db.Integer, db.ForeignKey("movement_documents.id"), nullable=False, index=True
+    )
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False)
+    expected_qty = db.Column(db.Float, nullable=False)
+    received_qty = db.Column(db.Float, nullable=False)
+
+    document = db.relationship(
+        "MovementDocument", backref=db.backref("discrepancies", cascade="all, delete-orphan")
+    )
+    nomenclature = db.relationship("Nomenclature")
+
+    def diff(self):
+        return self.received_qty - self.expected_qty
 
 
 class MovementLine(db.Model):

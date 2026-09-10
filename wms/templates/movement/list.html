@@ -127,8 +127,11 @@
               <span class="text-muted">—</span>
             {% elif d.received_at %}
               <span class="badge bg-success" title="{{ d.received_at.strftime('%d.%m.%Y %H:%M') }}">Принято {{ d.received_at.strftime('%d.%m') }}</span>
+              {% if d.discrepancies %}<span class="badge bg-warning text-dark">С расхождением</span>{% endif %}
             {% else %}
               <button type="submit" formmethod="post" formaction="{{ url_for('movement.receive', doc_id=d.id) }}" class="btn btn-sm btn-warning" title="Товар считается «в пути», пока не нажата эта кнопка">📥 Принято на складе</button>
+              <a class="btn btn-sm btn-outline-warning" href="{{ url_for('movement.receive_with_discrepancy', doc_id=d.id) }}"
+                 title="Если на месте приняли не столько, сколько отправили">⚠️ С расхождением</a>
             {% endif %}
           </td>
           <td class="text-center">

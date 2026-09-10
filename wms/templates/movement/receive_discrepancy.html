@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Приемка с расхождением {{ doc.number }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('movement.detail', doc_id=doc.id) }}">&larr; Перемещение {{ doc.number }}</a></p>
+
+<h3 class="mb-1">Приемка с расхождением — {{ doc.number }}</h3>
+<div class="text-muted mb-4">{{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}</div>
+
+<div class="alert alert-warning">
+  Укажите, сколько каждого товара реально приняли на складе «{{ doc.to_warehouse.name }}».
+  По умолчанию проставлено то, что было упаковано в коробах при отправке — исправьте только
+  те строки, где по факту недостача или излишек. Именно введенное здесь количество зачтется
+  в выполнение плана отгрузок, а расхождение сохранится для учета.
+</div>
+
+<form method="post" action="{{ url_for('movement.receive_with_discrepancy', doc_id=doc.id) }}">
+  <div class="card p-3">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>Товар</th><th>Отправлено</th><th style="width:160px">Принято по факту</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.nomenclature.name }} <span class="text-muted">({{ row.nomenclature.sku }})</span></td>
+          <td>{{ row.expected_qty | round(3) }} {{ row.nomenclature.unit }}</td>
+          <td>
+            <input type="number" step="0.001" min="0" name="qty_{{ row.nomenclature.id }}"
+                   class="form-control form-control-sm" value="{{ row.expected_qty | round(3) }}">
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit" class="btn btn-warning">⚠️ Подтвердить приемку с расхождением</button>
+  </div>
+</form>
+{% endblock %}
