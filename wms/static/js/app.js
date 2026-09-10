@@ -98,10 +98,28 @@ function initNomenclatureAutocomplete(root) {
  * (если сканер настроен без Enter, либо просто не был нажат) — так товар
  * добавляется сканированием без необходимости нажимать Enter.
  * onScan(value) вызывается ровно один раз на скан.
+ *
+ * Защита от "слипания" двух сканирований в один мусорный номер: если короб
+ * сканируют дважды подряд быстрее, чем срабатывает debounce (нервное
+ * повторное сканирование, или сканер с двойным срабатыванием на одно
+ * нажатие) — второй скан начинает печататься в то же поле, не дожидаясь,
+ * пока первый успеет отправиться и очистить его. Символы физического
+ * сканера идут практически без пауз (единицы мс) — заметно быстрее, чем
+ * может выдать даже очень быстрый человек на клавиатуре. Поэтому "разрыв"
+ * такого рода детектируем только внутри буфера, где ВСЕ символы шли строго
+ * быстрее человеческого предела (FAST_CHAR_GAP_MS) — если хотя бы один
+ * символ пришел медленнее, считаем ввод ручным и эту логику для всего
+ * оставшегося буфера больше не применяем (копится как раньше, до
+ * Enter/debounce) — так пауза человека посреди набора номера никогда не
+ * стирает то, что он уже ввел.
  */
 function initBarcodeInput(input, onScan, options) {
   const debounceMs = (options && options.debounceMs) || 350;
+  const FAST_CHAR_GAP_MS = 25; // быстрее человека, но с запасом ниже скорости сканера
+  const RESET_GAP_MS = 100; // пауза, которая обрывает "быструю" (сканерную) серию
   let timer = null;
+  let lastKeyTime = 0;
+  let bufferIsFastSoFar = true;
 
   function fire() {
     clearTimeout(timer);
@@ -111,6 +129,7 @@ function initBarcodeInput(input, onScan, options) {
       onScan(value);
       input.value = "";
     }
+    bufferIsFastSoFar = true;
   }
 
   input.addEventListener("keydown", (e) => {
@@ -120,7 +139,40 @@ function initBarcodeInput(input, onScan, options) {
     }
   });
 
-  input.addEventListener("input", () => {
+  input.addEventListener("input", (e) => {
+    const now = Date.now();
+    const gap = now - lastKeyTime;
+    const isFreshField = input.value.length <= 1;
+
+    if (isFreshField) {
+      bufferIsFastSoFar = true;
+    } else if (gap > FAST_CHAR_GAP_MS && gap <= RESET_GAP_MS) {
+      // Пауза уже не "сканерная", но еще не настолько большая, чтобы
+      // уверенно считать ее границей между двумя сканами (может быть и
+      // просто чуть замешкавшийся человек) — просто перестаем угадывать
+      // границы сканов для этого буфера, ничего не стираем.
+      bufferIsFastSoFar = false;
+    } else if (
+      timer !== null &&
+      bufferIsFastSoFar &&
+      gap > RESET_GAP_MS &&
+      input.value.length > 3 &&
+      typeof e.data === "string" &&
+      e.data
+    ) {
+      // До сих пор весь буфер набирался строго на скорости сканера (иначе
+      // сработала бы ветка выше) — длинная пауза именно ПОСЛЕ такого
+      // быстрого буфера означает конец одного скана и начало следующего,
+      // а не паузу внутри ручного набора. Проверка длины (>3) — на всякий
+      // случай, чтобы не стирать совсем короткий ввод, если он все же
+      // окажется случайным.
+      input.value = e.data;
+      bufferIsFastSoFar = true;
+    } else if (gap > FAST_CHAR_GAP_MS) {
+      bufferIsFastSoFar = false;
+    }
+
+    lastKeyTime = now;
     clearTimeout(timer);
     timer = setTimeout(fire, debounceMs);
   });
