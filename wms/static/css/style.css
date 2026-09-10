@@ -73,6 +73,43 @@ body {
   }
 }
 
+/* Маленький значок "?" — по нажатию показывает подсказку всплывающим
+   попапом (см. app.js), вместо того чтобы держать текст подсказки
+   постоянно на экране (особенно важно на мобильном, где место в цене) */
+.hint-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  font-size: .7rem;
+  line-height: 1;
+  border-radius: 50%;
+  border: 1px solid #adb5bd;
+  color: #6c757d;
+  background: #fff;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 767.98px) {
+  /* Компактные табличные части на мобильном — меньше отступов и шрифт помельче */
+  .table-mobile-compact {
+    font-size: .8rem;
+  }
+  .table-mobile-compact th,
+  .table-mobile-compact td {
+    padding: .35rem .5rem;
+  }
+
+  /* По умолчанию широкие таблицы на мобильном скроллятся по горизонтали
+     (см. правило выше) — там, где содержимое коротких колонок и так
+     переносится по словам, лучше перенести текст, чем листать в бок */
+  .table-allow-wrap {
+    white-space: normal;
+  }
+}
+
 /* Кнопка камеры рядом с полем сканирования — не должна сжиматься */
 [data-camera-scan-target] {
   flex: 0 0 auto;

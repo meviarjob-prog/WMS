@@ -203,4 +203,11 @@ document.addEventListener("DOMContentLoaded", () => {
       window.print();
     }
   });
+
+  // Значки-подсказки "?" — текст показывается всплывающим попапом по
+  // нажатию (data-bs-trigger="focus" на кнопке закрывает его же по клику
+  // в любом другом месте страницы, без отдельного кода).
+  document.querySelectorAll('[data-bs-toggle="popover"]').forEach((el) => {
+    new bootstrap.Popover(el);
+  });
 });

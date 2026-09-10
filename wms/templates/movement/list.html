@@ -1,17 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Перемещение{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
   <h3 class="mb-0">Перемещение товара</h3>
-  <div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_all') }}">📤 Экспорт в Excel</a>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary d-none d-md-inline-block" href="{{ url_for('movement.export_all') }}">📤 Экспорт в Excel</a>
     <a class="btn btn-primary" href="{{ url_for('movement.new_document') }}">➕ Новое перемещение</a>
   </div>
 </div>
 
+{% set hint_route_box = "Сканируете короб — показываем, на какой склад-город его отправлять по текущему плану отгрузок (по остатку невыполненной потребности). Если потребности нет ни у кого — короб можно пропустить." %}
+{% set hint_find_box = "Не получается добавить короб в перемещение? Проверьте, в каком документе он уже числится." %}
+
 <div class="card p-3 mb-4">
-  <h5>Куда везти короб</h5>
-  <p class="text-muted small">Сканируете короб — показываем, на какой склад-город его отправлять по текущему плану отгрузок (по остатку невыполненной потребности). Если потребности нет ни у кого — короб можно пропустить.</p>
+  <h5 class="d-flex align-items-center gap-2">
+    Куда везти короб
+    <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+            data-bs-placement="bottom" data-bs-content="{{ hint_route_box }}" aria-label="Подсказка">?</button>
+  </h5>
+  <p class="text-muted small d-none d-md-block">{{ hint_route_box }}</p>
   <form method="get" action="{{ url_for('movement.route_box') }}" id="routeBoxForm" class="d-flex gap-2" style="max-width:480px">
     <input type="text" name="box_number" id="routeBoxInput" class="form-control form-control-lg" placeholder="Отсканируйте или введите номер короба" value="{{ route_box_number }}" required autofocus>
     <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#routeBoxInput" title="Сканировать камерой">📷</button>
@@ -33,8 +40,8 @@
           Короб <b>{{ route_box.box_number }}</b> — общая невыполненная потребность на подходящих складах:
           <b>{{ total_demand | round(0, 'floor') | int }} шт.</b>
         </div>
-        <table class="table table-sm">
-          <thead><tr><th>Склад-город</th><th>Покрывает этим коробом</th><th>Нужно всего</th><th></th></tr></thead>
+        <table class="table table-sm table-mobile-compact table-allow-wrap">
+          <thead><tr><th>Склад-город</th><th>Покрывает</th><th>Нужно всего</th><th></th></tr></thead>
           <tbody>
           {% for entry in routing %}
             <tr{% if loop.first %} class="table-success"{% endif %}>
@@ -45,7 +52,7 @@
                 <form method="post" action="{{ url_for('movement.route_box_add') }}">
                   <input type="hidden" name="box_id" value="{{ route_box.id }}">
                   <input type="hidden" name="to_warehouse_id" value="{{ entry.warehouse.id }}">
-                  <button type="submit" class="btn btn-sm btn-outline-primary">Добавить в перемещение</button>
+                  <button type="submit" class="btn btn-sm btn-outline-primary">Добавить</button>
                 </form>
               </td>
             </tr>
@@ -58,8 +65,12 @@
 </div>
 
 <div class="card p-3 mb-4">
-  <h5>Найти короб</h5>
-  <p class="text-muted small">Не получается добавить короб в перемещение? Проверьте, в каком документе он уже числится.</p>
+  <h5 class="d-flex align-items-center gap-2">
+    Найти короб
+    <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+            data-bs-placement="bottom" data-bs-content="{{ hint_find_box }}" aria-label="Подсказка">?</button>
+  </h5>
+  <p class="text-muted small d-none d-md-block">{{ hint_find_box }}</p>
   <form method="get" action="{{ url_for('movement.find_box') }}" class="d-flex gap-2" style="max-width:480px">
     <input type="text" name="box_number" id="findBoxInput" class="form-control" placeholder="Номер короба" value="{{ find_box_number|default('') }}" required>
     <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#findBoxInput" title="Сканировать камерой">📷</button>
@@ -70,12 +81,12 @@
     {% if find_box_not_found|default(false) %}
       <div class="alert alert-danger mt-3 mb-0">Короб «{{ find_box_number }}» не найден.</div>
     {% elif find_box_lines|default([]) %}
-      <table class="table table-sm mt-3 mb-0">
-        <thead><tr><th>Перемещение</th><th>Откуда</th><th>Куда</th><th>Статус</th><th>Приемка</th><th></th></tr></thead>
+      <table class="table table-sm table-mobile-compact table-allow-wrap mt-3 mb-0">
+        <thead><tr><th>Перемещение</th><th>Откуда</th><th>Куда</th><th>Статус</th><th>Приемка</th></tr></thead>
         <tbody>
         {% for line in find_box_lines %}
           <tr>
-            <td>{{ line.document.number }}</td>
+            <td><a href="{{ url_for('movement.detail', doc_id=line.document.id) }}">{{ line.document.number }}</a></td>
             <td>{{ line.document.from_warehouse.name }}</td>
             <td>{{ line.document.to_warehouse.name }}</td>
             <td><span class="badge badge-status-{{ line.document.status }}">{{ 'Черновик' if line.document.status == 'draft' else 'Завершен' }}</span></td>
@@ -84,7 +95,6 @@
               {% elif line.document.received_at %}Принято
               {% else %}<span class="text-warning-emphasis">В пути</span>{% endif %}
             </td>
-            <td><a href="{{ url_for('movement.detail', doc_id=line.document.id) }}">Открыть</a></td>
           </tr>
         {% endfor %}
         </tbody>
@@ -98,7 +108,11 @@
 </div>
 
 <div class="card p-3">
-  <form method="get" action="{{ url_for('movement.export_waybills') }}" id="waybillsForm">
+  <!-- Массовый выбор/печать и полная таблица со всеми колонками — только
+       на широком экране; на телефоне вместо этого компактный список ниже
+       без 1С/Открыть/Excel и кнопок приемки (это делается на детальной
+       странице документа — открывается по номеру). -->
+  <form method="get" action="{{ url_for('movement.export_waybills') }}" id="waybillsForm" class="d-none d-md-block">
     <div class="d-flex justify-content-between align-items-center mb-2">
       <div class="form-check">
         <input type="checkbox" class="form-check-input" id="selectAllDocs">
@@ -150,6 +164,32 @@
       </tbody>
     </table>
   </form>
+
+  <!-- Компактный список для телефона: только то, что нужно кладовщику на
+       ходу — номер (открывается по нему же), маршрут, статус, приемка. -->
+  <div class="list-group d-md-none">
+    {% for d in documents %}
+      <a href="{{ url_for('movement.detail', doc_id=d.id) }}" class="list-group-item list-group-item-action py-2 px-2 text-decoration-none text-body">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <span class="fw-bold">{{ d.number }}</span>
+          <span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span>
+        </div>
+        <div class="small text-muted">{{ d.from_warehouse.name }} → {{ d.to_warehouse.name }}</div>
+        <div class="small text-muted">{{ d.created_at.strftime('%d.%m.%Y') }} · {{ d.lines.count() }} короб.</div>
+        {% if d.status == 'completed' %}
+          <div class="mt-1">
+            {% if d.received_at %}
+              <span class="badge bg-success">Принято {{ d.received_at.strftime('%d.%m') }}</span>
+            {% else %}
+              <span class="text-warning-emphasis small">В пути</span>
+            {% endif %}
+          </div>
+        {% endif %}
+      </a>
+    {% else %}
+      <div class="list-group-item text-muted">Перемещений еще нет</div>
+    {% endfor %}
+  </div>
 </div>
 {% endblock %}
 
