@@ -9,7 +9,7 @@
   {% if doc.status == 'completed' %} · <span class="badge bg-success">Завершена</span>{% endif %}
 </div>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
   <div class="fw-bold" id="confirmProgress">Отмечено: {{ confirmed_count }} из {{ lines|length }}</div>
   {% if doc.status == 'draft' %}
   <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}"
@@ -21,19 +21,26 @@
 
 <div class="list-group">
 {% for line in lines %}
-  <div class="list-group-item d-flex align-items-center gap-3 py-3"
+  <div class="list-group-item py-2 px-2"
        data-confirm-url="{{ url_for('receiving.confirm_line', doc_id=doc.id, line_id=line.id) }}">
-    <div class="flex-grow-1">
-      <div>{{ line.nomenclature.name }}</div>
-      {% if line.expected_qty is not none %}
-        <div class="text-muted small">По накладной: {{ line.expected_qty | round(3) }} {{ line.nomenclature.unit }}</div>
-      {% endif %}
-    </div>
-    <input type="number" step="0.001" min="0" class="form-control form-control-lg qty-input" style="width:140px"
-           value="{{ line.qty | round(3) }}" {% if doc.status != 'draft' %}disabled{% endif %}>
-    <div class="form-check form-switch mb-0">
-      <input class="form-check-input confirm-checkbox" type="checkbox" role="switch" style="width:3em; height:1.5em"
-             {% if line.confirmed %}checked{% endif %} {% if doc.status != 'draft' %}disabled{% endif %}>
+    <div class="small" style="word-break: break-word;">{{ line.nomenclature.name }}</div>
+    <div class="d-flex align-items-center justify-content-between gap-2 mt-1">
+      <div class="text-muted small text-truncate">
+        {% if line.expected_qty is not none %}
+          {% set eq = line.expected_qty %}
+          По накладной: {{ eq | int if eq == eq | int else eq | round(3) }} {{ line.nomenclature.unit }}
+        {% endif %}
+      </div>
+      <div class="d-flex align-items-center gap-2 flex-shrink-0">
+        {% set q = line.qty %}
+        <input type="number" inputmode="decimal" step="0.001" min="0" class="form-control form-control-sm qty-input"
+               style="width:5.5em" value="{{ q | int if q == q | int else q | round(3) }}"
+               {% if doc.status != 'draft' %}disabled{% endif %}>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input confirm-checkbox" type="checkbox" role="switch" style="width:2.5em; height:1.25em"
+                 {% if line.confirmed %}checked{% endif %} {% if doc.status != 'draft' %}disabled{% endif %}>
+        </div>
+      </div>
     </div>
   </div>
 {% else %}
