@@ -1,17 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Короба{% endblock %}
 {% block content %}
+{% set hint_boxes = "Если этикеток физически не хватило на всю партию сразу — короба в системе уже созданы все, но наклеены не на все. Найдите нужные короба здесь (например, по диапазону номеров) и допечатайте только их — короба пересоздавать не нужно, номер за ними уже закреплен." %}
+
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
-  <h3 class="mb-0">Короба</h3>
+  <h3 class="mb-0 d-flex align-items-center gap-2">
+    Короба
+    <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+            data-bs-placement="bottom" data-bs-content="{{ hint_boxes }}" aria-label="Подсказка">?</button>
+  </h3>
   <a class="btn btn-outline-secondary" href="{{ url_for('boxes.bulk_create') }}">📦 Массовое создание коробов</a>
 </div>
 
-<p class="text-muted small">
-  Если этикеток физически не хватило на всю партию сразу — короба в системе
-  уже созданы все, но наклеены не на все. Найдите нужные короба здесь
-  (например, по диапазону номеров) и допечатайте только их — короба
-  пересоздавать не нужно, номер за ними уже закреплен.
-</p>
+<p class="text-muted small d-none d-md-block">{{ hint_boxes }}</p>
 
 <div class="card p-3 mb-3">
   <form method="get" class="row g-2 align-items-end">
@@ -45,26 +46,46 @@
       </div>
       <button type="submit" class="btn btn-primary">🖨 Печать выбранных этикеток</button>
     </div>
+    <!-- Один чекбокс на короб (не дублируем под мобильную/десктопную
+         версии — иначе оба экземпляра "checked" по умолчанию задвоят
+         короб в напечатанном PDF). Вместо этого на мобильном просто
+         скрываем часть колонок и переносим их в подпись под номером. -->
     <div class="table-responsive">
-      <table class="table table-sm table-hover">
-        <thead><tr><th></th><th>Номер короба</th><th>Склад</th><th>Статус</th><th>Позиций</th><th>Создан</th><th></th></tr></thead>
+      <table class="table table-sm table-hover table-mobile-compact">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Номер короба</th>
+            <th class="d-none d-md-table-cell">Склад</th>
+            <th class="d-none d-md-table-cell">Статус</th>
+            <th class="d-none d-md-table-cell">Позиций</th>
+            <th class="d-none d-md-table-cell">Создан</th>
+            <th></th>
+          </tr>
+        </thead>
         <tbody>
         {% for box in boxes %}
           {% set item_count = item_counts.get(box.id, 0) %}
           <tr{% if item_count == 0 %} class="table-warning"{% endif %}>
             <td><input type="checkbox" name="ids" value="{{ box.id }}" checked></td>
-            <td><a href="{{ url_for('boxes.detail', box_id=box.id) }}">{{ box.box_number }}</a></td>
-            <td>{{ box.warehouse.name if box.warehouse else '' }}</td>
-            <td>{{ 'В ячейке' if box.cell_id else 'Открыт' }}</td>
             <td>
+              <a href="{{ url_for('boxes.detail', box_id=box.id) }}">{{ box.box_number }}</a>
+              <div class="small text-muted d-md-none">
+                {{ box.warehouse.name if box.warehouse else '' }} · {{ 'В ячейке' if box.cell_id else 'Открыт' }}
+                {% if item_count == 0 %}· <span class="badge bg-warning text-dark">Пусто</span>{% else %}· {{ item_count }} поз.{% endif %}
+              </div>
+            </td>
+            <td class="d-none d-md-table-cell">{{ box.warehouse.name if box.warehouse else '' }}</td>
+            <td class="d-none d-md-table-cell">{{ 'В ячейке' if box.cell_id else 'Открыт' }}</td>
+            <td class="d-none d-md-table-cell">
               {% if item_count == 0 %}
                 <span class="badge bg-warning text-dark" title="Ничего не отсканировано в этот короб — возможно, пропущен">Пусто</span>
               {% else %}
                 {{ item_count }}
               {% endif %}
             </td>
-            <td class="text-muted small">{{ box.created_at.strftime('%d.%m.%Y %H:%M') if box.created_at else '' }}</td>
-            <td><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('labels.box_label', box_id=box.id) }}" target="_blank">Этикетка</a></td>
+            <td class="d-none d-md-table-cell text-muted small">{{ box.created_at.strftime('%d.%m.%Y %H:%M') if box.created_at else '' }}</td>
+            <td><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('labels.box_label', box_id=box.id) }}" target="_blank">🖨</a></td>
           </tr>
         {% endfor %}
         </tbody>

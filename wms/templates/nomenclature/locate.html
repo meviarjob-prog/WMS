@@ -24,7 +24,7 @@
   <div class="col-md-6">
     <div class="card p-3">
       <h5>В коробах</h5>
-      <table class="table table-sm">
+      <table class="table table-sm table-mobile-compact">
         <thead><tr><th>Склад</th><th>Ячейка</th><th>Короб</th><th>Кол-во</th></tr></thead>
         <tbody>
         {% for bi in box_rows %}
@@ -44,9 +44,14 @@
 
   <div class="col-md-6">
     <div class="card p-3">
-      <h5>Неразмещенный остаток</h5>
-      <p class="text-muted small">Принято на складе, но еще не упаковано в короб.</p>
-      <table class="table table-sm">
+      <h5 class="d-flex align-items-center gap-2">
+        Неразмещенный остаток
+        <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+                data-bs-placement="bottom" data-bs-content="Принято на складе, но еще не упаковано в короб."
+                aria-label="Подсказка">?</button>
+      </h5>
+      <p class="text-muted small d-none d-md-block">Принято на складе, но еще не упаковано в короб.</p>
+      <table class="table table-sm table-mobile-compact">
         <thead><tr><th>Склад</th><th>Кол-во</th></tr></thead>
         <tbody>
         {% for row in unplaced_rows %}

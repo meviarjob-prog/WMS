@@ -7,12 +7,13 @@
 <div class="row g-4 mb-4">
   <div class="col-md-5">
     <div class="card p-3">
-      <h5>Добавить ряд</h5>
-      <p class="text-muted small">
-        Ячейки в ряду получают код автоматически: ряд «A» → ячейки
-        A0001, A0002, ... Код короба уже совпадает с этикеткой — при
-        размещении ячейку можно сразу сканировать.
-      </p>
+      {% set hint_zone = "Ячейки в ряду получают код автоматически: ряд «A» → ячейки A0001, A0002, ... Код короба уже совпадает с этикеткой — при размещении ячейку можно сразу сканировать." %}
+      <h5 class="d-flex align-items-center gap-2">
+        Добавить ряд
+        <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+                data-bs-placement="bottom" data-bs-content="{{ hint_zone }}" aria-label="Подсказка">?</button>
+      </h5>
+      <p class="text-muted small d-none d-md-block">{{ hint_zone }}</p>
       <form method="post" action="{{ url_for('warehouses.create_zone', warehouse_id=warehouse.id) }}">
         <div class="mb-2">
           <label class="form-label">Название ряда</label>
@@ -33,7 +34,7 @@
   <div class="col-md-7">
     <div class="card p-3">
       <h5>Ряды склада</h5>
-      <table class="table table-sm">
+      <table class="table table-sm table-mobile-compact">
         <thead><tr><th>Ряд</th><th>Описание</th><th>Ячеек</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for zone in zones %}
@@ -43,9 +44,10 @@
             <td>{{ zone.cells.count() }}</td>
             <td>{% if zone.is_active %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}</td>
             <td class="text-nowrap">
-              <a class="btn btn-sm btn-outline-primary" target="_blank" href="{{ url_for('labels.zone_label', zone_id=zone.id) }}">🖨 A4-этикетка ряда</a>
+              <a class="btn btn-sm btn-outline-primary d-none d-md-inline-block" target="_blank" href="{{ url_for('labels.zone_label', zone_id=zone.id) }}">🖨 A4-этикетка ряда</a>
+              <a class="btn btn-sm btn-outline-primary d-md-none" target="_blank" href="{{ url_for('labels.zone_label', zone_id=zone.id) }}" title="A4-этикетка ряда">🖨</a>
               <form method="post" action="{{ url_for('warehouses.add_cells', zone_id=zone.id) }}" class="d-inline-flex gap-1 align-items-center">
-                <input type="number" name="count" class="form-control form-control-sm" min="1" value="10" style="width:70px">
+                <input type="number" name="count" class="form-control form-control-sm" min="1" value="10" style="width:60px">
                 <button type="submit" class="btn btn-sm btn-outline-secondary">+ ячеек</button>
               </form>
               <form method="post" action="{{ url_for('warehouses.toggle_zone', zone_id=zone.id) }}" class="d-inline">
@@ -64,8 +66,12 @@
 
 <div class="card p-3">
   <h5>Список ячеек</h5>
-  <table class="table">
-    <thead><tr><th>Код</th><th>Ряд</th><th>Коробов</th><th>Статус</th><th></th></tr></thead>
+  <table class="table table-mobile-compact d-none d-md-table">
+    <thead>
+      <tr>
+        <th>Код</th><th>Ряд</th><th>Коробов</th><th>Статус</th><th></th>
+      </tr>
+    </thead>
     <tbody>
     {% for cell in cells %}
       <tr>
@@ -85,5 +91,28 @@
     {% endfor %}
     </tbody>
   </table>
+
+  <div class="list-group d-md-none">
+    {% for cell in cells %}
+      <div class="list-group-item py-2 px-2">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <a href="{{ url_for('warehouses.cell_detail', cell_id=cell.id) }}" class="fw-bold text-decoration-none">{{ cell.code }}</a>
+          {% if cell.is_active %}<span class="badge bg-success">Активна</span>{% else %}<span class="badge bg-secondary">Отключена</span>{% endif %}
+        </div>
+        <div class="small text-muted">
+          Ряд {{ cell.zone.code if cell.zone else '' }} ·
+          <a href="{{ url_for('warehouses.cell_detail', cell_id=cell.id) }}">{{ cell.boxes.count() }}/{{ CELL_CAPACITY }} короб.</a>
+        </div>
+        <div class="d-flex gap-2 mt-1">
+          <a class="btn btn-sm btn-outline-primary" target="_blank" href="{{ url_for('labels.cell_label', cell_id=cell.id) }}">🖨</a>
+          <form method="post" action="{{ url_for('warehouses.toggle_cell', cell_id=cell.id) }}">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if cell.is_active else 'Включить' }}</button>
+          </form>
+        </div>
+      </div>
+    {% else %}
+      <div class="list-group-item text-muted">Ячейки еще не созданы — добавьте ряд слева</div>
+    {% endfor %}
+  </div>
 </div>
 {% endblock %}

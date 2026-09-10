@@ -5,7 +5,7 @@
 
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <h3 class="mb-0">Эффективность сотрудников</h3>
-  <a class="btn btn-outline-secondary" href="{{ url_for('production.efficiency_export', date_from=date_from, date_to=date_to, user_id=user_id) }}">📤 Экспорт в Excel</a>
+  <a class="btn btn-outline-secondary d-none d-md-inline-block" href="{{ url_for('production.efficiency_export', date_from=date_from, date_to=date_to, user_id=user_id) }}">📤 Экспорт в Excel</a>
 </div>
 
 <div class="card p-3 mb-4">
@@ -34,14 +34,14 @@
 </div>
 
 <div class="card p-3">
-  <table class="table table-sm">
+  <table class="table table-sm table-mobile-compact">
     <thead>
       <tr>
         <th>Дата</th>
         <th>Сотрудник</th>
         <th>Кол-во, шт</th>
         <th>Нормо-минуты</th>
-        <th>Плановая смена, мин</th>
+        <th class="d-none d-md-table-cell">Плановая смена, мин</th>
         <th>Эффективность</th>
       </tr>
     </thead>
@@ -54,7 +54,7 @@
         <td>{{ row.normo_minutes }}
           {% if row.missing_norm %}<span class="text-muted small" title="Для этих позиций не задана норма времени — не учтены в нормо-минутах">(без нормы: {{ row.missing_norm }})</span>{% endif %}
         </td>
-        <td>{{ row.shift_minutes }}</td>
+        <td class="d-none d-md-table-cell">{{ row.shift_minutes }}</td>
         <td>
           {% if row.efficiency is not none %}
             <span class="badge {{ 'bg-success' if row.efficiency >= 100 else ('bg-warning text-dark' if row.efficiency >= 70 else 'bg-danger') }}">{{ row.efficiency }}%</span>

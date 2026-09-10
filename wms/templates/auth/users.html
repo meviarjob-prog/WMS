@@ -40,7 +40,7 @@
 
   <div class="col-md-8">
     <div class="card p-3">
-      <table class="table table-sm">
+      <table class="table table-sm table-mobile-compact">
         <thead><tr><th>Логин</th><th>Имя</th><th>Права</th><th>Разделы</th><th>Роль</th><th>Смена, мин</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for u in users %}
@@ -134,22 +134,38 @@
   </div>
 </div>
 
-<h5 class="mb-3">Стикеры перемещений</h5>
-<p class="text-muted small">Печатаются на стикерах отправления (см. «Перемещение» → печать стикеров по выбранным документам).</p>
+{% set hint_stickers = "Печатаются на стикерах отправления (см. «Перемещение» → печать стикеров по выбранным документам)." %}
+{% set hint_sender = "Если задано — печатается на всех стикерах вместо названия фактического склада-отправителя каждого документа. Пустое поле возвращает поведение по умолчанию (свой склад-отправитель на каждом направлении)." %}
+{% set hint_recipients = "Название/адрес/телефон получателя на складе назначения, в первую очередь для складов-городов маркетплейсов." %}
+
+<h5 class="mb-3 d-flex align-items-center gap-2">
+  Стикеры перемещений
+  <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+          data-bs-placement="bottom" data-bs-content="{{ hint_stickers }}" aria-label="Подсказка">?</button>
+</h5>
+<p class="text-muted small d-none d-md-block">{{ hint_stickers }}</p>
 
 <div class="card p-3 mb-3">
-  <h6>Отправитель — сразу на все направления</h6>
-  <p class="text-muted small mb-2">Если задано — печатается на всех стикерах вместо названия фактического склада-отправителя каждого документа. Пустое поле возвращает поведение по умолчанию (свой склад-отправитель на каждом направлении).</p>
+  <h6 class="d-flex align-items-center gap-2">
+    Отправитель — сразу на все направления
+    <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+            data-bs-placement="bottom" data-bs-content="{{ hint_sender }}" aria-label="Подсказка">?</button>
+  </h6>
+  <p class="text-muted small mb-2 d-none d-md-block">{{ hint_sender }}</p>
   <form method="post" action="{{ url_for('movement.update_shipping_label_sender') }}" class="d-flex gap-1" style="max-width:480px">
     <input type="text" name="sender" value="{{ shipping_label_sender or '' }}" class="form-control form-control-sm" placeholder="Название, адрес, телефон (необязательно)">
     <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
   </form>
 </div>
 
-<h6>Получатели по складам</h6>
-<p class="text-muted small">Название/адрес/телефон получателя на складе назначения, в первую очередь для складов-городов маркетплейсов.</p>
+<h6 class="d-flex align-items-center gap-2">
+  Получатели по складам
+  <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+          data-bs-placement="bottom" data-bs-content="{{ hint_recipients }}" aria-label="Подсказка">?</button>
+</h6>
+<p class="text-muted small d-none d-md-block">{{ hint_recipients }}</p>
 <div class="card p-3">
-  <table class="table table-sm">
+  <table class="table table-sm table-mobile-compact">
     <thead><tr><th>Код</th><th>Склад</th><th>Получатель</th></tr></thead>
     <tbody>
     {% for wh in warehouses %}

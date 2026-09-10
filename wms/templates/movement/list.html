@@ -40,7 +40,7 @@
           Короб <b>{{ route_box.box_number }}</b> — общая невыполненная потребность на подходящих складах:
           <b>{{ total_demand | round(0, 'floor') | int }} шт.</b>
         </div>
-        <table class="table table-sm table-mobile-compact table-allow-wrap">
+        <table class="table table-sm table-mobile-compact">
           <thead><tr><th>Склад-город</th><th>Покрывает</th><th>Нужно всего</th><th></th></tr></thead>
           <tbody>
           {% for entry in routing %}

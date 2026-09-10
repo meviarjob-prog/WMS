@@ -1,23 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Инвентаризация{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-  <h3 class="mb-0">Инвентаризация</h3>
-  <div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('inventory.export_all') }}">📤 Экспорт в Excel</a>
+{% set hint_inventory = "Несколько человек могут одновременно считать один склад по разным листам (создайте свой лист каждому — «➕ Новая инвентаризация», склад тот же). Когда все закончат — отметьте их черновики галочками ниже и сведите в один итоговый документ." %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+  <h3 class="mb-0 d-flex align-items-center gap-2">
+    Инвентаризация
+    <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+            data-bs-placement="bottom" data-bs-content="{{ hint_inventory }}" aria-label="Подсказка">?</button>
+  </h3>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary d-none d-md-inline-block" href="{{ url_for('inventory.export_all') }}">📤 Экспорт в Excel</a>
     <a class="btn btn-primary" href="{{ url_for('inventory.new_document') }}">➕ Новая инвентаризация</a>
   </div>
 </div>
 
 <div class="card p-3">
-  <p class="text-muted small mb-3">
-    Несколько человек могут одновременно считать один склад по разным листам
-    (создайте свой лист каждому — «➕ Новая инвентаризация», склад тот же).
-    Когда все закончат — отметьте их черновики галочками ниже и сведите в
-    один итоговый документ.
-  </p>
+  <p class="text-muted small mb-3 d-none d-md-block">{{ hint_inventory }}</p>
   <form method="post" action="{{ url_for('inventory.merge_documents') }}">
-    <table class="table">
+    <table class="table d-none d-md-table">
       <thead><tr><th></th><th>Номер</th><th>Дата</th><th>Склад</th><th>Коробов</th><th>Позиций</th><th>Автор</th><th>Статус</th><th></th></tr></thead>
       <tbody>
       {% for d in documents %}
@@ -51,6 +52,36 @@
       {% endfor %}
       </tbody>
     </table>
+
+    <!-- Компактный список для телефона — галочка для сведения листов
+         остается (это единственное место, где доступно это действие). -->
+    <div class="list-group d-md-none mb-2">
+      {% for d in documents %}
+        <div class="list-group-item py-2 px-2">
+          <div class="d-flex align-items-start gap-2">
+            {% if d.status == 'draft' %}
+              <input type="checkbox" name="doc_ids" value="{{ d.id }}" class="form-check-input mt-1">
+            {% endif %}
+            <div class="flex-grow-1">
+              <div class="d-flex justify-content-between align-items-center gap-2">
+                <a href="{{ url_for('inventory.detail', doc_id=d.id) }}" class="fw-bold text-decoration-none">{{ d.number }}</a>
+                <span class="badge badge-status-{{ d.status }}">
+                  {{ {'draft': 'Черновик', 'completed': 'Завершен', 'merged': 'Объединен'}.get(d.status, d.status) }}
+                </span>
+              </div>
+              <div class="small text-muted">{{ d.warehouse.name }}</div>
+              <div class="small text-muted">{{ d.created_at.strftime('%d.%m.%Y') }} · {{ d.scanned_boxes.count() }} короб. · {{ d.lines.count() }} поз.</div>
+              {% if d.status == 'merged' and d.merged_into %}
+                <a class="small" href="{{ url_for('inventory.detail', doc_id=d.merged_into_id) }}">→ {{ d.merged_into.number }}</a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% else %}
+        <div class="list-group-item text-muted">Инвентаризаций еще нет</div>
+      {% endfor %}
+    </div>
+
     <button type="submit" class="btn btn-outline-primary"
             onclick="return confirm('Свести отмеченные листы в один итоговый документ? Короба, отсканированные в нескольких листах, будут учтены один раз.');">
       🔀 Свести выбранные в один

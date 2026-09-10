@@ -14,11 +14,13 @@
 <div class="row g-4 mb-4">
   <div class="col-md-6">
     <div class="card p-3">
-      <h5>Сдать изделие</h5>
-      <p class="text-muted small">
-        Сканируйте штрихкод товара. Между сканами есть задержка
-        {{ cooldown_seconds }} сек — защита от случайного повторного скана.
-      </p>
+      {% set hint_scan = "Сканируйте штрихкод товара. Между сканами есть задержка " ~ cooldown_seconds ~ " сек — защита от случайного повторного скана." %}
+      <h5 class="d-flex align-items-center gap-2">
+        Сдать изделие
+        <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
+                data-bs-placement="bottom" data-bs-content="{{ hint_scan }}" aria-label="Подсказка">?</button>
+      </h5>
+      <p class="text-muted small d-none d-md-block">{{ hint_scan }}</p>
       <div class="mb-2">
         <label class="form-label">Штрихкод товара</label>
         <div class="d-flex gap-2">
