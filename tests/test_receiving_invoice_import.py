@@ -14,10 +14,14 @@ from wms.models import Nomenclature, ReceivingDocument, ReceivingLine, Supplier,
 from wms.utils.receiving_invoice_import import InvoiceParseError, parse_invoice
 
 
+DEFAULT_ROW_NAME = "Кардиган бежевый MEVIAR Kids / Шапки (50-54)"
+
+
 def _build_invoice_xlsx(
     number="1706",
     supplier_line="ИП Кииков Мурат Борисович, ИНН 091701566682, тел.: 89283882790",
-    rows=(("НФ-00003575", "Кардиган бежевый MEVIAR Kids / Шапки (50-54)", 80),),
+    rows=(("НФ-00003575", DEFAULT_ROW_NAME, 80),),
+    with_barcode_column=False,
 ):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -29,11 +33,18 @@ def _build_invoice_xlsx(
     ws.append([])
     ws.append(["Покупатель:", 'Общество с ограниченной ответственностью "ТОР-ФАРМ"'])
     ws.append([])
-    ws.append(["№", "Код", "Товары", "Мест", "Количество", "Цена", "Сумма"])
-    for i, (code, name, qty) in enumerate(rows, start=1):
-        ws.append([i, code, name, None, qty, 220.0, qty * 220.0])
+    header = ["№", "Код", "Товары", "Мест", "Количество", "Цена", "Сумма"]
+    if with_barcode_column:
+        header.append("Штрихкод")
+    ws.append(header)
+    for i, row in enumerate(rows, start=1):
+        code, name, qty = row[0], row[1], row[2]
+        line = [i, code, name, None, qty, 220.0, qty * 220.0]
+        if with_barcode_column:
+            line.append(row[3] if len(row) > 3 else "")
+        ws.append(line)
     ws.append([])
-    ws.append(["Итого:", "", "", "", "", "", sum(q for _, _, q in rows) * 220.0])
+    ws.append(["Итого:", "", "", "", "", "", sum(row[2] for row in rows) * 220.0])
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -53,6 +64,21 @@ def test_parse_invoice_extracts_header_and_rows():
     assert len(invoice.rows) == 1
     assert invoice.rows[0]["code"] == "НФ-00003575"
     assert invoice.rows[0]["qty"] == 80
+    assert invoice.rows[0]["barcode"] == ""
+
+
+def test_parse_invoice_extracts_barcode_column_when_present():
+    """Колонки со штрихкодом в реальной выгрузке пока нет, но пользователь
+    предупредил, что может ее добавить — парсер должен подхватить ее
+    автоматически, если она появится, не требуя ее обязательного наличия."""
+    file_stream = _build_invoice_xlsx(
+        rows=(("НФ-00003575", DEFAULT_ROW_NAME, 80, "4601234567890"),),
+        with_barcode_column=True,
+    )
+
+    invoice = parse_invoice(file_stream)
+
+    assert invoice.rows[0]["barcode"] == "4601234567890"
 
 
 def test_parse_invoice_multiple_rows_stops_at_itogo():
@@ -134,7 +160,7 @@ def test_parse_invoice_raises_clean_error_on_garbage_file():
 
 def test_upload_with_html_disguised_invoice_does_not_500(db, client_logged_in):
     warehouse = _make_warehouse()
-    item = Nomenclature(sku="НФ-00003575", barcode="8880000099", name="Кардиган тест html", unit="шт")
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000099", name=DEFAULT_ROW_NAME, unit="шт")
     db.session.add(item)
     db.session.commit()
 
@@ -177,7 +203,7 @@ def _make_warehouse():
 
 def test_upload_creates_document_with_invoice_number_and_supplier(db, client_logged_in):
     warehouse = _make_warehouse()
-    item = Nomenclature(sku="НФ-00003575", barcode="8880000001", name="Кардиган тест", unit="шт")
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000001", name=DEFAULT_ROW_NAME, unit="шт")
     db.session.add(item)
     db.session.commit()
 
@@ -213,7 +239,7 @@ def test_upload_reuses_existing_supplier_by_inn(db, client_logged_in):
     existing = Supplier(name="Старое название", inn="091701566682", phone="000")
     db.session.add(existing)
     db.session.commit()
-    item = Nomenclature(sku="НФ-00003575", barcode="8880000002", name="Кардиган тест 2", unit="шт")
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000002", name=DEFAULT_ROW_NAME, unit="шт")
     db.session.add(item)
     db.session.commit()
 
@@ -230,7 +256,7 @@ def test_upload_reuses_existing_supplier_by_inn(db, client_logged_in):
 
 def test_upload_rejects_duplicate_invoice_number(db, client_logged_in):
     warehouse = _make_warehouse()
-    item = Nomenclature(sku="НФ-00003575", barcode="8880000003", name="Кардиган тест 3", unit="шт")
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000003", name=DEFAULT_ROW_NAME, unit="шт")
     db.session.add(item)
     db.session.commit()
 
@@ -270,14 +296,14 @@ def test_upload_reports_unmatched_codes_but_keeps_matched(db, client_logged_in):
     )
 
     html = resp.get_data(as_text=True)
-    assert "Не найдено по коду" in html
+    assert "Не найдено в номенклатуре по названию/штрихкоду" in html
     doc = ReceivingDocument.query.filter_by(number="1706").first()
     assert doc.lines.count() == 1
 
 
 def test_confirm_line_updates_qty_and_confirmed_flag(db, client_logged_in):
     warehouse = _make_warehouse()
-    item = Nomenclature(sku="НФ-00003575", barcode="8880000005", name="Кардиган тест 5", unit="шт")
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000005", name=DEFAULT_ROW_NAME, unit="шт")
     db.session.add(item)
     db.session.commit()
     client_logged_in.post(
@@ -306,7 +332,7 @@ def test_confirm_line_updates_qty_and_confirmed_flag(db, client_logged_in):
 
 def test_completing_confirmed_invoice_credits_unplaced_stock(db, client_logged_in):
     warehouse = _make_warehouse()
-    item = Nomenclature(sku="НФ-00003575", barcode="8880000006", name="Кардиган тест 6", unit="шт")
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000006", name=DEFAULT_ROW_NAME, unit="шт")
     db.session.add(item)
     db.session.commit()
     client_logged_in.post(
@@ -323,3 +349,51 @@ def test_completing_confirmed_invoice_credits_unplaced_stock(db, client_logged_i
     stock = UnplacedStock.query.filter_by(warehouse_id=warehouse.id, nomenclature_id=item.id).first()
     assert stock is not None
     assert stock.qty == 79
+
+
+def test_upload_matches_by_barcode_when_available_even_if_name_differs(db, client_logged_in):
+    """1С «Код» — внутренний артикул поставщика, а не sku в номенклатуре, и
+    может не совпадать вообще ни с чем. Если в файле есть штрихкод, он
+    сильнее названия (названия в системе и в накладной могут отличаться
+    по формулировке, штрихкод — нет)."""
+    warehouse = _make_warehouse()
+    item = Nomenclature(
+        sku="ANY-SKU-1", barcode="4601234567890", name="Совсем другое название в системе", unit="шт"
+    )
+    db.session.add(item)
+    db.session.commit()
+
+    file_stream = _build_invoice_xlsx(
+        rows=(("НФ-00003575", DEFAULT_ROW_NAME, 80, "4601234567890"),),
+        with_barcode_column=True,
+    )
+    resp = client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (file_stream, "invoice.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+    assert doc is not None
+    line = doc.lines.first()
+    assert line.nomenclature_id == item.id
+
+
+def test_upload_matches_by_name_case_insensitively(db, client_logged_in):
+    warehouse = _make_warehouse()
+    item = Nomenclature(sku="ANY-SKU-2", barcode="8880000007", name=DEFAULT_ROW_NAME.upper(), unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    resp = client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+    assert doc.lines.first().nomenclature_id == item.id

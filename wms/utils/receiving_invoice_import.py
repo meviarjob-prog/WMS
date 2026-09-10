@@ -28,6 +28,7 @@ _PHONE_RE = re.compile(r"тел\.?:?\s*([+0-9][0-9()\-\s]{5,}[0-9])", re.IGNOREC
 _HEADER_CODE_MARKERS = ("код",)
 _HEADER_NAME_MARKERS = ("товар",)
 _HEADER_QTY_MARKERS = ("количество", "кол-во")
+_HEADER_BARCODE_MARKERS = ("штрихкод", "штрих-код", "barcode", "ean")
 _STOP_MARKERS = ("итого", "всего наименований")
 
 
@@ -208,10 +209,14 @@ def _find_supplier(ws, max_scan_rows=15):
 
 
 def _find_header_row(ws, max_scan_rows=25):
-    """Возвращает (row, code_col, name_col, qty_col)."""
+    """Возвращает (row, code_col, name_col, qty_col, barcode_col).
+
+    Колонка со штрихкодом необязательна — в текущей выгрузке 1С ее нет, но
+    она может появиться в будущем (тогда сопоставление с номенклатурой
+    будет вестись в первую очередь по ней, см. parse_invoice/receiving.py)."""
     max_row = min(ws.max_row, max_scan_rows)
     for r in range(1, max_row + 1):
-        code_col = name_col = qty_col = None
+        code_col = name_col = qty_col = barcode_col = None
         for c in range(1, ws.max_column + 1):
             text = _norm(ws.cell(row=r, column=c).value).lower()
             if not text:
@@ -222,9 +227,11 @@ def _find_header_row(ws, max_scan_rows=25):
                 name_col = c
             if qty_col is None and any(m in text for m in _HEADER_QTY_MARKERS):
                 qty_col = c
+            if barcode_col is None and any(m in text for m in _HEADER_BARCODE_MARKERS):
+                barcode_col = c
         if code_col and name_col and qty_col:
-            return r, code_col, name_col, qty_col
-    return None, None, None, None
+            return r, code_col, name_col, qty_col, barcode_col
+    return None, None, None, None, None
 
 
 def _to_qty(value):
@@ -256,7 +263,7 @@ def parse_invoice(file_stream):
     if not supplier_name:
         raise InvoiceParseError("Не удалось найти в файле строку «Поставщик:»")
 
-    header_row, code_col, name_col, qty_col = _find_header_row(ws)
+    header_row, code_col, name_col, qty_col, barcode_col = _find_header_row(ws)
     if header_row is None:
         raise InvoiceParseError(
             "Не удалось найти таблицу товаров (шапку со столбцами «Код», "
@@ -275,7 +282,8 @@ def parse_invoice(file_stream):
         qty = _to_qty(ws.cell(row=r, column=qty_col).value)
         if qty is None:
             continue
-        invoice.rows.append({"code": code, "name": name, "qty": qty})
+        barcode = _norm(ws.cell(row=r, column=barcode_col).value) if barcode_col else ""
+        invoice.rows.append({"code": code, "name": name, "qty": qty, "barcode": barcode})
 
     if not invoice.rows:
         raise InvoiceParseError("В файле не нашлось ни одной строки с товаром и количеством")

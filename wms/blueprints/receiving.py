@@ -70,6 +70,20 @@ def _find_or_create_supplier(name, inn, phone):
     return supplier
 
 
+def _find_nomenclature_for_invoice_row(row):
+    """Сопоставляет строку накладной с номенклатурой по штрихкоду (если в
+    файле есть такая колонка — сейчас ее нет, но может появиться) либо по
+    точному названию товара. Код 1С ("Код") — внутренняя нумерация
+    поставщика и с sku в номенклатуре не связана, поэтому не используется."""
+    barcode = row.get("barcode")
+    if barcode:
+        item = Nomenclature.query.filter_by(barcode=barcode).first()
+        if item:
+            return item
+    name = row["name"].strip()
+    return Nomenclature.query.filter(func.lower(Nomenclature.name) == name.lower()).first()
+
+
 @bp.route("/import-invoice", methods=["GET", "POST"])
 def import_invoice_form():
     """Загрузка приходной накладной из 1С (см.
@@ -124,7 +138,7 @@ def import_invoice_form():
         matched = 0
         unmatched_names = []
         for row in invoice.rows:
-            item = Nomenclature.query.filter_by(sku=row["code"]).first() if row["code"] else None
+            item = _find_nomenclature_for_invoice_row(row)
             if not item:
                 unmatched_names.append(row["name"])
                 continue
@@ -153,7 +167,7 @@ def import_invoice_form():
         shown = ", ".join(unmatched_names[:5])
         more = "…" if len(unmatched_names) > 5 else ""
         message += (
-            f". Не найдено по коду в номенклатуре: {len(unmatched_names)} поз. "
+            f". Не найдено в номенклатуре по названию/штрихкоду: {len(unmatched_names)} поз. "
             f"({shown}{more}) — добавьте их в документ вручную"
         )
     flash(message, "warning" if unmatched_names else "success")
