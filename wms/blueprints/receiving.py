@@ -3,6 +3,7 @@ from datetime import datetime
 from flask import (
     Blueprint,
     Response,
+    current_app,
     flash,
     jsonify,
     redirect,
@@ -98,40 +99,54 @@ def import_invoice_form():
     except InvoiceParseError as exc:
         flash(f"Не удалось разобрать файл накладной: {exc}", "danger")
         return redirect(url_for("receiving.import_invoice_form"))
+    except Exception as exc:  # noqa: BLE001 — файл пришел от внешнего источника (1С)
+        current_app.logger.exception("Не удалось прочитать файл накладной")
+        flash(f"Не удалось прочитать файл: {exc}", "danger")
+        return redirect(url_for("receiving.import_invoice_form"))
 
     if ReceivingDocument.query.filter_by(number=invoice.invoice_number).first():
         flash(f"Накладная № {invoice.invoice_number} уже была загружена раньше", "danger")
         return redirect(url_for("receiving.import_invoice_form"))
 
-    supplier = _find_or_create_supplier(invoice.supplier_name, invoice.supplier_inn, invoice.supplier_phone)
+    try:
+        supplier = _find_or_create_supplier(invoice.supplier_name, invoice.supplier_inn, invoice.supplier_phone)
 
-    doc = ReceivingDocument(
-        number=invoice.invoice_number,
-        warehouse_id=warehouse_id,
-        supplier=supplier.name,
-        supplier_id=supplier.id,
-        created_by_id=current_user.id,
-    )
-    db.session.add(doc)
-    db.session.flush()
-
-    matched = 0
-    unmatched_names = []
-    for row in invoice.rows:
-        item = Nomenclature.query.filter_by(sku=row["code"]).first() if row["code"] else None
-        if not item:
-            unmatched_names.append(row["name"])
-            continue
-        db.session.add(
-            ReceivingLine(
-                document_id=doc.id,
-                nomenclature_id=item.id,
-                qty=row["qty"],
-                expected_qty=row["qty"],
-            )
+        doc = ReceivingDocument(
+            number=invoice.invoice_number,
+            warehouse_id=warehouse_id,
+            supplier=supplier.name,
+            supplier_id=supplier.id,
+            created_by_id=current_user.id,
         )
-        matched += 1
-    db.session.commit()
+        db.session.add(doc)
+        db.session.flush()
+
+        matched = 0
+        unmatched_names = []
+        for row in invoice.rows:
+            item = Nomenclature.query.filter_by(sku=row["code"]).first() if row["code"] else None
+            if not item:
+                unmatched_names.append(row["name"])
+                continue
+            db.session.add(
+                ReceivingLine(
+                    document_id=doc.id,
+                    nomenclature_id=item.id,
+                    qty=row["qty"],
+                    expected_qty=row["qty"],
+                )
+            )
+            matched += 1
+        db.session.commit()
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        current_app.logger.exception("Не удалось создать документ приемки из накладной")
+        flash(
+            "Файл разобран, но не удалось создать документ приемки — попробуйте еще раз "
+            "или обратитесь к администратору",
+            "danger",
+        )
+        return redirect(url_for("receiving.import_invoice_form"))
 
     message = f"Накладная № {doc.number} загружена: {matched} поз. от «{supplier.name}»"
     if unmatched_names:

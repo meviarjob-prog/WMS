@@ -81,6 +81,93 @@ def test_parse_invoice_raises_on_unrecognized_file():
         parse_invoice(buf)
 
 
+def _build_invoice_html_xls(
+    number="1706",
+    supplier_line="ИП Кииков Мурат Борисович, ИНН 091701566682, тел.: 89283882790",
+    rows=(("НФ-00003575", "Кардиган бежевый MEVIAR Kids / Шапки (50-54)", 80),),
+):
+    """1С очень часто отдает "выгрузку в Excel" на самом деле HTML-таблицей
+    с расширением .xls/.xlsx — openpyxl такой файл открыть не может вообще
+    (это не ZIP), поэтому парсер должен распознавать и такой формат тоже."""
+    rows_html = "".join(
+        f"<tr><td>{i}</td><td>{code}</td><td>{name}</td><td></td><td>{qty}</td><td>220</td><td>{qty * 220}</td></tr>"
+        for i, (code, name, qty) in enumerate(rows, start=1)
+    )
+    html = f"""
+    <html><body>
+    <table>
+      <tr><td colspan="7">Приходная накладная № {number} от 10 сентября 2026 г.</td></tr>
+      <tr><td colspan="7">(Поступление от поставщика) Ш-009  СКЛАД2 ШОССЕЙНАЯ167</td></tr>
+      <tr><td colspan="7">Поставщик:   {supplier_line}</td></tr>
+      <tr><td colspan="7">Контактное лицо:</td></tr>
+      <tr><td>№</td><td>Код</td><td>Товары</td><td>Мест</td><td>Количество</td><td>Цена</td><td>Сумма</td></tr>
+      {rows_html}
+      <tr><td>Итого:</td><td></td><td></td><td></td><td></td><td></td><td>{sum(q for _, _, q in rows) * 220}</td></tr>
+    </table>
+    </body></html>
+    """
+    return io.BytesIO(html.encode("utf-8"))
+
+
+def test_parse_invoice_handles_html_disguised_as_excel():
+    """Реальная причина "Internal Server Error" при загрузке — 1С шлет HTML
+    под видом .xlsx, а openpyxl.load_workbook падает не InvoiceParseError,
+    а низкоуровневым исключением (не ZIP-файл)."""
+    file_stream = _build_invoice_html_xls()
+
+    invoice = parse_invoice(file_stream)
+
+    assert invoice.invoice_number == "1706"
+    assert invoice.supplier_inn == "091701566682"
+    assert len(invoice.rows) == 1
+    assert invoice.rows[0]["qty"] == 80
+
+
+def test_parse_invoice_raises_clean_error_on_garbage_file():
+    """Совсем не Excel и не HTML — тоже не должно валиться необработанным
+    исключением, только понятной InvoiceParseError."""
+    buf = io.BytesIO(b"\x00\x01\x02 not a real file at all \xff\xfe")
+
+    with pytest.raises(InvoiceParseError):
+        parse_invoice(buf)
+
+
+def test_upload_with_html_disguised_invoice_does_not_500(db, client_logged_in):
+    warehouse = _make_warehouse()
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000099", name="Кардиган тест html", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    resp = client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (_build_invoice_html_xls(), "invoice.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+    assert doc is not None
+    assert doc.lines.count() == 1
+
+
+def test_upload_with_garbage_file_shows_flash_not_500(db, client_logged_in):
+    warehouse = _make_warehouse()
+
+    resp = client_logged_in.post(
+        "/receiving/import-invoice",
+        data={
+            "warehouse_id": warehouse.id,
+            "file": (io.BytesIO(b"\x00\x01\x02 garbage \xff\xfe"), "invoice.xlsx"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    assert "Не удалось" in resp.get_data(as_text=True)
+
+
 def _make_warehouse():
     wh = Warehouse(code="WH-INV1", name="Основной склад для накладных")
     db.session.add(wh)

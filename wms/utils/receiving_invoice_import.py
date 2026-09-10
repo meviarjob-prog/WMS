@@ -5,10 +5,19 @@ shipment_plan_import.py, ищем по смыслу (заголовки "Код"
 "Количество", строка "Поставщик:"), а не по фиксированным номерам
 строк/колонок, чтобы мелкие сдвиги в выгрузке не ломали разбор.
 
+1С очень часто выгружает "в Excel" на самом деле HTML-таблицей с
+расширением .xls/.xlsx (реальный OOXML-файл openpyxl не открывает вообще
+и падает не InvoiceParseError, а низкоуровневым исключением) — поэтому
+если файл не похож на настоящий .xlsx (нет ZIP-сигнатуры), пробуем
+разобрать его как HTML-таблицу тем же кодом поиска по смыслу, через
+маленькую обертку _ArrayWorksheet с интерфейсом, как у листа openpyxl.
+
 Если реальный файл окажется устроен иначе — здесь единственное место,
 которое нужно будет поправить."""
 
+import io
 import re
+from html.parser import HTMLParser
 
 from openpyxl import load_workbook
 
@@ -39,6 +48,124 @@ class ParsedInvoice:
         self.supplier_inn = supplier_inn
         self.supplier_phone = supplier_phone
         self.rows = []  # list[dict]: code, name, qty
+
+
+class _ArrayCell:
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+class _ArrayWorksheet:
+    """Обертка над обычной таблицей (список списков строк) с тем же
+    интерфейсом (.max_row/.max_column/.cell(row=, column=).value), что и у
+    листа openpyxl — чтобы весь код поиска по смыслу ниже работал
+    одинаково и для настоящего .xlsx, и для HTML-таблицы 1С."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.max_row = len(rows)
+        self.max_column = max((len(r) for r in rows), default=0)
+
+    def cell(self, row, column):
+        r, c = row - 1, column - 1
+        if 0 <= r < len(self._rows) and 0 <= c < len(self._rows[r]):
+            return _ArrayCell(self._rows[r][c])
+        return _ArrayCell(None)
+
+
+class _HtmlTableExtractor(HTMLParser):
+    """Извлекает все <table> из HTML в список таблиц (каждая — список строк,
+    каждая строка — список текстов ячеек). Вложенные таблицы внутри ячейки
+    попадают в общий список отдельным элементом — для наших целей (взять
+    самую большую таблицу целиком) это не мешает."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables = []
+        self._table_stack = []
+        self._row = None
+        self._cell_parts = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._table_stack.append([])
+        elif tag == "tr" and self._table_stack:
+            self._row = []
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell_parts = []
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self._cell_parts is not None:
+            self._row.append("".join(self._cell_parts).strip())
+            self._cell_parts = None
+        elif tag == "tr" and self._row is not None:
+            self._table_stack[-1].append(self._row)
+            self._row = None
+        elif tag == "table" and self._table_stack:
+            self.tables.append(self._table_stack.pop())
+
+    def handle_data(self, data):
+        if self._cell_parts is not None:
+            self._cell_parts.append(data)
+
+
+def _looks_like_zip(data: bytes) -> bool:
+    return data[:2] == b"PK"
+
+
+def _decode_bytes(data: bytes) -> str:
+    # 1C чаще всего отдает такие "HTML-под-видом-Excel" файлы либо в
+    # UTF-8, либо в cp1251 (стандартная для старых версий 1С кодировка).
+    for encoding in ("utf-8-sig", "utf-8", "cp1251"):
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _parse_html_worksheet(data: bytes):
+    text = _decode_bytes(data)
+    if "<table" not in text.lower():
+        return None
+    parser = _HtmlTableExtractor()
+    try:
+        parser.feed(text)
+    except Exception:  # noqa: BLE001 — на входе произвольный внешний файл
+        return None
+    if not parser.tables:
+        return None
+    # Печатная форма 1С обычно оборачивает всю накладную в одну таблицу —
+    # берем самую большую по числу строк, а не первую попавшуюся (первой
+    # может идти служебная/пустая обертка).
+    rows = max(parser.tables, key=len)
+    return _ArrayWorksheet(rows)
+
+
+def _load_worksheet(file_stream):
+    """Возвращает объект с интерфейсом листа openpyxl — из настоящего
+    .xlsx, либо (если это на самом деле HTML/SpreadsheetML под видом
+    Excel — частая особенность выгрузки "в Excel" из 1С) из HTML-таблицы.
+    Бросает InvoiceParseError с понятным текстом, если файл не подошел ни
+    под один вариант — вместо необработанного исключения наружу."""
+    data = file_stream.read()
+    if _looks_like_zip(data):
+        try:
+            wb = load_workbook(io.BytesIO(data), data_only=True)
+        except Exception as exc:  # noqa: BLE001 — превращаем в понятную ошибку
+            raise InvoiceParseError(f"Не удалось открыть файл как Excel: {exc}") from exc
+        return wb.worksheets[0]
+
+    ws = _parse_html_worksheet(data)
+    if ws is not None:
+        return ws
+
+    raise InvoiceParseError(
+        "Файл не похож ни на настоящий .xlsx, ни на HTML-таблицу Excel — "
+        "попробуйте пересохранить накладную из 1С и загрузить заново"
+    )
 
 
 def _find_title(ws, max_scan_rows=15):
@@ -111,12 +238,12 @@ def _to_qty(value):
 
 
 def parse_invoice(file_stream):
-    """Разбирает первый лист файла. Бросает InvoiceParseError с понятным
-    для пользователя текстом, если не удалось найти шапку документа или
-    таблицу товаров — вместо того чтобы молча создать пустую/неполную
-    приемку."""
-    wb = load_workbook(file_stream, data_only=True)
-    ws = wb.worksheets[0]
+    """Разбирает первый лист файла (настоящий .xlsx или HTML-таблицу под
+    видом Excel — см. _load_worksheet). Бросает InvoiceParseError с
+    понятным для пользователя текстом при любой проблеме с файлом —
+    вместо того чтобы упасть необработанным исключением или молча создать
+    пустую/неполную приемку."""
+    ws = _load_worksheet(file_stream)
 
     invoice_number, invoice_date_text = _find_title(ws)
     if not invoice_number:
