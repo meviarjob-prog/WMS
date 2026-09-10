@@ -1,8 +1,8 @@
-"""Стикеры отправления 58x40мм по выбранным перемещениям — по количеству
-коробов в документе печатается столько же одинаковых стикеров (маршрут +
-получатель + отправитель), без привязки к конкретному коробу — стикер не
-несет ни номера, ни штрихкода короба (это отдельная от «Этикетки короба»
-наклейка, см. warehouses.update_recipient для настройки получателя)."""
+"""Стикеры отправления 58x40мм по выбранным перемещениям — по одному
+стикеру на каждый короб документа (маршрут + получатель + отправитель +
+номер ЭТОГО короба), чтобы при проклейке можно было сверить стикер с
+номером на коробе (это отдельная от «Этикетки короба» наклейка — без
+штрихкода, см. warehouses.update_recipient для настройки получателя)."""
 
 import re
 
@@ -80,13 +80,39 @@ def test_build_shipping_labels_across_documents_sums_box_counts(db, client_logge
     assert _page_count(pdf_bytes) == 6
 
 
+def test_build_shipping_labels_binds_box_number_per_box(db, client_logged_in, monkeypatch):
+    """Каждый стикер должен нести номер СВОЕГО короба (в правильном порядке
+    и без задвоения одного номера на все стикеры документа) — иначе сверка
+    при проклейке ничего не проверяет. PDF-текст не грепается напрямую
+    (reportlab сжимает содержимое страниц), поэтому проверяем через то,
+    какие box_number реально дошли до отрисовки."""
+    doc, _dest = _make_document_with_boxes(n_boxes=3, suffix="D")
+    from wms.utils import shipping_label_pdf
+
+    seen_box_numbers = []
+    original = shipping_label_pdf._draw_shipping_label
+
+    def spy(c, **kwargs):
+        seen_box_numbers.append(kwargs.get("box_number"))
+        return original(c, **kwargs)
+
+    monkeypatch.setattr(shipping_label_pdf, "_draw_shipping_label", spy)
+
+    shipping_label_pdf.build_movement_shipping_labels_pdf([doc])
+
+    expected = [line.box.box_number for line in doc.lines]
+    assert seen_box_numbers == expected
+    assert len(set(seen_box_numbers)) == 3
+
+
 def test_shipping_label_has_no_box_specific_barcode(db, client_logged_in):
-    """Стикеры одного документа не привязаны к конкретному коробу — на них
-    нет ни штрихкода, ни номера короба, поэтому в PDF не должно быть
-    встроенного изображения (у обычной "Этикетки короба" оно всегда есть):
-    никакого /XObject в ресурсах страницы (сам /Image — не показатель, это
-    просто стандартная декларация возможностей ProcSet, которую reportlab
-    пишет всегда, даже на чисто текстовую страницу)."""
+    """Стикер отправления печатает номер короба ТЕКСТОМ (для сверки при
+    проклейке — см. test_build_shipping_labels_binds_box_number_per_box),
+    но не штрихкод/изображение — для сканирования есть отдельная «Этикетка
+    короба» (labels_pdf.py). Поэтому в PDF не должно быть встроенного
+    изображения: никакого /XObject в ресурсах страницы (сам /Image — не
+    показатель, это просто стандартная декларация возможностей ProcSet,
+    которую reportlab пишет всегда, даже на чисто текстовую страницу)."""
     doc, _dest = _make_document_with_boxes(n_boxes=2)
 
     pdf_bytes = build_movement_shipping_labels_pdf([doc])

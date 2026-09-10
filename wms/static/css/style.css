@@ -166,6 +166,13 @@ body {
   word-break: break-word;
 }
 
+/* Номер короба на этикетке короба — крупнее обычного .label-title
+   (используется только там, а не на этикетках товара/ячейки, где текст
+   бывает длиннее и не поместится настолько крупным шрифтом) */
+.label-page .label-title.label-title-lg {
+  font-size: 15pt;
+}
+
 .label-page .label-subtitle {
   font-size: 7.5pt;
   color: #333;

@@ -24,10 +24,16 @@ pdfmetrics.registerFont(TTFont(FONT_REGULAR, os.path.join(_FONTS_DIR, "DejaVuSan
 pdfmetrics.registerFont(TTFont(FONT_BOLD, os.path.join(_FONTS_DIR, "DejaVuSans-Bold.ttf")))
 
 
-def _draw_label_page(c, code_value: str, title: str, subtitle: str = ""):
+def _draw_label_page(c, code_value: str, title: str, subtitle: str = "", title_font_size=8):
     """Рисует одну этикетку 58x40мм на текущей странице канваса c —
     используется и для одиночной этикетки, и для пакетной печати (там
-    вызывается в цикле с showPage() между этикетками)."""
+    вызывается в цикле с showPage() между этикетками).
+
+    title_font_size по умолчанию 8 (наименование товара может быть длинным
+    и разбиваться на 3 строки — крупнее не поместится). Этикетка короба
+    печатает короткий текст ("Короб BOX-000123", всегда 1 строка) и просит
+    более крупный шрифт явно (см. вызовы в labels.py) — читать номер короба
+    издалека и при беглом взгляде должно быть проще."""
     png_bytes = generate_barcode_png_bytes(code_value)
     img = ImageReader(io.BytesIO(png_bytes))
     img_w, img_h = img.getSize()
@@ -43,11 +49,13 @@ def _draw_label_page(c, code_value: str, title: str, subtitle: str = ""):
     c.drawImage(img, x, y, width=draw_w, height=draw_h, mask="auto")
 
     text_top = y - 3 * mm
-    c.setFont(FONT_BOLD, 8)
+    c.setFont(FONT_BOLD, title_font_size)
 
     wrapped = textwrap.wrap(title, width=32) or [""]
     wrapped = wrapped[:3]
-    line_height = 3.4 * mm
+    # Пропорционально исходному соотношению 8pt -> 3.4мм между строк, чтобы
+    # более крупный шрифт (короб) не наезжал строка на строку.
+    line_height = title_font_size * 0.425 * mm
     ty = text_top
     for line in wrapped:
         ty -= line_height
@@ -59,7 +67,7 @@ def _draw_label_page(c, code_value: str, title: str, subtitle: str = ""):
         c.drawCentredString(LABEL_WIDTH / 2, ty, subtitle)
 
 
-def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
+def build_label_pdf(code_value: str, title: str, subtitle: str = "", title_font_size=8) -> bytes:
     """Строит PDF-этикетку 58x40мм: штрихкод сверху, текст снизу.
 
     code_value — значение, кодируемое в штрихкод (баркод товара / номер короба / код ячейки).
@@ -68,20 +76,20 @@ def build_label_pdf(code_value: str, title: str, subtitle: str = "") -> bytes:
     """
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
-    _draw_label_page(c, code_value, title, subtitle)
+    _draw_label_page(c, code_value, title, subtitle, title_font_size=title_font_size)
     c.showPage()
     c.save()
     return buffer.getvalue()
 
 
-def build_labels_batch_pdf(entries) -> bytes:
+def build_labels_batch_pdf(entries, title_font_size=8) -> bytes:
     """Строит один PDF из нескольких этикеток 58x40мм подряд (одна на
     страницу) — для печати сразу целой партии, например, только что
     массово созданных коробов. entries — список (code_value, title, subtitle)."""
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
     for code_value, title, subtitle in entries:
-        _draw_label_page(c, code_value, title, subtitle)
+        _draw_label_page(c, code_value, title, subtitle, title_font_size=title_font_size)
         c.showPage()
     c.save()
     return buffer.getvalue()

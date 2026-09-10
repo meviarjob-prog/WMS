@@ -45,11 +45,14 @@ def box_label(box_id):
     return render_template("labels/box.html", box=box, barcode_img=img, autoprint=_autoprint())
 
 
+BOX_TITLE_FONT_SIZE = 15
+
+
 @bp.route("/box/<int:box_id>.pdf")
 def box_label_pdf(box_id):
     box = Box.query.get_or_404(box_id)
     subtitle = box.warehouse.name if box.warehouse else ""
-    pdf = build_label_pdf(box.barcode_value, f"Короб {box.box_number}", subtitle)
+    pdf = build_label_pdf(box.barcode_value, f"Короб {box.box_number}", subtitle, title_font_size=BOX_TITLE_FONT_SIZE)
     return Response(
         pdf,
         mimetype="application/pdf",
@@ -85,7 +88,7 @@ def boxes_label_batch_pdf():
     if not entries:
         abort(404, "Короба не найдены")
 
-    pdf = build_labels_batch_pdf(entries)
+    pdf = build_labels_batch_pdf(entries, title_font_size=BOX_TITLE_FONT_SIZE)
     return Response(
         pdf,
         mimetype="application/pdf",
