@@ -143,7 +143,11 @@ def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_
     item1 = _make_item("9990000004", "Товар А")
     item2 = _make_item("9990000005", "Товар Б")
     doc = ReceivingDocument(
-        number="НАКЛ-777", warehouse_id=wh.id, supplier="ИП Тестов", invoice_file_name="накладная.xlsx"
+        number="НАКЛ-777",
+        warehouse_id=wh.id,
+        supplier="ИП Тестов",
+        invoice_file_name="накладная.xlsx",
+        order_number="Ш-00105",
     )
     db.session.add(doc)
     db.session.commit()
@@ -179,6 +183,7 @@ def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_
     ret_doc = data["supplier_returns"][0]
     assert ret_doc["id"] == doc.id
     assert ret_doc["invoice_number"] == "НАКЛ-777"
+    assert ret_doc["order_number"] == "Ш-00105"
     assert ret_doc["supplier"] == "ИП Тестов"
     assert {line["qty"] for line in ret_doc["lines"]} == {3, 1}
 
@@ -216,3 +221,29 @@ def test_export_confirm_marks_everything_synced(db, client_logged_in):
 
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     assert resp.get_json()["supplier_returns"] == []
+
+
+def test_export_confirm_auto_ticks_accounting_checkbox_for_movements(db, client_logged_in):
+    """Успешное подтверждение от 1С само ставит галочку бухгалтера "внесено
+    в 1С" — чтобы не дублировать вручную то, что и так подтвердила
+    интеграция (см. accounting_entered_at в модели)."""
+    _set_token()
+    sender = Warehouse(code="WH-1C-9", name="Основной склад")
+    receiver = Warehouse(code="WH-1C-10", name="Склад №2 (Шоссейная 167)")
+    db.session.add_all([sender, receiver])
+    db.session.commit()
+    item = _make_item("9990000007")
+    doc = _ship_box(sender, receiver, item, 3, "BOX-1C-CHK", client_logged_in)
+    assert doc.accounting_entered_at is None
+
+    resp = client_logged_in.post(
+        "/integrations/1c/api/export/confirm",
+        data=json.dumps({"movement_ids": [doc.id], "inventory_ids": [], "supplier_return_ids": []}),
+        content_type="application/json",
+        headers={"X-1C-Token": TOKEN},
+    )
+    assert resp.get_json()["confirmed"]["movements"] == 1
+
+    doc = MovementDocument.query.get(doc.id)
+    assert doc.synced_to_1c_at is not None
+    assert doc.accounting_entered_at is not None

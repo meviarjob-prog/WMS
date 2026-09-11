@@ -165,10 +165,18 @@ def _supplier_returns_export():
     payloads = []
     for receiving_document_id, group in groups.items():
         first = group[0]
+        order_number = first.receiving_document.order_number if first.receiving_document else None
         payloads.append(
             {
                 "id": receiving_document_id,
                 "invoice_number": first.invoice_number,
+                # Номер "Заказа поставщику" в 1С (вносится вручную в WMS при
+                # загрузке накладной, см. ReceivingDocument.order_number) —
+                # именно по нему 1С ищет основание для возврата (см.
+                # SyncWMS.bsl НайтиЗаказПоставщикуПоНомеру), а не по
+                # invoice_number, который относится к документу поступления,
+                # а не к заказу поставщику.
+                "order_number": order_number or "",
                 "supplier": first.supplier_name or "",
                 "warehouse": first.warehouse.name if first.warehouse else "",
                 "comment": f"WMS: возврат по приемке {first.invoice_number}",
@@ -244,6 +252,8 @@ def export_confirm():
     )
     for doc in confirmed_movements:
         doc.synced_to_1c_at = now
+        if doc.accounting_entered_at is None:
+            doc.accounting_entered_at = now
 
     confirmed_inventories = (
         InventoryDocument.query.filter(
