@@ -1,7 +1,8 @@
-"""Колонка "Кол-во SKU" в списке перемещений (см. MovementDocument.sku_count,
-movement/list.html) — количество РАЗНЫХ товаров во всех коробах документа,
-не путать с количеством коробов. Показывается только в десктопной таблице
-(мобильный список карточек этой колонки не содержит)."""
+"""Колонка "Кол-во товара" в списке перемещений (см.
+MovementDocument.total_item_qty, movement/list.html) — суммарное количество
+товара во всех коробах документа, не путать с количеством коробов.
+Показывается только в десктопной таблице (мобильный список карточек этой
+колонки не содержит)."""
 
 from wms.extensions import db
 from wms.models import Box, BoxItem, MovementDocument, MovementLine, Nomenclature, Warehouse
@@ -15,17 +16,17 @@ def _make_warehouses():
     return sender, dest
 
 
-def test_sku_count_is_zero_for_empty_document(db):
+def test_total_item_qty_is_zero_for_empty_document(db):
     sender, dest = _make_warehouses()
     doc = MovementDocument(number="PER-SKU-1", from_warehouse_id=sender.id, to_warehouse_id=dest.id)
     db.session.add(doc)
     db.session.commit()
 
-    assert doc.sku_count() == 0
+    assert doc.total_item_qty() == 0
 
 
-def test_sku_count_deduplicates_same_item_across_boxes(db):
-    """Один и тот же товар в двух разных коробах — это все равно 1 SKU."""
+def test_total_item_qty_sums_across_boxes(db):
+    """Один и тот же товар в двух разных коробах — количество суммируется."""
     sender, dest = _make_warehouses()
     item = Nomenclature(sku="SKU-DUP", barcode="4445556667778", name="Товар", unit="шт")
     db.session.add(item)
@@ -43,10 +44,10 @@ def test_sku_count_deduplicates_same_item_across_boxes(db):
         db.session.add(MovementLine(document_id=doc.id, box_id=box.id, from_warehouse_id=sender.id))
     db.session.commit()
 
-    assert doc.sku_count() == 1
+    assert doc.total_item_qty() == 10
 
 
-def test_sku_count_counts_distinct_items_across_boxes(db):
+def test_total_item_qty_sums_distinct_items_across_boxes(db):
     sender, dest = _make_warehouses()
     item1 = Nomenclature(sku="SKU-A", barcode="5556667778889", name="Товар А", unit="шт")
     item2 = Nomenclature(sku="SKU-B", barcode="6667778889990", name="Товар Б", unit="шт")
@@ -67,10 +68,10 @@ def test_sku_count_counts_distinct_items_across_boxes(db):
     db.session.add(MovementLine(document_id=doc.id, box_id=box2.id, from_warehouse_id=sender.id))
     db.session.commit()
 
-    assert doc.sku_count() == 2
+    assert doc.total_item_qty() == 5
 
 
-def test_movement_list_desktop_table_shows_sku_count_column(db, client_logged_in):
+def test_movement_list_desktop_table_shows_total_qty_column(db, client_logged_in):
     sender, dest = _make_warehouses()
     item = Nomenclature(sku="SKU-LIST", barcode="7778889990001", name="Товар для списка", unit="шт")
     db.session.add(item)
@@ -88,4 +89,4 @@ def test_movement_list_desktop_table_shows_sku_count_column(db, client_logged_in
 
     html = client_logged_in.get("/movement/").get_data(as_text=True)
 
-    assert "Кол-во SKU" in html
+    assert "Кол-во товара" in html

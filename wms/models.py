@@ -553,14 +553,14 @@ class MovementDocument(db.Model):
         "MovementLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
     )
 
-    def sku_count(self):
-        """Количество РАЗНЫХ товаров (SKU) во всех коробах документа — не
+    def total_item_qty(self):
+        """Суммарное количество товара (штук) во всех коробах документа — не
         путать с lines.count() (это количество коробов)."""
         box_ids = [line.box_id for line in self.lines]
         if not box_ids:
             return 0
         return (
-            db.session.query(db.func.count(db.func.distinct(BoxItem.nomenclature_id)))
+            db.session.query(db.func.sum(BoxItem.qty))
             .filter(BoxItem.box_id.in_(box_ids))
             .scalar()
         ) or 0

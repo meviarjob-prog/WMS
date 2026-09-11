@@ -421,9 +421,20 @@ def add_line_by_barcode(doc_id):
 @bp.route("/<int:doc_id>/lines/add", methods=["POST"])
 def add_line(doc_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
+    # Ту же форму используют и обычная приемка (receiving/detail.html), и
+    # мобильная сверка по накладной (receiving/confirm_invoice.html) — для
+    # товара, которого не было в накладной. Возвращаем туда же, откуда
+    # пришли.
+    next_page = request.form.get("next")
+    redirect_url = (
+        url_for("receiving.confirm_invoice", doc_id=doc.id)
+        if next_page == "confirm"
+        else url_for("receiving.detail", doc_id=doc.id)
+    )
+
     if doc.status != "draft":
         flash("Документ уже завершен", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return redirect(redirect_url)
 
     nomenclature_id = request.form.get("nomenclature_id", type=int)
     qty = request.form.get("qty", type=float) or 1
@@ -431,11 +442,11 @@ def add_line(doc_id):
     item = Nomenclature.query.get(nomenclature_id)
     if not item:
         flash("Товар не найден", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return redirect(redirect_url)
 
     _add_or_increment_line(doc, item, qty)
     flash(f"Добавлено: {item.name} ({qty} {item.unit})", "success")
-    return redirect(url_for("receiving.detail", doc_id=doc.id))
+    return redirect(redirect_url)
 
 
 @bp.route("/<int:doc_id>/lines/<int:line_id>/update", methods=["POST"])

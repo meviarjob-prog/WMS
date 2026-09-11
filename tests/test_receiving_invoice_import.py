@@ -351,6 +351,53 @@ def test_completing_confirmed_invoice_credits_unplaced_stock(db, client_logged_i
     assert stock.qty == 79
 
 
+def test_confirm_invoice_page_has_add_unlisted_item_button(db, client_logged_in):
+    """На мобильной сверке по накладной должна быть возможность добавить
+    товар, которого нет в самой накладной — например, поставщик привез
+    что-то незаявленное."""
+    warehouse = _make_warehouse()
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000007", name=DEFAULT_ROW_NAME, unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        content_type="multipart/form-data",
+    )
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+
+    html = client_logged_in.get(f"/receiving/{doc.id}/confirm").get_data(as_text=True)
+
+    assert "Добавить товар" in html
+
+
+def test_add_unlisted_item_appears_on_confirm_invoice_page_without_expected_qty(db, client_logged_in):
+    warehouse = _make_warehouse()
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000008", name=DEFAULT_ROW_NAME, unit="шт")
+    extra_item = Nomenclature(sku="НФ-EXTRA", barcode="8880000009", name="Незаявленный товар", unit="шт")
+    db.session.add_all([item, extra_item])
+    db.session.commit()
+    client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        content_type="multipart/form-data",
+    )
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+
+    resp = client_logged_in.post(
+        f"/receiving/{doc.id}/lines/add",
+        data={"nomenclature_id": extra_item.id, "qty": 3, "next": "confirm"},
+        follow_redirects=True,
+    )
+
+    assert resp.request.path == f"/receiving/{doc.id}/confirm"
+    added_line = ReceivingLine.query.filter_by(document_id=doc.id, nomenclature_id=extra_item.id).first()
+    assert added_line is not None
+    assert added_line.qty == 3
+    assert added_line.expected_qty is None  # не из накладной — сверять не с чем
+    assert "Незаявленный товар" in resp.get_data(as_text=True)
+
+
 def test_upload_matches_by_barcode_when_available_even_if_name_differs(db, client_logged_in):
     """1С «Код» — внутренний артикул поставщика, а не sku в номенклатуре, и
     может не совпадать вообще ни с чем. Если в файле есть штрихкод, он

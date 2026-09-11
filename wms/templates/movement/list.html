@@ -124,7 +124,7 @@
       </div>
     </div>
     <table class="table">
-      <thead><tr><th></th><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Кол-во SKU</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th></th></tr></thead>
+      <thead><tr><th></th><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Кол-во товара</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th></th></tr></thead>
       <tbody>
       {% for d in documents %}
         <tr>
@@ -134,7 +134,8 @@
           <td>{{ d.from_warehouse.name }}</td>
           <td>{{ d.to_warehouse.name }}</td>
           <td>{{ d.lines.count() }}</td>
-          <td>{{ d.sku_count() }}</td>
+          {% set tq = d.total_item_qty() %}
+          <td>{{ tq | int if tq == tq | int else tq | round(3) }}</td>
           <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
           <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
           <td class="text-nowrap">

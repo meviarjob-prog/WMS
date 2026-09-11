@@ -19,6 +19,31 @@
   {% endif %}
 </div>
 
+{% if doc.status == 'draft' %}
+<div class="mb-3">
+  <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="collapse" data-bs-target="#addUnlistedForm">
+    ➕ Добавить товар
+  </button>
+  <div class="collapse mt-2" id="addUnlistedForm">
+    <div class="card card-body p-2">
+      <div class="text-muted small mb-2">Если привезли товар, которого нет в накладной</div>
+      <form method="post" action="{{ url_for('receiving.add_line', doc_id=doc.id) }}" class="d-flex flex-column gap-2">
+        <input type="hidden" name="next" value="confirm">
+        <div class="autocomplete-box" data-autocomplete-nomenclature>
+          <input type="text" class="form-control ac-input" placeholder="Артикул, наименование или штрихкод..." autocomplete="off">
+          <input type="hidden" class="ac-value" name="nomenclature_id" required>
+          <div class="autocomplete-list"></div>
+        </div>
+        <div class="d-flex gap-2">
+          <input type="number" step="0.001" min="0.001" name="qty" class="form-control" placeholder="Кол-во" value="1" required>
+          <button type="submit" class="btn btn-primary flex-shrink-0">Добавить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="list-group">
 {% for line in lines %}
   <div class="list-group-item py-2 px-2"
