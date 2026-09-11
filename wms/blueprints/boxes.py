@@ -104,6 +104,61 @@ def update_item(box_id, item_id):
     return redirect(url_for("boxes.detail", box_id=box_id))
 
 
+@bp.route("/<int:box_id>/items/<int:item_id>/move", methods=["POST"])
+def move_item(box_id, item_id):
+    """Перенос товара из этого короба в другой — например, при перепаковке
+    или если по факту положили не в тот короб. Ищем целевой короб только на
+    этом же складе (короб привязан к складу физически, перенос между
+    складами — это уже «Перемещение», а не правка состава короба)."""
+    if not current_user.is_admin:
+        flash("Переносить товар между коробами может только администратор", "danger")
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    box_item = BoxItem.query.filter_by(id=item_id, box_id=box_id).first_or_404()
+    box = box_item.box
+
+    target_box_number = request.form.get("target_box_number", "").strip()
+    qty = request.form.get("qty", type=float)
+
+    if not qty or qty <= 0 or qty > box_item.qty:
+        flash(
+            f"Укажите корректное количество для переноса (доступно {box_item.qty:g})",
+            "danger",
+        )
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    target_box = Box.find_by_scanned_code(target_box_number, warehouse_id=box.warehouse_id)
+    if not target_box:
+        flash(
+            f"Короб '{target_box_number}' не найден на складе «{box.warehouse.name}»",
+            "danger",
+        )
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    if target_box.id == box.id:
+        flash("Целевой короб совпадает с исходным — переносить некуда", "danger")
+        return redirect(url_for("boxes.detail", box_id=box_id))
+
+    item = box_item.nomenclature
+    box_item.qty -= qty
+    if box_item.qty <= 0:
+        db.session.delete(box_item)
+
+    target_item = BoxItem.query.filter_by(box_id=target_box.id, nomenclature_id=item.id).first()
+    if target_item:
+        target_item.qty += qty
+    else:
+        target_item = BoxItem(box_id=target_box.id, nomenclature_id=item.id, qty=qty)
+        db.session.add(target_item)
+
+    db.session.commit()
+    flash(
+        f"Перенесено в короб {target_box.box_number}: {item.name} ({qty:g} {item.unit})",
+        "success",
+    )
+    return redirect(url_for("boxes.detail", box_id=box_id))
+
+
 @bp.route("/<int:box_id>/items/<int:item_id>/delete", methods=["POST"])
 def delete_item(box_id, item_id):
     if not current_user.is_admin:
