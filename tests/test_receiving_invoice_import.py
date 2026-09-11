@@ -234,6 +234,64 @@ def test_upload_creates_document_with_invoice_number_and_supplier(db, client_log
     assert resp.request.path == f"/receiving/{doc.id}/confirm"
 
 
+def test_upload_saves_order_number_and_invoice_file(db, client_logged_in):
+    """№ заявки вносится вручную (в файле 1С его нет), а сам файл сохраняется
+    для скачивания позже — см. receiving.download_invoice_file."""
+    warehouse = _make_warehouse()
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000011", name=DEFAULT_ROW_NAME, unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    file_stream = _build_invoice_xlsx()
+    raw_bytes = file_stream.getvalue()
+    client_logged_in.post(
+        "/receiving/import-invoice",
+        data={
+            "warehouse_id": warehouse.id,
+            "order_number": "ЗАЯВКА-42",
+            "file": (io.BytesIO(raw_bytes), "invoice.xlsx"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+    assert doc.order_number == "ЗАЯВКА-42"
+    assert doc.invoice_file_name == "invoice.xlsx"
+    assert doc.invoice_file_data == raw_bytes
+
+
+def test_download_invoice_file_returns_saved_bytes(db, client_logged_in):
+    warehouse = _make_warehouse()
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000012", name=DEFAULT_ROW_NAME, unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    file_stream = _build_invoice_xlsx()
+    raw_bytes = file_stream.getvalue()
+    client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (io.BytesIO(raw_bytes), "invoice.xlsx")},
+        content_type="multipart/form-data",
+    )
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+
+    resp = client_logged_in.get(f"/receiving/{doc.id}/invoice-file")
+
+    assert resp.status_code == 200
+    assert resp.data == raw_bytes
+
+
+def test_download_invoice_file_missing_flashes_and_redirects(db, client_logged_in):
+    warehouse = _make_warehouse()
+    doc = ReceivingDocument(number="NO-FILE-1", warehouse_id=warehouse.id)
+    db.session.add(doc)
+    db.session.commit()
+
+    resp = client_logged_in.get(f"/receiving/{doc.id}/invoice-file", follow_redirects=True)
+
+    assert "не сохранен" in resp.get_data(as_text=True)
+
+
 def test_upload_reuses_existing_supplier_by_inn(db, client_logged_in):
     warehouse = _make_warehouse()
     existing = Supplier(name="Старое название", inn="091701566682", phone="000")

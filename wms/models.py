@@ -440,6 +440,17 @@ class ReceivingDocument(db.Model):
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
+    # Номер заявки поставщику — вносится вручную при загрузке накладной,
+    # т.к. в самом файле от 1С его нет (это внутренний номер, по которому
+    # заказывали товар). Вместе с supplier это то, по чему потом ищут,
+    # откуда взялся неразмещенный остаток (см. UnplacedStockLot).
+    order_number = db.Column(db.String(50), nullable=True)
+    # Сам файл накладной — чтобы можно было скачать оригинал позже (сверить
+    # с бухгалтерией, разобрать спор с поставщиком и т.п.). Файлы 1С обычно
+    # десятки-сотни КБ, так что даже при активной приемке это не заметная
+    # нагрузка на БД (см. обсуждение в чате при внедрении).
+    invoice_file_data = db.Column(db.LargeBinary, nullable=True)
+    invoice_file_name = db.Column(db.String(255), nullable=True)
 
     warehouse = db.relationship("Warehouse")
     created_by = db.relationship("User")

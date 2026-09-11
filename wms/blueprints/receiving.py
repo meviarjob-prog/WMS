@@ -1,3 +1,4 @@
+import io
 from datetime import datetime
 
 from flask import (
@@ -126,8 +127,11 @@ def import_invoice_form():
         flash("Выберите файл накладной (.xlsx)", "danger")
         return redirect(url_for("receiving.import_invoice_form"))
 
+    order_number = request.form.get("order_number", "").strip()
+    file_bytes = file.read()
+
     try:
-        invoice = parse_invoice(file.stream)
+        invoice = parse_invoice(io.BytesIO(file_bytes))
     except InvoiceParseError as exc:
         flash(f"Не удалось разобрать файл накладной: {exc}", "danger")
         return redirect(url_for("receiving.import_invoice_form"))
@@ -149,6 +153,9 @@ def import_invoice_form():
             supplier=supplier.name,
             supplier_id=supplier.id,
             created_by_id=current_user.id,
+            order_number=order_number or None,
+            invoice_file_data=file_bytes,
+            invoice_file_name=file.filename,
         )
         db.session.add(doc)
         db.session.flush()
@@ -203,6 +210,24 @@ def confirm_invoice(doc_id):
     confirmed_count = sum(1 for line in lines if line.confirmed)
     return render_template(
         "receiving/confirm_invoice.html", doc=doc, lines=lines, confirmed_count=confirmed_count
+    )
+
+
+@bp.route("/<int:doc_id>/invoice-file")
+def download_invoice_file(doc_id):
+    """Оригинал файла накладной, сохраненный при загрузке (см.
+    import_invoice_form) — на случай спора с поставщиком или сверки с
+    бухгалтерией задним числом."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if not doc.invoice_file_data:
+        flash("Файл накладной для этого документа не сохранен", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    fname = doc.invoice_file_name or f"{doc.number}.xlsx"
+    return Response(
+        doc.invoice_file_data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": content_disposition(fname)},
     )
 
 

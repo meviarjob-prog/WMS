@@ -6,8 +6,10 @@
 <h4 class="mb-1">Накладная № {{ doc.number }}</h4>
 <div class="text-muted mb-3">
   {% if doc.supplier %}{{ doc.supplier }} · {% endif %}{{ doc.warehouse.name }}
+  {% if doc.order_number %} · № заявки: {{ doc.order_number }}{% endif %}
   {% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}
   {% if doc.status == 'completed' %} · <span class="badge bg-success">Завершена</span>{% endif %}
+  {% if doc.invoice_file_data %} · <a href="{{ url_for('receiving.download_invoice_file', doc_id=doc.id) }}">📄 Скачать накладную</a>{% endif %}
 </div>
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
