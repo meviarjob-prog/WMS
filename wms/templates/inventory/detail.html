@@ -48,6 +48,29 @@
     </div>
   </form>
 </div>
+
+<div class="card p-3 mb-4">
+  <h5>Учесть товар без короба</h5>
+  <p class="text-muted small mb-2">Для неразмещенного остатка, который лежит россыпью, а не в коробе — иначе он никогда не попадет в подсчет и будет вечно висеть недостачей в сличительной ведомости справа.</p>
+  <form method="post" action="{{ url_for('inventory.add_line', doc_id=doc.id) }}" class="row g-2 align-items-end">
+    <div class="col-md-7">
+      <label class="form-label">Товар</label>
+      <div class="autocomplete-box d-flex gap-2" data-autocomplete-nomenclature>
+        <input type="text" id="inventoryItemInput" class="form-control ac-input" placeholder="Штрихкод, артикул или наименование..." autocomplete="off">
+        <input type="hidden" class="ac-value" name="nomenclature_id" required>
+        <button type="button" class="btn btn-outline-primary flex-shrink-0" data-camera-scan-target="#inventoryItemInput" title="Сканировать камерой телефона">📷</button>
+        <div class="autocomplete-list"></div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">Кол-во</label>
+      <input type="number" step="0.001" min="0.001" name="qty" class="form-control" value="1" required>
+    </div>
+    <div class="col-md-2">
+      <button type="submit" class="btn btn-primary w-100">Добавить</button>
+    </div>
+  </form>
+</div>
 {% endif %}
 
 <div class="row g-4">
@@ -55,20 +78,36 @@
     <div class="card p-3">
       <h5>Список товара (суммировано по коробам)</h5>
       <table class="table table-sm">
-        <thead><tr><th>Товар</th><th>Кол-во</th></tr></thead>
+        <thead><tr><th>Товар</th><th>Кол-во</th>{% if doc.status == 'draft' %}<th></th>{% endif %}</tr></thead>
         <tbody>
         {% for line in lines %}
           <tr>
             <td>{{ line.nomenclature.name }} <span class="text-muted">({{ line.nomenclature.sku }})</span></td>
-            <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
+            <td>
+              {% if doc.status == 'draft' %}
+              <form method="post" action="{{ url_for('inventory.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
+                <input type="number" step="0.001" min="0" name="qty" value="{{ line.qty }}" class="form-control form-control-sm" style="width:6.5rem">
+                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Сохранить количество">✓</button>
+              </form>
+              {% else %}
+              {{ line.qty }} {{ line.nomenclature.unit }}
+              {% endif %}
+            </td>
+            {% if doc.status == 'draft' %}
+            <td>
+              <form method="post" action="{{ url_for('inventory.delete_line', doc_id=doc.id, line_id=line.id) }}" onsubmit="return confirm('Убрать позицию «{{ line.nomenclature.name }}» из подсчета?');">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Убрать позицию">✕</button>
+              </form>
+            </td>
+            {% endif %}
           </tr>
         {% else %}
-          <tr><td colspan="2" class="text-muted">Позиций еще нет — отсканируйте короб</td></tr>
+          <tr><td colspan="3" class="text-muted">Позиций еще нет — отсканируйте короб</td></tr>
         {% endfor %}
         </tbody>
         {% if lines %}
         <tfoot>
-          <tr class="fw-bold"><td>Итого</td><td>{{ doc.total_qty() }}</td></tr>
+          <tr class="fw-bold"><td>Итого</td><td>{{ doc.total_qty() }}</td><td></td></tr>
         </tfoot>
         {% endif %}
       </table>
@@ -76,6 +115,35 @@
   </div>
 
   <div class="col-md-5">
+    <div class="card p-3 mb-4">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+        <h5 class="mb-0">Сличительная ведомость</h5>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" role="switch" id="onlyDiffSwitch" checked>
+          <label class="form-check-label small" for="onlyDiffSwitch">Только расхождения</label>
+        </div>
+      </div>
+      <p class="text-muted small mb-2">Учётный остаток склада «{{ doc.warehouse.name }}» на сейчас против того, что насчитано в этом листе.</p>
+      <table class="table table-sm mb-0" id="comparisonTable">
+        <thead><tr><th>Товар</th><th class="text-end">По учету</th><th class="text-end">Посчитано</th><th class="text-end">Расхождение</th></tr></thead>
+        <tbody>
+        {% for row in comparison %}
+          <tr data-diff="{{ row.diff }}">
+            <td>{{ row.nomenclature.name }} <span class="text-muted">({{ row.nomenclature.sku }})</span></td>
+            <td class="text-end">{{ row.system_qty }}</td>
+            <td class="text-end">{{ row.counted_qty }}</td>
+            <td class="text-end {% if row.diff > 0 %}text-success{% elif row.diff < 0 %}text-danger{% endif %} fw-bold">
+              {{ "%+g"|format(row.diff) if row.diff else "0" }}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="text-muted">Сравнивать не с чем — на складе пусто и ничего не посчитано</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <p class="text-muted small mb-0 mt-2" id="noDiffMessage" style="display:none">Расхождений нет — все сходится.</p>
+    </div>
+
     <div class="card p-3">
       <h5>Отсканированные короба</h5>
       <table class="table table-sm">
@@ -101,4 +169,29 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    const onlyDiffSwitch = document.getElementById("onlyDiffSwitch");
+    const table = document.getElementById("comparisonTable");
+    const noDiffMessage = document.getElementById("noDiffMessage");
+    if (!onlyDiffSwitch || !table) return;
+
+    function applyFilter() {
+      const onlyDiff = onlyDiffSwitch.checked;
+      let visibleCount = 0;
+      table.querySelectorAll("tbody tr[data-diff]").forEach(function (tr) {
+        const isDiff = parseFloat(tr.dataset.diff) !== 0;
+        tr.hidden = onlyDiff && !isDiff;
+        if (!tr.hidden) visibleCount += 1;
+      });
+      if (noDiffMessage) noDiffMessage.style.display = onlyDiff && visibleCount === 0 ? "" : "none";
+    }
+
+    onlyDiffSwitch.addEventListener("change", applyFilter);
+    applyFilter();
+  })();
+</script>
 {% endblock %}
