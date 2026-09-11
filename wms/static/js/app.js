@@ -46,6 +46,25 @@ function initNomenclatureAutocomplete(root) {
     input.dataset.selectedUnit = item.unit || "";
     closeList();
     input.dispatchEvent(new CustomEvent("nomenclature-selected", { detail: item }));
+    // После выбора (кликом, стрелками или автоматически по скану) сразу
+    // переводим фокус на количество — обычно следующее, что нужно ввести.
+    const form = input.closest("form");
+    const qtyInput = form && form.querySelector('[name="qty"]');
+    if (qtyInput) {
+      qtyInput.focus();
+      qtyInput.select();
+    }
+  }
+
+  function search(q) {
+    return fetch("/api/nomenclature/search?q=" + encodeURIComponent(q))
+      .then((r) => r.json())
+      .then((data) => {
+        items = data;
+        activeIndex = -1;
+        renderList();
+        return items;
+      });
   }
 
   input.addEventListener("input", () => {
@@ -56,32 +75,40 @@ function initNomenclatureAutocomplete(root) {
       closeList();
       return;
     }
-    debounceTimer = setTimeout(() => {
-      fetch("/api/nomenclature/search?q=" + encodeURIComponent(q))
-        .then((r) => r.json())
-        .then((data) => {
-          items = data;
-          activeIndex = -1;
-          renderList();
-        });
-    }, 200);
+    debounceTimer = setTimeout(() => search(q), 200);
   });
 
   input.addEventListener("keydown", (e) => {
-    if (!list.classList.contains("show")) return;
-    if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown" && list.classList.contains("show")) {
       e.preventDefault();
       activeIndex = Math.min(activeIndex + 1, items.length - 1);
       renderList();
-    } else if (e.key === "ArrowUp") {
+    } else if (e.key === "ArrowUp" && list.classList.contains("show")) {
       e.preventDefault();
       activeIndex = Math.max(activeIndex - 1, 0);
       renderList();
     } else if (e.key === "Enter") {
-      if (activeIndex >= 0) {
-        e.preventDefault();
+      e.preventDefault();
+      if (activeIndex >= 0 && list.classList.contains("show")) {
         selectItem(items[activeIndex]);
+        return;
       }
+      // Это же поле совмещает ручной поиск и сканирование штрихкода:
+      // сканер эмулирует ввод текста и Enter, поэтому здесь и решаем, что
+      // это было — сразу (не дожидаясь debounce) ищем текущий текст и, если
+      // нашелся ровно один вариант, подставляем его автоматически (см.
+      // обсуждение: "выпадает список, если единственный — подставляет
+      // данные"). Если вариантов несколько (обычный ручной поиск без
+      // стрелок) — просто показываем список, ничего не выбирая, поведение
+      // не меняется.
+      const q = input.value.trim();
+      if (!q) return;
+      clearTimeout(debounceTimer);
+      search(q).then((results) => {
+        if (results.length === 1) {
+          selectItem(results[0]);
+        }
+      });
     } else if (e.key === "Escape") {
       closeList();
     }

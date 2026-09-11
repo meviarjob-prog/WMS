@@ -65,25 +65,17 @@
 </div>
 
 <div class="row g-4 mb-4">
-  <div class="col-md-5">
+  <div class="col-12">
     <div class="card p-3">
-      <h5>Сканировать штрихкод товара{% if active_box %} — в короб {{ active_box.box_number }}{% endif %}</h5>
-      <div class="d-flex gap-2">
-        <input type="text" id="scanInput" class="form-control form-control-lg" placeholder="Отсканируйте штрихкод и нажмите Enter">
-        <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#scanInput" title="Сканировать камерой телефона">📷</button>
-      </div>
-      <div id="scanResult" class="small mt-2"></div>
-    </div>
-  </div>
-  <div class="col-md-7">
-    <div class="card p-3">
-      <h5>Добавить товар вручную (поиск "содержит")</h5>
+      <h5>Добавить товар{% if active_box %} — в короб {{ active_box.box_number }}{% endif %}</h5>
+      <p class="text-muted small mb-2">Отсканируйте штрихкод или начните вводить артикул/наименование. Если по штрихкоду нашелся ровно один товар — данные подставятся сами, останется ввести количество.</p>
       <form method="post" action="{{ url_for('receiving.add_line_to_box', doc_id=doc.id, box_id=active_box.id) if active_box else url_for('receiving.add_line', doc_id=doc.id) }}" class="row g-2 align-items-end">
         <div class="col-md-7">
           <label class="form-label">Товар</label>
-          <div class="autocomplete-box" data-autocomplete-nomenclature>
-            <input type="text" class="form-control ac-input" placeholder="Артикул, наименование или штрихкод..." autocomplete="off"{% if active_box %} autofocus{% endif %}>
+          <div class="autocomplete-box d-flex gap-2" data-autocomplete-nomenclature>
+            <input type="text" id="receivingItemInput" class="form-control ac-input" placeholder="Штрихкод, артикул или наименование..." autocomplete="off" autofocus>
             <input type="hidden" class="ac-value" name="nomenclature_id" required>
+            <button type="button" class="btn btn-outline-primary flex-shrink-0" data-camera-scan-target="#receivingItemInput" title="Сканировать камерой телефона">📷</button>
             <div class="autocomplete-list"></div>
           </div>
         </div>
@@ -235,44 +227,5 @@
     );
   }
 
-  const scanInput = document.getElementById("scanInput");
-  const scanResult = document.getElementById("scanResult");
-  if (scanInput) {
-    initBarcodeInput(scanInput, (barcode) => {
-      fetch("{{ url_for('receiving.add_line_to_box_by_barcode', doc_id=doc.id, box_id=active_box.id) if active_box else url_for('receiving.add_line_by_barcode', doc_id=doc.id) }}", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ barcode: barcode, qty: 1 }),
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.ok) {
-            let html = '<span class="text-success">Добавлено: ' + data.line.name + '</span>';
-            if (data.warning) {
-              html +=
-                '<div class="alert alert-warning py-2 px-3 mt-2 mb-0">' +
-                '⚠ В коробе уже ' + data.warning.qty + ' шт. вида «' + data.warning.category + '»' +
-                ' — больше обычного порога (' + data.warning.threshold + '). Проверьте, не попало ли лишнее.' +
-                '</div>';
-            }
-            scanResult.innerHTML = html;
-            {% if active_box %}
-            // В короб можно сканировать товар одним за другим без перезагрузки
-            // страницы после каждого — это и есть ускорение приемки в короба;
-            // счетчик позиций короба обновляем на месте.
-            const countWrap = document.getElementById("activeBoxItemCountWrap");
-            const countSpan = document.getElementById("activeBoxItemCount");
-            if (countSpan) countSpan.textContent = data.box_item_count;
-            if (countWrap) countWrap.style.display = "";
-            scanInput.focus();
-            {% else %}
-            location.reload();
-            {% endif %}
-          } else {
-            scanResult.innerHTML = '<span class="text-danger">' + data.error + '</span>';
-          }
-        });
-    });
-  }
 </script>
 {% endblock %}
