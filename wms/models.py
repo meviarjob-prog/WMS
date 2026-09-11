@@ -97,6 +97,14 @@ class User(UserMixin, db.Model):
     # "production" и is_admin это поле игнорируют — у них доступ уже решен
     # отдельно (is_production_only / полный доступ администратора).
     allowed_sections = db.Column(db.Text, nullable=True)
+    # Право редактировать номенклатуру (создавать/менять вид и норму,
+    # импортировать из Excel) — отдельно от доступа к разделу "nomenclature"
+    # как таковому: с этим флагом снятым пользователь по-прежнему видит
+    # список и "Где товар", но не может ничего в номенклатуре менять.
+    # По умолчанию True — как и было для всех до появления этого флага
+    # (см. _ensure_columns: у уже существующих пользователей после
+    # миграции тоже принудительно выставляется True, а не NULL).
+    nomenclature_edit_allowed = db.Column(db.Boolean, nullable=False, default=True)
 
     def is_production_only(self):
         return self.role == "production" and not self.is_admin
@@ -107,6 +115,13 @@ class User(UserMixin, db.Model):
         if self.allowed_sections == "none":
             return set()
         return set(self.allowed_sections.split(","))
+
+    def can_edit_nomenclature(self):
+        # nomenclature_edit_allowed is not False (а не просто truthy) — на
+        # случай, если колонка у какой-то строки все же осталась NULL
+        # (ALTER TABLE ADD COLUMN не проставляет DEFAULT задним числом),
+        # трактуем это как "не запрещено", а не как "запрещено".
+        return self.is_admin or self.nomenclature_edit_allowed is not False
 
     def has_section_access(self, section):
         """Раздел не из SECTIONS (например, служебные api/boxes/labels) не
@@ -537,6 +552,18 @@ class MovementDocument(db.Model):
     lines = db.relationship(
         "MovementLine", backref="document", lazy="dynamic", cascade="all, delete-orphan"
     )
+
+    def sku_count(self):
+        """Количество РАЗНЫХ товаров (SKU) во всех коробах документа — не
+        путать с lines.count() (это количество коробов)."""
+        box_ids = [line.box_id for line in self.lines]
+        if not box_ids:
+            return 0
+        return (
+            db.session.query(db.func.count(db.func.distinct(BoxItem.nomenclature_id)))
+            .filter(BoxItem.box_id.in_(box_ids))
+            .scalar()
+        ) or 0
 
 
 class MovementReceiptDiscrepancy(db.Model):

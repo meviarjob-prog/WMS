@@ -27,6 +27,18 @@ from ..utils.http import content_disposition
 bp = Blueprint("nomenclature", __name__)
 
 
+def _require_edit():
+    """Просмотр номенклатуры и раздела доступен всем с доступом к разделу
+    (see SECTIONS) — а вот менять её (добавлять/править вид и норму/
+    импортировать) можно только с отдельным правом (см.
+    User.nomenclature_edit_allowed), которое настраивается отдельно от
+    доступа к разделу в «Настройки» → «Разделы»."""
+    if current_user.can_edit_nomenclature():
+        return True
+    flash("Редактировать номенклатуру вам не разрешено — обратитесь к администратору", "danger")
+    return False
+
+
 @bp.route("/clear", methods=["POST"])
 def clear_nomenclature():
     """Удаляет из номенклатуры все позиции, которые нигде не использовались
@@ -133,6 +145,9 @@ def list_nomenclature():
 
 @bp.route("/create", methods=["POST"])
 def create_nomenclature():
+    if not _require_edit():
+        return redirect(url_for("nomenclature.list_nomenclature"))
+
     barcode = request.form.get("barcode", "").strip()
     name = request.form.get("name", "").strip()
     size = request.form.get("size", "").strip()
@@ -177,6 +192,9 @@ def create_nomenclature():
 @bp.route("/<int:item_id>/norm", methods=["POST"])
 def update_norm(item_id):
     """Норма времени на 1 шт для расчета эффективности в модуле «Производство»."""
+    if not _require_edit():
+        return redirect(url_for("nomenclature.list_nomenclature"))
+
     item = Nomenclature.query.get_or_404(item_id)
     norm_minutes = request.form.get("norm_minutes", type=float)
     item.norm_minutes = norm_minutes
@@ -189,6 +207,9 @@ def update_norm(item_id):
 def update_category(item_id):
     """Вид товара определяется автоматически по названию при создании, но
     его можно поправить вручную (например, если название нетипичное)."""
+    if not _require_edit():
+        return redirect(url_for("nomenclature.list_nomenclature"))
+
     item = Nomenclature.query.get_or_404(item_id)
     category_id = request.form.get("category_id", type=int)
     item.category_id = category_id or None
@@ -223,6 +244,9 @@ def export_all():
 def import_nomenclature():
     if request.method == "GET":
         return render_template("nomenclature/import.html")
+
+    if not _require_edit():
+        return redirect(url_for("nomenclature.list_nomenclature"))
 
     file = request.files.get("file")
     if not file or file.filename == "":

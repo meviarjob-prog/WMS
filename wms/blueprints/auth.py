@@ -171,6 +171,10 @@ def update_sections(user_id):
     else:
         selected = [code for code, _ in SECTIONS if request.form.get(f"section_{code}") == "on"]
         user.allowed_sections = ",".join(selected) if selected else "none"
+    # Отдельная от режима доступа к разделам галочка — можно запретить
+    # редактирование номенклатуры и при "полном доступе ко всем разделам"
+    # (просмотр номенклатуры при этом остается).
+    user.nomenclature_edit_allowed = request.form.get("nomenclature_edit") == "on"
     db.session.commit()
     flash(f"Доступ к разделам для «{user.username}» обновлен", "success")
     return redirect(url_for("auth.users"))

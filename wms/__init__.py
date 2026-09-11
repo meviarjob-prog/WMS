@@ -54,6 +54,21 @@ def _ensure_columns():
                             )
                         )
                     print("[schema] movement_documents.received_at заполнен для уже завершенных документов")
+                if table.name == "users" and column.name == "nomenclature_edit_allowed":
+                    # ALTER TABLE ADD COLUMN не проставляет DEFAULT задним
+                    # числом — у уже существующих пользователей колонка
+                    # окажется NULL. Право редактировать номенклатуру у них
+                    # уже было (это новое ограничение, а не новая
+                    # возможность), поэтому явно проставляем True, а не
+                    # оставляем NULL.
+                    with db.engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                "UPDATE users SET nomenclature_edit_allowed = 1 "
+                                "WHERE nomenclature_edit_allowed IS NULL"
+                            )
+                        )
+                    print("[schema] users.nomenclature_edit_allowed заполнен для уже существующих пользователей")
             except Exception as exc:  # noqa: BLE001
                 print(f"[schema] Не удалось добавить {table.name}.{column.name}: {exc}")
 
