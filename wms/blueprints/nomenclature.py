@@ -122,9 +122,19 @@ def locate():
     )
 
 
+NOMENCLATURE_PAGE_SIZE = 100
+
+
 @bp.route("/")
 def list_nomenclature():
+    """Каталог может разрастись до тысяч позиций (реальный ассортимент
+    одежды по артикулам/размерам) — без постраничной разбивки страница
+    рендерила все строки разом, а в каждой строке еще и полный select видов
+    товара, так что HTML на выходе становился очень тяжелым и открывался
+    заметно медленно. Поэтому список постраничный; поиск (q) сбрасывает
+    страницу на первую."""
     q = request.args.get("q", "").strip()
+    page = request.args.get("page", 1, type=int)
     query = Nomenclature.query
     if q:
         # Каждое слово запроса ищем отдельно (в любом порядке) — так
@@ -138,9 +148,17 @@ def list_nomenclature():
                     Nomenclature.barcode.ilike(like),
                 )
             )
-    items = query.order_by(Nomenclature.name).all()
+    pagination = query.order_by(Nomenclature.name).paginate(
+        page=page, per_page=NOMENCLATURE_PAGE_SIZE, error_out=False
+    )
     categories = ProductCategory.query.order_by(ProductCategory.name).all()
-    return render_template("nomenclature/list.html", items=items, q=q, categories=categories)
+    return render_template(
+        "nomenclature/list.html",
+        items=pagination.items,
+        pagination=pagination,
+        q=q,
+        categories=categories,
+    )
 
 
 @bp.route("/create", methods=["POST"])
