@@ -371,6 +371,25 @@ def test_confirm_invoice_page_has_add_unlisted_item_button(db, client_logged_in)
     assert "Добавить товар" in html
 
 
+def test_confirm_invoice_page_shows_document_author(db, client_logged_in, admin_user):
+    """Мобильная сверка по накладной должна показывать, кто создал
+    документ приемки — это не видно на узком экране больше нигде."""
+    warehouse = _make_warehouse()
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000010", name=DEFAULT_ROW_NAME, unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        content_type="multipart/form-data",
+    )
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+
+    html = client_logged_in.get(f"/receiving/{doc.id}/confirm").get_data(as_text=True)
+
+    assert admin_user.display_name() in html
+
+
 def test_add_unlisted_item_appears_on_confirm_invoice_page_without_expected_qty(db, client_logged_in):
     warehouse = _make_warehouse()
     item = Nomenclature(sku="НФ-00003575", barcode="8880000008", name=DEFAULT_ROW_NAME, unit="шт")

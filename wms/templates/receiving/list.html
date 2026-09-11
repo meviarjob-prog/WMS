@@ -9,6 +9,17 @@
   </div>
 </div>
 
+<form method="get" class="d-flex flex-wrap gap-3 mb-3">
+  <div class="form-check">
+    <input type="checkbox" name="unfinished" class="form-check-input" id="filterUnfinished" onchange="this.form.submit()" {% if unfinished_only %}checked{% endif %}>
+    <label class="form-check-label" for="filterUnfinished">Показывать только незавершенные</label>
+  </div>
+  <div class="form-check">
+    <input type="checkbox" name="invoice_only" class="form-check-input" id="filterInvoiceOnly" onchange="this.form.submit()" {% if invoice_only %}checked{% endif %}>
+    <label class="form-check-label" for="filterInvoiceOnly">Приемка по накладным</label>
+  </div>
+</form>
+
 <div class="card p-3">
   <table class="table d-none d-md-table">
     <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Поставщик</th><th>Автор</th><th>Статус</th><th></th></tr></thead>

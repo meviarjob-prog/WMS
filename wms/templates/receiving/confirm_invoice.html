@@ -6,6 +6,7 @@
 <h4 class="mb-1">Накладная № {{ doc.number }}</h4>
 <div class="text-muted mb-3">
   {% if doc.supplier %}{{ doc.supplier }} · {% endif %}{{ doc.warehouse.name }}
+  {% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}
   {% if doc.status == 'completed' %} · <span class="badge bg-success">Завершена</span>{% endif %}
 </div>
 

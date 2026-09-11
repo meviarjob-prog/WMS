@@ -26,8 +26,26 @@ bp = Blueprint("receiving", __name__)
 
 @bp.route("/")
 def list_documents():
-    documents = ReceivingDocument.query.order_by(ReceivingDocument.created_at.desc()).all()
-    return render_template("receiving/list.html", documents=documents)
+    # "Приемка по накладной" — документы, созданные загрузкой файла
+    # накладной (см. import_invoice_form): у них всегда проставлен
+    # supplier_id (найденный/заведенный в справочник поставщик), в отличие
+    # от ручного создания, где поставщик — просто свободный текст.
+    unfinished_only = request.args.get("unfinished") == "on"
+    invoice_only = request.args.get("invoice_only") == "on"
+
+    query = ReceivingDocument.query
+    if unfinished_only:
+        query = query.filter_by(status="draft")
+    if invoice_only:
+        query = query.filter(ReceivingDocument.supplier_id.isnot(None))
+
+    documents = query.order_by(ReceivingDocument.created_at.desc()).all()
+    return render_template(
+        "receiving/list.html",
+        documents=documents,
+        unfinished_only=unfinished_only,
+        invoice_only=invoice_only,
+    )
 
 
 @bp.route("/new", methods=["GET", "POST"])
