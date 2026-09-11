@@ -75,7 +75,6 @@ def settings():
 
     pending_movements = (
         MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
-        .filter(MovementDocument.received_at.isnot(None))
         .filter(MovementDocument.accounting_entered_at.is_(None))
         .count()
     )
@@ -188,9 +187,11 @@ def _supplier_returns_export():
 
 @bp.route("/api/export")
 def export():
-    """Отдает документы, готовые к переносу в 1С: перемещение — только
-    завершенные и уже принятые на складе назначения (received_at заполнен —
-    иначе выгрузили бы то, что по факту еще в пути); инвентаризация —
+    """Отдает документы, готовые к переносу в 1С: перемещение — сразу как
+    завершено в WMS (кнопка "Завершить перемещение"), не дожидаясь "Принято
+    на складе" — в 1С документ "Перемещение товаров" как раз и отражает,
+    что товар в пути; отдельный документ по факту приемки на складе
+    назначения бухгалтерия заводит в 1С вручную. Инвентаризация —
     завершенные. Уже выгруженные (synced_to_1c_at заполнен) не отдаются
     повторно — 1С подтверждает получение через export/confirm. Перемещения,
     которые бухгалтер уже отметил галочкой "внесено в 1С" вручную
@@ -201,7 +202,6 @@ def export():
 
     movements = (
         MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
-        .filter(MovementDocument.received_at.isnot(None))
         .filter(MovementDocument.accounting_entered_at.is_(None))
         .order_by(MovementDocument.id)
         .all()

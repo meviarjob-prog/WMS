@@ -35,7 +35,7 @@ def _make_item(barcode, name="Товар для 1С"):
     return item
 
 
-def _ship_box(sender, receiver, item, qty, box_number, client, accounting_entered=False):
+def _ship_box(sender, receiver, item, qty, box_number, client, accounting_entered=False, mark_received=True):
     box = Box(box_number=box_number, warehouse_id=sender.id, status="open")
     db.session.add(box)
     db.session.commit()
@@ -51,7 +51,8 @@ def _ship_box(sender, receiver, item, qty, box_number, client, accounting_entere
     db.session.commit()
     client.post(f"/movement/{doc.id}/complete")
     doc = MovementDocument.query.get(doc.id)
-    doc.received_at = doc.completed_at
+    if mark_received:
+        doc.received_at = doc.completed_at
     if accounting_entered:
         from datetime import datetime
 
@@ -112,6 +113,26 @@ def test_export_excludes_movements_marked_entered_in_1c(db, client_logged_in):
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     data = resp.get_json()
     assert all(m["number"] != "PER-BOX-1C-3" for m in data["movements"])
+
+
+def test_export_includes_movement_still_in_transit(db, client_logged_in):
+    """Перемещение выгружается в 1С сразу по завершении в WMS, не дожидаясь
+    "Принято на складе" — в 1С документ "Перемещение товаров" как раз и
+    отражает то, что товар в пути; отдельный документ по факту приемки
+    заводится в 1С вручную бухгалтерией."""
+    _set_token()
+    sender = Warehouse(code="WH-1C-9", name="Основной склад")
+    city = Warehouse(code="WH-1C-10", name="ОЗОН: Уфа", marketplace="ozon", marketplace_city="Уфа")
+    db.session.add_all([sender, city])
+    db.session.commit()
+    item = _make_item("9990000007")
+
+    doc = _ship_box(sender, city, item, 4, "BOX-1C-4", client_logged_in, mark_received=False)
+    assert doc.received_at is None
+
+    resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    data = resp.get_json()
+    assert any(m["number"] == "PER-BOX-1C-4" for m in data["movements"])
 
 
 def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_in):
