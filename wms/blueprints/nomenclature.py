@@ -218,6 +218,53 @@ def update_category(item_id):
     return redirect(url_for("nomenclature.list_nomenclature", q=request.form.get("q", "")))
 
 
+@bp.route("/<int:item_id>/barcode", methods=["POST"])
+def update_barcode(item_id):
+    """Штрихкод иногда нужно поправить прямо в списке — например, если при
+    создании товара его ввели с опечаткой или он поменялся у поставщика."""
+    if not _require_edit():
+        return redirect(url_for("nomenclature.list_nomenclature"))
+
+    item = Nomenclature.query.get_or_404(item_id)
+    barcode = request.form.get("barcode", "").strip()
+    q = request.form.get("q", "")
+
+    if not barcode:
+        flash("Штрихкод не может быть пустым", "danger")
+        return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+    existing = Nomenclature.query.filter_by(barcode=barcode).first()
+    if existing and existing.id != item.id:
+        flash(f"Штрихкод '{barcode}' уже используется у товара «{existing.name}»", "danger")
+        return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+    item.barcode = barcode
+    db.session.commit()
+    flash(f"Штрихкод для «{item.name}» обновлен", "success")
+    return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+
+@bp.route("/<int:item_id>/name", methods=["POST"])
+def update_name(item_id):
+    """Наименование иногда нужно поправить прямо в списке — например,
+    после ручного импорта с неточным названием."""
+    if not _require_edit():
+        return redirect(url_for("nomenclature.list_nomenclature"))
+
+    item = Nomenclature.query.get_or_404(item_id)
+    name = request.form.get("name", "").strip()
+    q = request.form.get("q", "")
+
+    if not name:
+        flash("Наименование не может быть пустым", "danger")
+        return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+    item.name = name
+    db.session.commit()
+    flash(f"Наименование обновлено на «{name}»", "success")
+    return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+
 @bp.route("/template.xlsx")
 def download_template():
     data = build_nomenclature_template()

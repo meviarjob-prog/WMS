@@ -100,6 +100,79 @@ def test_update_norm_blocked_without_permission(db, client):
     assert Nomenclature.query.get(item.id).norm_minutes is None
 
 
+def test_update_barcode_blocked_without_permission(db, client):
+    item = Nomenclature(sku="SKU-EDIT-3", barcode="4445556667778", name="Товар 3", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    user = _make_staff_user(nomenclature_edit_allowed=False)
+    _login_as(client, user)
+
+    client.post(f"/nomenclature/{item.id}/barcode", data={"barcode": "9998887776665"})
+
+    assert Nomenclature.query.get(item.id).barcode == "4445556667778"
+
+
+def test_update_barcode_allowed_with_permission(db, client):
+    item = Nomenclature(sku="SKU-EDIT-4", barcode="5556667778889", name="Товар 4", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    user = _make_staff_user(nomenclature_edit_allowed=True)
+    _login_as(client, user)
+
+    client.post(f"/nomenclature/{item.id}/barcode", data={"barcode": "1112223334445"})
+
+    assert Nomenclature.query.get(item.id).barcode == "1112223334445"
+
+
+def test_update_barcode_rejects_duplicate(db, client_logged_in):
+    item1 = Nomenclature(sku="SKU-EDIT-5", barcode="6667778889990", name="Товар 5", unit="шт")
+    item2 = Nomenclature(sku="SKU-EDIT-6", barcode="7778889990001", name="Товар 6", unit="шт")
+    db.session.add_all([item1, item2])
+    db.session.commit()
+
+    resp = client_logged_in.post(
+        f"/nomenclature/{item2.id}/barcode", data={"barcode": "6667778889990"}, follow_redirects=True
+    )
+
+    assert "уже используется" in resp.get_data(as_text=True)
+    assert Nomenclature.query.get(item2.id).barcode == "7778889990001"
+
+
+def test_update_barcode_rejects_empty(db, client_logged_in):
+    item = Nomenclature(sku="SKU-EDIT-7", barcode="8889990001112", name="Товар 7", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    client_logged_in.post(f"/nomenclature/{item.id}/barcode", data={"barcode": "  "})
+
+    assert Nomenclature.query.get(item.id).barcode == "8889990001112"
+
+
+def test_update_name_blocked_without_permission(db, client):
+    item = Nomenclature(sku="SKU-EDIT-8", barcode="9990001112223", name="Старое название", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    user = _make_staff_user(nomenclature_edit_allowed=False)
+    _login_as(client, user)
+
+    client.post(f"/nomenclature/{item.id}/name", data={"name": "Новое название"})
+
+    assert Nomenclature.query.get(item.id).name == "Старое название"
+
+
+def test_update_name_allowed_with_permission(db, client_logged_in):
+    item = Nomenclature(sku="SKU-EDIT-9", barcode="0001112223334", name="Старое название 2", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    client_logged_in.post(f"/nomenclature/{item.id}/name", data={"name": "Новое название 2"})
+
+    assert Nomenclature.query.get(item.id).name == "Новое название 2"
+
+
 def test_update_sections_route_can_grant_and_revoke_edit_flag(db, client_logged_in):
     user = _make_staff_user(nomenclature_edit_allowed=False)
 

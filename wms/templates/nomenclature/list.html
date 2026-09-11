@@ -75,8 +75,25 @@
         <tbody>
         {% for item in items %}
           <tr>
+            {% if current_user.can_edit_nomenclature() %}
+            <td style="min-width:150px">
+              <form method="post" action="{{ url_for('nomenclature.update_barcode', item_id=item.id) }}" class="d-flex gap-1">
+                <input type="hidden" name="q" value="{{ q }}">
+                <input type="text" name="barcode" value="{{ item.barcode }}" class="form-control form-control-sm">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+              </form>
+            </td>
+            <td style="min-width:220px">
+              <form method="post" action="{{ url_for('nomenclature.update_name', item_id=item.id) }}" class="d-flex gap-1">
+                <input type="hidden" name="q" value="{{ q }}">
+                <input type="text" name="name" value="{{ item.name }}" class="form-control form-control-sm">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+              </form>
+            </td>
+            {% else %}
             <td>{{ item.barcode }}</td>
             <td>{{ item.name }}</td>
+            {% endif %}
             <td>{{ item.size or '' }}</td>
             <td>{{ item.sku }}</td>
             <td>{{ item.unit }}</td>
@@ -121,6 +138,24 @@
       <div class="list-group d-md-none">
         {% for item in items %}
           <div class="list-group-item py-2 px-2">
+            {% if current_user.can_edit_nomenclature() %}
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div class="flex-grow-1">
+                <form method="post" action="{{ url_for('nomenclature.update_name', item_id=item.id) }}" class="d-flex gap-1 mb-1">
+                  <input type="hidden" name="q" value="{{ q }}">
+                  <input type="text" name="name" value="{{ item.name }}" class="form-control form-control-sm fw-bold">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+                </form>
+                <form method="post" action="{{ url_for('nomenclature.update_barcode', item_id=item.id) }}" class="d-flex gap-1 align-items-center">
+                  <input type="hidden" name="q" value="{{ q }}">
+                  <input type="text" name="barcode" value="{{ item.barcode }}" class="form-control form-control-sm">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+                  {% if item.size or item.sku %}<span class="small text-muted flex-shrink-0">{{ item.size or '' }}{% if item.sku %} · {{ item.sku }}{% endif %}</span>{% endif %}
+                </form>
+              </div>
+              <a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>
+            </div>
+            {% else %}
             <div class="d-flex justify-content-between align-items-start gap-2">
               <div>
                 <div class="fw-bold">{{ item.name }}{% if item.size %} ({{ item.size }}){% endif %}</div>
@@ -128,6 +163,7 @@
               </div>
               <a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>
             </div>
+            {% endif %}
             {% if current_user.can_edit_nomenclature() %}
             <div class="d-flex gap-2 mt-2">
               <form method="post" action="{{ url_for('nomenclature.update_category', item_id=item.id) }}" class="flex-grow-1">
