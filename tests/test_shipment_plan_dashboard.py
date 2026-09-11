@@ -95,6 +95,81 @@ def test_picking_list_keeps_full_demand_and_shows_in_transit_separately(db, clie
     assert ">20<" not in snippet
 
 
+def test_top_summary_shows_in_transit_per_marketplace_and_total(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    _ship_box(sender, city, item, qty=10, box_number="BOX-SUM-1", client=client_logged_in)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    assert "Сводка" in html
+    idx = html.find("В пути")
+    snippet = html[idx : idx + 600]
+    assert "ОЗОН" in snippet
+    assert ">10<" in snippet
+    assert "Итого" in snippet
+
+
+def test_top_summary_shows_total_stock(db, client_logged_in):
+    from wms.models import UnplacedStock
+
+    sender, city, item = _setup(planned_qty=30)
+    UnplacedStock.add(sender.id, item.id, 25)
+    db.session.commit()
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("На складе:")
+    assert "25" in html[idx : idx + 100]
+
+
+def test_top_summary_shows_total_production_since_period_start(db, client_logged_in):
+    from datetime import date, timedelta
+
+    from wms.models import ProductionRecord, User
+
+    sender, city, item = _setup(planned_qty=30)
+    plan = ShipmentPlan.query.filter_by(marketplace="ozon").first()
+    plan.period_start = date.today() - timedelta(days=3)
+    db.session.commit()
+
+    worker = User(username="prod-worker", role="production")
+    worker.set_password("x")
+    db.session.add(worker)
+    db.session.commit()
+
+    # В периоде плана — должно засчитаться.
+    db.session.add(
+        ProductionRecord(user_id=worker.id, nomenclature_id=item.id, work_date=date.today())
+    )
+    # До начала периода — не должно засчитаться.
+    db.session.add(
+        ProductionRecord(
+            user_id=worker.id, nomenclature_id=item.id, work_date=date.today() - timedelta(days=10)
+        )
+    )
+    db.session.commit()
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("На производстве")
+    assert ">1<" in html[idx : idx + 200]
+
+
+def test_marketplace_header_fulfilled_includes_in_transit(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    line = ShipmentPlanLine.query.first()
+    line.fulfilled_qty = 5
+    db.session.commit()
+    _ship_box(sender, city, item, qty=10, box_number="BOX-SUM-2", client=client_logged_in)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    # Выполнено должно быть 5 (принято) + 10 (в пути) = 15, а не просто 5.
+    idx = html.find("выполнено")
+    snippet = html[idx : idx + 200]
+    assert "15" in snippet
+
+
 def test_picking_list_keeps_item_even_when_fully_in_transit(db, client_logged_in):
     """Даже если все нужное количество уже едет (в пути >= план), позиция
     не пропадает из "Что нужно отправить" — потребность закрывается только

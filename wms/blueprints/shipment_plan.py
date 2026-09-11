@@ -11,6 +11,7 @@ from ..models import (
     MovementDocument,
     MovementLine,
     Nomenclature,
+    ProductionRecord,
     ShipmentPlan,
     ShipmentPlanLine,
     UnplacedStock,
@@ -203,6 +204,27 @@ def _unplaced_by_nomenclature(warehouse_ids):
     }
 
 
+def _production_by_nomenclature(nomenclature_ids, period_start):
+    """{nomenclature_id: кол-во} отсканированного на производстве с начала
+    периода плана — просто сумма, без вычета уже принятого через Приемку
+    (прямой связи между сканом на производстве и конкретной строкой
+    приемки в системе нет, а точный remainder было бы сложно и не нужно
+    считать — здесь просто информационная цифра "сколько сделано за
+    период", а не точный остаток на цеху)."""
+    if not nomenclature_ids or not period_start:
+        return {}
+    rows = (
+        db.session.query(ProductionRecord.nomenclature_id, func.count(ProductionRecord.id))
+        .filter(
+            ProductionRecord.nomenclature_id.in_(nomenclature_ids),
+            ProductionRecord.work_date >= period_start,
+        )
+        .group_by(ProductionRecord.nomenclature_id)
+        .all()
+    )
+    return {nomenclature_id: qty for nomenclature_id, qty in rows}
+
+
 def _in_transit_by_warehouse_and_item():
     """{(warehouse_id, nomenclature_id): кол-во} товара, уже отправленного
     перемещением на этот склад-город (документ завершен), но еще не
@@ -327,6 +349,7 @@ def dashboard():
 
         total_planned = sum(line.planned_qty for line in lines)
         total_fulfilled = sum(line.fulfilled_qty for line in lines)
+        total_in_transit = sum(row["in_transit"] for row in cities)
         pace = _pace_analysis(plan, total_planned, total_fulfilled)
 
         marketplaces_data.append(
@@ -338,6 +361,13 @@ def dashboard():
                 "problems_count": len(problem_barcodes),
                 "total_planned": total_planned,
                 "total_fulfilled": total_fulfilled,
+                "total_in_transit": total_in_transit,
+                # В шапке карточки "выполнено" теперь учитывает и то, что уже
+                # едет (в пути) — по просьбе: общее выполнение плана должно
+                # включать отправленное, а не только подтвержденное приемкой.
+                # В табличной части ниже (по городам и по товарам) ничего не
+                # меняем — там как было, "потребность (в пути)" отдельно.
+                "total_fulfilled_with_transit": total_fulfilled + total_in_transit,
                 "pace": pace,
             }
         )
@@ -394,12 +424,40 @@ def dashboard():
                 return [row["warehouse"].marketplace_city for row in m["cities"]]
         return []
 
+    # Сводка в шапке страницы: "в пути" по каждому маркетплейсу и общим
+    # итогом, плюс "на складе" и "на производстве" — эти два уже не по
+    # маркетплейсам (один и тот же остаток/цех работает на оба сразу).
+    nomenclature_ids = {
+        line.nomenclature_id
+        for lines in lines_by_marketplace.values()
+        for line in lines
+        if line.nomenclature_id is not None
+    }
+    overall_stock = sum(stock.get(nid, 0) for nid in nomenclature_ids)
+    period_starts = [p.period_start for p in plans.values() if p.period_start]
+    earliest_period_start = min(period_starts) if period_starts else None
+    production_by_nomenclature = _production_by_nomenclature(nomenclature_ids, earliest_period_start)
+    overall_production = sum(production_by_nomenclature.values())
+    overall_in_transit = sum(m.get("total_in_transit", 0) for m in marketplaces_data)
+
+    summary = {
+        "in_transit_by_marketplace": [
+            {"label": m["label"], "qty": m.get("total_in_transit", 0)}
+            for m in marketplaces_data
+            if m.get("plan")
+        ],
+        "total_in_transit": overall_in_transit,
+        "total_stock": overall_stock,
+        "total_production": overall_production,
+    }
+
     return render_template(
         "shipment_plan/dashboard.html",
         marketplaces=marketplaces_data,
         picking_list=picking_list,
         ozon_cities=_city_names("ozon"),
         wb_cities=_city_names("wb"),
+        summary=summary,
     )
 
 

@@ -11,6 +11,29 @@
   </div>
 </div>
 
+{% if summary.in_transit_by_marketplace %}
+<div class="card p-3 mb-4">
+  <h5 class="mb-2">Сводка</h5>
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="text-muted small mb-1">В пути</div>
+      <table class="table table-sm mb-0" style="max-width:320px">
+        <tbody>
+        {% for row in summary.in_transit_by_marketplace %}
+          <tr><td>{{ row.label }}</td><td class="text-end">{{ row.qty | round(0) | int }}</td></tr>
+        {% endfor %}
+          <tr class="fw-bold"><td>Итого</td><td class="text-end">{{ summary.total_in_transit | round(0) | int }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col-md-6 d-flex flex-column gap-2 justify-content-center">
+      <div><span class="text-muted">На складе:</span> <b>{{ summary.total_stock | round(0) | int }}</b></div>
+      <div><span class="text-muted">На производстве</span> <span class="text-muted small">(с начала периода плана)</span>: <b>{{ summary.total_production | round(0) | int }}</b></div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="row g-3 mb-4">
   {% for mp in marketplaces %}
   <div class="col-md-6">
@@ -25,8 +48,9 @@
         </p>
         <p class="mb-2">
           План <b>{{ mp.total_planned | round(0) | int }}</b> —
-          выполнено <b>{{ mp.total_fulfilled | round(0) | int }}</b>
-          ({{ (100 * mp.total_fulfilled / mp.total_planned) | round(1) if mp.total_planned else 0 }}%)
+          выполнено <b>{{ mp.total_fulfilled_with_transit | round(0) | int }}</b>
+          ({{ (100 * mp.total_fulfilled_with_transit / mp.total_planned) | round(1) if mp.total_planned else 0 }}%)
+          <span class="text-muted small" title="Принято на складе {{ mp.total_fulfilled | round(0) | int }} + в пути {{ mp.total_in_transit | round(0) | int }}">ⓘ</span>
           {% if mp.problems_count %}
             — <span class="badge bg-danger">{{ mp.problems_count }} без остатка на складе</span>
           {% endif %}
