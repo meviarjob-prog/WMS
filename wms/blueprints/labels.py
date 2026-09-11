@@ -46,10 +46,16 @@ def box_label(box_id):
 
 
 # Крупный номер (без слова "Короб" — короче, легче прочитать издалека) и
-# крупный штрихкод (реже промахи при сканировании).
+# крупный штрихкод — на всю доступную ширину этикетки (реже промахи
+# сканера, в т.ч. при смазанной/некачественной печати). Верхний отступ и
+# отступ до текста слегка ужаты (было 2мм/3мм), чтобы освободить место
+# под увеличенный штрихкод, не трогая размер самого штрихкода дальше —
+# ratio=0.65 уже упирается в ширину этикетки, крупнее в 58мм не влезет.
 BOX_TITLE_FONT_SIZE = 15
-BOX_MAX_IMG_H_RATIO = 0.6
+BOX_MAX_IMG_H_RATIO = 0.65
 BOX_SUBTITLE_GAP_MM = 3.2
+BOX_TOP_MARGIN_MM = 1
+BOX_TEXT_GAP_MM = 2
 
 
 @bp.route("/box/<int:box_id>.pdf")
@@ -59,6 +65,7 @@ def box_label_pdf(box_id):
     pdf = build_label_pdf(
         box.barcode_value, box.box_number, subtitle,
         title_font_size=BOX_TITLE_FONT_SIZE, max_img_h_ratio=BOX_MAX_IMG_H_RATIO, subtitle_gap_mm=BOX_SUBTITLE_GAP_MM,
+        top_margin_mm=BOX_TOP_MARGIN_MM, text_gap_mm=BOX_TEXT_GAP_MM,
     )
     return Response(
         pdf,
@@ -98,6 +105,7 @@ def boxes_label_batch_pdf():
     pdf = build_labels_batch_pdf(
         entries,
         title_font_size=BOX_TITLE_FONT_SIZE, max_img_h_ratio=BOX_MAX_IMG_H_RATIO, subtitle_gap_mm=BOX_SUBTITLE_GAP_MM,
+        top_margin_mm=BOX_TOP_MARGIN_MM, text_gap_mm=BOX_TEXT_GAP_MM,
     )
     return Response(
         pdf,
