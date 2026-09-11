@@ -21,6 +21,26 @@ bp = Blueprint("integration_1c", __name__)
 
 TOKEN_KEY = "api_1c_token"
 
+# 1С не заводит отдельный физический склад под каждый склад-город
+# маркетплейса (те создаются в WMS автоматически при загрузке плана
+# отгрузок) — весь такой товар в 1С учитывается как уехавший на один общий
+# промежуточный склад. Реальные оба склада указываются только когда товар
+# едет между ними напрямую (внутреннее перемещение, не в сторону
+# маркетплейса).
+FULFILLMENT_WAREHOUSE_NAME = "Товары в пути на Фулфилмент"
+DIRECT_TRANSFER_WAREHOUSE_NAMES = {"Основной склад", "Склад №2 (Шоссейная 167)"}
+
+
+def _to_warehouse_name_for_1c(doc):
+    from_name = doc.from_warehouse.name if doc.from_warehouse else ""
+    to_name = doc.to_warehouse.name if doc.to_warehouse else ""
+    if (
+        from_name in DIRECT_TRANSFER_WAREHOUSE_NAMES
+        and to_name in DIRECT_TRANSFER_WAREHOUSE_NAMES
+    ):
+        return to_name
+    return FULFILLMENT_WAREHOUSE_NAME
+
 # Именно эти два endpoint'а обмена с 1С не требуют логина в WMS — только
 # токен (см. проверку в самих view). Импортируется в wms/__init__.py.
 API_1C_PUBLIC_ENDPOINTS = {"integration_1c.export", "integration_1c.export_confirm"}
@@ -56,6 +76,7 @@ def settings():
     pending_movements = (
         MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
         .filter(MovementDocument.received_at.isnot(None))
+        .filter(MovementDocument.accounting_entered_at.is_(None))
         .count()
     )
     pending_inventories = InventoryDocument.query.filter_by(
@@ -86,7 +107,7 @@ def _movement_payload(doc):
         "number": doc.number,
         "date": (doc.completed_at or doc.created_at).isoformat(),
         "from_warehouse": doc.from_warehouse.name if doc.from_warehouse else "",
-        "to_warehouse": doc.to_warehouse.name if doc.to_warehouse else "",
+        "to_warehouse": _to_warehouse_name_for_1c(doc),
         "comment": f"WMS: {doc.number}",
         "lines": lines,
     }
@@ -116,13 +137,17 @@ def export():
     завершенные и уже принятые на складе назначения (received_at заполнен —
     иначе выгрузили бы то, что по факту еще в пути); инвентаризация —
     завершенные. Уже выгруженные (synced_to_1c_at заполнен) не отдаются
-    повторно — 1С подтверждает получение через export/confirm."""
+    повторно — 1С подтверждает получение через export/confirm. Перемещения,
+    которые бухгалтер уже отметил галочкой "внесено в 1С" вручную
+    (accounting_entered_at заполнен), тоже не отдаются — он ведет их отдельно
+    и повторный автоматический перенос задвоил бы документ."""
     if not _check_token():
         return jsonify({"ok": False, "error": "Неверный или отсутствующий токен"}), 401
 
     movements = (
         MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
         .filter(MovementDocument.received_at.isnot(None))
+        .filter(MovementDocument.accounting_entered_at.is_(None))
         .order_by(MovementDocument.id)
         .all()
     )
