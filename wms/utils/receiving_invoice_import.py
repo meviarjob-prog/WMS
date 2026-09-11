@@ -21,7 +21,13 @@ from html.parser import HTMLParser
 
 from openpyxl import load_workbook
 
-_TITLE_RE = re.compile(r"приходная\s+накладная\s*№\s*(\S+)\s*от\s*([^гГ]+?)\s*г\.?", re.IGNORECASE)
+_TITLE_RE = re.compile(
+    # Дата — нежадный захват ДО буквального "г." или "года" (а не "все, что
+    # не буква г/Г" — так ломалось на "4 августа", где "г" есть в середине
+    # названия месяца и обрубало дату до "4 ав").
+    r"приходная\s+накладная\s*№\s*(\S+)\s*от\s*(.+?)\s*(?:г\.|года)",
+    re.IGNORECASE,
+)
 _INN_RE = re.compile(r"инн[:\s]*([0-9]{10,12})", re.IGNORECASE)
 _PHONE_RE = re.compile(r"тел\.?:?\s*([+0-9][0-9()\-\s]{5,}[0-9])", re.IGNORECASE)
 
@@ -187,11 +193,19 @@ def _find_supplier(ws, max_scan_rows=15):
             text = _norm(ws.cell(row=r, column=c).value)
             if not text or "поставщик" not in text.lower():
                 continue
-            # Реквизиты могут быть в этой же ячейке (после "Поставщик:") или
-            # в соседней справа — берем то, что длиннее осмысленного текста.
+            # Реквизиты могут быть в этой же ячейке (после "Поставщик:"),
+            # либо в объединенной ячейке правее — и не обязательно сразу в
+            # соседней колонке: печатная форма 1С щедро объединяет ячейки
+            # печатной сетки, так что значение может начинаться на много
+            # колонок правее подписи (реальный файл — правее на 4 колонки).
+            # Берем первую непустую ячейку правее в этой же строке.
             candidate = text.split(":", 1)[1].strip() if ":" in text else ""
-            if len(candidate) < 3 and c + 1 <= ws.max_column:
-                candidate = _norm(ws.cell(row=r, column=c + 1).value)
+            if len(candidate) < 3:
+                for c2 in range(c + 1, ws.max_column + 1):
+                    right_text = _norm(ws.cell(row=r, column=c2).value)
+                    if right_text:
+                        candidate = right_text
+                        break
             if not candidate:
                 continue
             inn_match = _INN_RE.search(candidate)

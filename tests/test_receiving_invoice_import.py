@@ -397,3 +397,51 @@ def test_upload_matches_by_name_case_insensitively(db, client_logged_in):
     assert resp.status_code == 200
     doc = ReceivingDocument.query.filter_by(number="1706").first()
     assert doc.lines.first().nomenclature_id == item.id
+
+
+def test_parse_invoice_finds_supplier_several_columns_to_the_right():
+    """На реальном файле реквизиты поставщика оказались не в соседней
+    колонке от подписи "Поставщик:" (как в синтетической форме выше), а в
+    объединенной ячейке на несколько колонок правее — печатная форма 1С
+    щедро объединяет ячейки печатной сетки. Раньше парсер проверял только
+    c+1 и не находил реквизиты вообще."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append([None, "Приходная накладная № 1333 от 4 августа 2026 г."])
+    ws.append([])
+    ws.append([None, "Поставщик:", None, None, None, None, "ИП Эркенова Фатима Манафовна,  ИНН 090902545962,  тел.: 89283960999"])
+    ws.append([])
+    ws.append([None, "№", None, "Код", None, None, None, None, "Товары", None, None, None, None, None, None, None, None, None, None, None, None, None, None, "Штрихкод", None, None, None, None, None, None, None, None, None, None, None, None, "Количество"])
+    ws.append([None, "1", None, "НФ-00003474", None, None, None, None, "Товар А", None, None, None, None, None, None, None, None, None, None, None, None, None, None, "2049731406376", None, None, None, None, None, None, None, None, None, None, None, None, 310])
+    ws.append([])
+    ws.append(["Всего наименований 1"])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    invoice = parse_invoice(buf)
+
+    assert invoice.supplier_name == "ИП Эркенова Фатима Манафовна"
+    assert invoice.supplier_inn == "090902545962"
+    assert invoice.supplier_phone == "89283960999"
+    assert len(invoice.rows) == 1
+    assert invoice.rows[0]["barcode"] == "2049731406376"
+
+
+def test_parse_invoice_date_not_truncated_by_letter_ge_in_month_name():
+    """Регекс даты раньше исключал ЛЮБУЮ букву "г"/"Г" до конца строки —
+    ломалось на названиях месяцев, содержащих "г" (например, "августа"),
+    обрубая дату до "4 ав". Теперь ищем буквальное "г." или "года"."""
+    file_stream = _build_invoice_xlsx(number="1333")
+    # Подменяем дату на месяц с буквой "г" в середине названия.
+    wb = openpyxl.load_workbook(file_stream)
+    ws = wb.active
+    ws["A1"] = "Приходная накладная № 1333 от 4 августа 2026 г."
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    invoice = parse_invoice(buf)
+
+    assert invoice.invoice_date_text == "4 августа 2026"
