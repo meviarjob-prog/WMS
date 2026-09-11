@@ -35,7 +35,7 @@
   </p>
   {% endif %}
   <table class="table table-sm mb-0">
-    <thead><tr><th>Штрихкод</th><th>Наименование</th><th>Размер</th><th>Доступно</th></tr></thead>
+    <thead><tr><th>Штрихкод</th><th>Наименование</th><th>Размер</th><th>Доступно</th><th>Поступление</th></tr></thead>
     <tbody id="availableStockBody">
     {% for row in available_stock %}
       <tr class="stock-row{% if active_box %} clickable{% endif %}" data-nomenclature-id="{{ row.nomenclature_id }}" data-available="{{ row.qty }}" title="{% if active_box %}Двойной клик — добавить в короб {{ active_box.box_number }}{% endif %}">
@@ -43,9 +43,16 @@
         <td>{{ row.nomenclature.name }}</td>
         <td>{{ row.nomenclature.size or '' }}</td>
         <td>{{ row.qty }} {{ row.nomenclature.unit }}</td>
+        <td class="small text-muted">
+          {% for lot in row.active_lots() %}
+            {{ lot.qty_remaining | int if lot.qty_remaining == lot.qty_remaining | int else lot.qty_remaining }} шт
+            {%- if lot.supplier_name %} — {{ lot.supplier_name }}{% endif -%}
+            {%- if lot.order_number %} (№{{ lot.order_number }}){% endif %}{% if not loop.last %}<br>{% endif %}
+          {% else %}—{% endfor %}
+        </td>
       </tr>
     {% else %}
-      <tr><td colspan="4" class="text-muted">Неразмещенного остатка на этом складе нет</td></tr>
+      <tr><td colspan="5" class="text-muted">Неразмещенного остатка на этом складе нет</td></tr>
     {% endfor %}
     </tbody>
   </table>

@@ -20,7 +20,7 @@
       </h5>
       <p class="text-muted small d-none d-md-block">{{ hint_stock }}</p>
       <table class="table table-sm table-mobile-compact">
-        <thead><tr><th>Склад</th><th>Штрихкод</th><th>Наименование</th><th>Размер</th><th>Кол-во</th><th></th></tr></thead>
+        <thead><tr><th>Склад</th><th>Штрихкод</th><th>Наименование</th><th>Размер</th><th>Кол-во</th><th>Поступление</th><th></th></tr></thead>
         <tbody>
         {% for row in stock_rows %}
           <tr>
@@ -29,6 +29,13 @@
             <td>{{ row.nomenclature.name }}</td>
             <td>{{ row.nomenclature.size or '' }}</td>
             <td>{{ row.qty }} {{ row.nomenclature.unit }}</td>
+            <td class="small text-muted">
+              {% for lot in row.active_lots() %}
+                {{ lot.qty_remaining | int if lot.qty_remaining == lot.qty_remaining | int else lot.qty_remaining }} шт
+                {%- if lot.supplier_name %} — {{ lot.supplier_name }}{% endif -%}
+                {%- if lot.order_number %} (№{{ lot.order_number }}){% endif %}{% if not loop.last %}<br>{% endif %}
+              {% else %}—{% endfor %}
+            </td>
             <td>
               <details>
                 <summary class="btn btn-sm btn-outline-danger">Возврат</summary>
@@ -46,7 +53,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="6" class="text-muted">Неразмещенных остатков нет</td></tr>
+          <tr><td colspan="7" class="text-muted">Неразмещенных остатков нет</td></tr>
         {% endfor %}
         </tbody>
       </table>

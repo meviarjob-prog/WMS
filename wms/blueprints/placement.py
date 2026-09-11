@@ -146,10 +146,7 @@ def write_off_stock():
         )
         return redirect(url_for("placement.list_documents"))
 
-    row = UnplacedStock.query.filter_by(
-        warehouse_id=warehouse_id, nomenclature_id=nomenclature_id
-    ).first()
-    row.qty -= qty
+    UnplacedStock.consume(warehouse_id, nomenclature_id, qty)
 
     db.session.add(
         SupplierReturn(
@@ -262,10 +259,7 @@ def _scan_item_into_box(doc, box, item, qty):
             f"доступно {available} {item.unit}"
         )
 
-    row = UnplacedStock.query.filter_by(
-        warehouse_id=doc.warehouse_id, nomenclature_id=item.id
-    ).first()
-    row.qty -= qty
+    UnplacedStock.consume(doc.warehouse_id, item.id, qty)
 
     box_item = BoxItem.query.filter_by(box_id=box.id, nomenclature_id=item.id).first()
     if box_item:
@@ -341,10 +335,7 @@ def _add_line(doc, nomenclature, qty):
             f"доступно {available} {nomenclature.unit}"
         )
 
-    row = UnplacedStock.query.filter_by(
-        warehouse_id=doc.warehouse_id, nomenclature_id=nomenclature.id
-    ).first()
-    row.qty -= qty
+    UnplacedStock.consume(doc.warehouse_id, nomenclature.id, qty)
 
     line = PlacementLine(document_id=doc.id, nomenclature_id=nomenclature.id, qty=qty)
     db.session.add(line)

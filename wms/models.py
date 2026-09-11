@@ -284,7 +284,13 @@ class UnplacedStock(db.Model):
     )
 
     @staticmethod
-    def add(warehouse_id, nomenclature_id, qty):
+    def add(warehouse_id, nomenclature_id, qty, receiving_document=None):
+        """receiving_document — если остаток пришел из конкретной приемки по
+        накладной, заводим под него партию (см. UnplacedStockLot), чтобы
+        потом можно было увидеть поставщика и номер заявки по остатку.
+        Без него (возврат из "Размещения" при удалении документа/строки) —
+        партия без источника: к этому моменту исходная партия уже
+        перемешалась при упаковке в короб, восстановить её точно нельзя."""
         row = UnplacedStock.query.filter_by(
             warehouse_id=warehouse_id, nomenclature_id=nomenclature_id
         ).first()
@@ -294,7 +300,24 @@ class UnplacedStock(db.Model):
             )
             db.session.add(row)
         row.qty += qty
+        if qty > 0:
+            UnplacedStockLot.add(warehouse_id, nomenclature_id, qty, receiving_document)
         return row
+
+    @staticmethod
+    def consume(warehouse_id, nomenclature_id, qty):
+        """Единая точка списания остатка — держит агрегат (для быстрых
+        проверок available()) и партии (для истории поставщик/заявка) в
+        синхроне. Вызывающая сторона отвечает за то, что qty не превышает
+        available() — здесь только защита от ухода в минус."""
+        if qty <= 0:
+            return
+        row = UnplacedStock.query.filter_by(
+            warehouse_id=warehouse_id, nomenclature_id=nomenclature_id
+        ).first()
+        if row:
+            row.qty = max(row.qty - qty, 0)
+        UnplacedStockLot.consume(warehouse_id, nomenclature_id, qty)
 
     @staticmethod
     def available(warehouse_id, nomenclature_id):
@@ -302,6 +325,83 @@ class UnplacedStock(db.Model):
             warehouse_id=warehouse_id, nomenclature_id=nomenclature_id
         ).first()
         return row.qty if row else 0
+
+    def active_lots(self):
+        """Партии, из которых складывается этот остаток — поставщик и номер
+        заявки по каждой (см. UnplacedStockLot); может быть пусто, если
+        остаток когда-то создался без партий (до этой версии)."""
+        return (
+            UnplacedStockLot.query.filter_by(
+                warehouse_id=self.warehouse_id, nomenclature_id=self.nomenclature_id
+            )
+            .filter(UnplacedStockLot.qty_remaining > 0)
+            .order_by(UnplacedStockLot.received_at)
+            .all()
+        )
+
+
+class UnplacedStockLot(db.Model):
+    """Одна партия неразмещенного остатка — привязана к конкретной приемке
+    (если она пришла из накладной), чтобы по остатку было видно поставщика
+    и номер заявки. UnplacedStock остается быстрым агрегатом "сколько всего
+    доступно"; партии обновляются синхронно через UnplacedStock.add()/
+    consume() и списываются по очереди поступления (FIFO)."""
+
+    __tablename__ = "unplaced_stock_lots"
+
+    id = db.Column(db.Integer, primary_key=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False, index=True)
+    nomenclature_id = db.Column(db.Integer, db.ForeignKey("nomenclature.id"), nullable=False, index=True)
+    receiving_document_id = db.Column(db.Integer, db.ForeignKey("receiving_documents.id"), nullable=True)
+    # Снимок на момент поступления — не ссылка на текущие supplier/
+    # order_number документа, чтобы история не менялась задним числом,
+    # если реквизиты приемки потом поправят.
+    supplier_name = db.Column(db.String(200), nullable=True)
+    order_number = db.Column(db.String(50), nullable=True)
+    qty_received = db.Column(db.Float, nullable=False)
+    qty_remaining = db.Column(db.Float, nullable=False)
+    received_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    warehouse = db.relationship("Warehouse")
+    nomenclature = db.relationship("Nomenclature")
+    receiving_document = db.relationship("ReceivingDocument")
+
+    @staticmethod
+    def add(warehouse_id, nomenclature_id, qty, receiving_document=None):
+        lot = UnplacedStockLot(
+            warehouse_id=warehouse_id,
+            nomenclature_id=nomenclature_id,
+            receiving_document_id=receiving_document.id if receiving_document else None,
+            supplier_name=receiving_document.supplier if receiving_document else None,
+            order_number=receiving_document.order_number if receiving_document else None,
+            qty_received=qty,
+            qty_remaining=qty,
+        )
+        db.session.add(lot)
+        return lot
+
+    @staticmethod
+    def consume(warehouse_id, nomenclature_id, qty):
+        """Списывает qty по партиям этого товара на складе в порядке
+        поступления (FIFO). Партий может не хватить (например, остаток
+        когда-то создался без партий, до этой версии) — тогда списываем
+        сколько есть и молча останавливаемся, не уводя партии в минус."""
+        remaining = qty
+        lots = (
+            UnplacedStockLot.query.filter_by(
+                warehouse_id=warehouse_id, nomenclature_id=nomenclature_id
+            )
+            .filter(UnplacedStockLot.qty_remaining > 0)
+            .order_by(UnplacedStockLot.received_at)
+            .all()
+        )
+        for lot in lots:
+            if remaining <= 0:
+                break
+            take = min(lot.qty_remaining, remaining)
+            lot.qty_remaining -= take
+            remaining -= take
+        return qty - remaining
 
 
 class Box(db.Model):

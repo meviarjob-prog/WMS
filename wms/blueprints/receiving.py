@@ -329,7 +329,17 @@ def _box_category_warning(box, item):
 def _receive_item_into_box(doc, box, item, qty):
     """Приемка сразу в короб — товар физически упаковывается в момент
     приемки, минуя неразмещенный остаток (см. complete(): строки с box_id
-    в него не идут)."""
+    в него не идут).
+
+    Если у этого же товара на этом складе уже есть неразмещенный остаток
+    (висит с прошлой, еще не до конца размещенной приемки) — считаем, что
+    физически это те же единицы, которые наконец кладут в короб, и
+    списываем их со старого остатка вместо того, чтобы задваивать учет
+    (остаток "висел" неразмещенным — и теперь еще и в коробе)."""
+    dedup_qty = min(qty, UnplacedStock.available(doc.warehouse_id, item.id))
+    if dedup_qty > 0:
+        UnplacedStock.consume(doc.warehouse_id, item.id, dedup_qty)
+
     box_item = BoxItem.query.filter_by(box_id=box.id, nomenclature_id=item.id).first()
     if box_item:
         box_item.qty += qty
@@ -575,7 +585,7 @@ def complete(doc_id):
             # неразмещенный остаток. Короб останется без ячейки, пока его
             # не разместят обычным способом через «Размещение».
             continue
-        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, line.qty)
+        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, line.qty, receiving_document=doc)
 
     doc.status = "completed"
     doc.completed_at = datetime.utcnow()
