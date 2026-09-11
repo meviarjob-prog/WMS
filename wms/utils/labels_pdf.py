@@ -24,22 +24,31 @@ pdfmetrics.registerFont(TTFont(FONT_REGULAR, os.path.join(_FONTS_DIR, "DejaVuSan
 pdfmetrics.registerFont(TTFont(FONT_BOLD, os.path.join(_FONTS_DIR, "DejaVuSans-Bold.ttf")))
 
 
-def _draw_label_page(c, code_value: str, title: str, subtitle: str = "", title_font_size=8):
+def _draw_label_page(
+    c, code_value: str, title: str, subtitle: str = "", title_font_size=8,
+    max_img_h_ratio=0.55, subtitle_gap_mm=None,
+):
     """Рисует одну этикетку 58x40мм на текущей странице канваса c —
     используется и для одиночной этикетки, и для пакетной печати (там
     вызывается в цикле с showPage() между этикетками).
 
     title_font_size по умолчанию 8 (наименование товара может быть длинным
     и разбиваться на 3 строки — крупнее не поместится). Этикетка короба
-    печатает короткий текст ("Короб BOX-000123", всегда 1 строка) и просит
-    более крупный шрифт явно (см. вызовы в labels.py) — читать номер короба
-    издалека и при беглом взгляде должно быть проще."""
+    печатает короткий текст (сам номер, всегда 1 строка) и просит более
+    крупный шрифт и более крупный штрихкод явно (см. вызовы в labels.py) —
+    читать номер короба и сканировать штрихкод издалека должно быть проще.
+
+    subtitle_gap_mm — отступ перед подписью под номером; по умолчанию
+    (None) равен строчному интервалу заголовка (как было исходно), но при
+    крупном title_font_size это дало бы неоправданно большой отступ перед
+    мелкой (7pt) подписью — тогда передают отдельное фиксированное
+    значение, не зависящее от размера заголовка."""
     png_bytes = generate_barcode_png_bytes(code_value)
     img = ImageReader(io.BytesIO(png_bytes))
     img_w, img_h = img.getSize()
 
     max_img_w = LABEL_WIDTH - 4 * mm
-    max_img_h = LABEL_HEIGHT * 0.55
+    max_img_h = LABEL_HEIGHT * max_img_h_ratio
     scale = min(max_img_w / img_w, max_img_h / img_h)
     draw_w = img_w * scale
     draw_h = img_h * scale
@@ -63,11 +72,14 @@ def _draw_label_page(c, code_value: str, title: str, subtitle: str = "", title_f
 
     if subtitle:
         c.setFont(FONT_REGULAR, 7)
-        ty -= line_height
+        ty -= line_height if subtitle_gap_mm is None else subtitle_gap_mm * mm
         c.drawCentredString(LABEL_WIDTH / 2, ty, subtitle)
 
 
-def build_label_pdf(code_value: str, title: str, subtitle: str = "", title_font_size=8) -> bytes:
+def build_label_pdf(
+    code_value: str, title: str, subtitle: str = "", title_font_size=8,
+    max_img_h_ratio=0.55, subtitle_gap_mm=None,
+) -> bytes:
     """Строит PDF-этикетку 58x40мм: штрихкод сверху, текст снизу.
 
     code_value — значение, кодируемое в штрихкод (баркод товара / номер короба / код ячейки).
@@ -76,20 +88,26 @@ def build_label_pdf(code_value: str, title: str, subtitle: str = "", title_font_
     """
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
-    _draw_label_page(c, code_value, title, subtitle, title_font_size=title_font_size)
+    _draw_label_page(
+        c, code_value, title, subtitle,
+        title_font_size=title_font_size, max_img_h_ratio=max_img_h_ratio, subtitle_gap_mm=subtitle_gap_mm,
+    )
     c.showPage()
     c.save()
     return buffer.getvalue()
 
 
-def build_labels_batch_pdf(entries, title_font_size=8) -> bytes:
+def build_labels_batch_pdf(entries, title_font_size=8, max_img_h_ratio=0.55, subtitle_gap_mm=None) -> bytes:
     """Строит один PDF из нескольких этикеток 58x40мм подряд (одна на
     страницу) — для печати сразу целой партии, например, только что
     массово созданных коробов. entries — список (code_value, title, subtitle)."""
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
     for code_value, title, subtitle in entries:
-        _draw_label_page(c, code_value, title, subtitle, title_font_size=title_font_size)
+        _draw_label_page(
+            c, code_value, title, subtitle,
+            title_font_size=title_font_size, max_img_h_ratio=max_img_h_ratio, subtitle_gap_mm=subtitle_gap_mm,
+        )
         c.showPage()
     c.save()
     return buffer.getvalue()

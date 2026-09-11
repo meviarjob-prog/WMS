@@ -12,8 +12,8 @@
 </div>
 
 <div class="label-page">
-  <img src="{{ barcode_img }}" alt="barcode">
-  <div class="label-title label-title-lg">Короб {{ box.box_number }}</div>
+  <img src="{{ barcode_img }}" alt="barcode" class="label-img-lg">
+  <div class="label-title label-title-lg">{{ box.box_number }}</div>
   <div class="label-subtitle">{{ box.warehouse.name if box.warehouse else '' }}</div>
 </div>
 

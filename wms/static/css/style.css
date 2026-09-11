@@ -158,6 +158,11 @@ body {
   max-height: 20mm;
 }
 
+/* Штрихкод на этикетке короба — крупнее обычного (легче сканировать) */
+.label-page img.label-img-lg {
+  max-height: 24mm;
+}
+
 .label-page .label-title {
   font-size: 9pt;
   font-weight: 700;
