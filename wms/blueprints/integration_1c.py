@@ -74,7 +74,13 @@ def _movement_payload(doc):
     lines = []
     for line in doc.lines:
         for item in line.box.items:
-            lines.append({"barcode": item.nomenclature.barcode, "qty": item.qty})
+            lines.append(
+                {
+                    "barcode": item.nomenclature.barcode,
+                    "name": item.nomenclature.name,
+                    "qty": item.qty,
+                }
+            )
     return {
         "id": doc.id,
         "number": doc.number,
@@ -94,7 +100,12 @@ def _inventory_payload(doc):
         "warehouse": doc.warehouse.name if doc.warehouse else "",
         "comment": f"WMS: {doc.number}",
         "lines": [
-            {"barcode": line.nomenclature.barcode, "qty": line.qty} for line in doc.lines
+            {
+                "barcode": line.nomenclature.barcode,
+                "name": line.nomenclature.name,
+                "qty": line.qty,
+            }
+            for line in doc.lines
         ],
     }
 
