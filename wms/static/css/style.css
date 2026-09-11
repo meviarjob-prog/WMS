@@ -47,6 +47,8 @@ body {
 }
 
 .badge-status-draft { background-color: #ffc107; color: #000; }
+.badge-status-recounting { background-color: #fd7e14; color: #000; }
+.badge-status-sorting { background-color: #6610f2; }
 .badge-status-completed { background-color: #198754; }
 .badge-status-open { background-color: #6c757d; }
 .badge-status-stored { background-color: #0d6efd; }

@@ -130,6 +130,8 @@ def test_receiving_complete_creates_lot_with_document_provenance(db, client_logg
     db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=20))
     db.session.commit()
 
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
     client_logged_in.post(f"/receiving/{doc.id}/complete")
 
     lot = UnplacedStockLot.query.filter_by(warehouse_id=wh.id, nomenclature_id=item.id).first()

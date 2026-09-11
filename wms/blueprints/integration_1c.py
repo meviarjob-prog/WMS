@@ -15,7 +15,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from flask_login import current_user
 
 from ..extensions import db
-from ..models import AppSetting, InventoryDocument, MovementDocument
+from ..models import AppSetting, InventoryDocument, MovementDocument, SupplierReturn
 
 bp = Blueprint("integration_1c", __name__)
 
@@ -82,12 +82,17 @@ def settings():
     pending_inventories = InventoryDocument.query.filter_by(
         status="completed", synced_to_1c_at=None
     ).count()
+    pending_supplier_returns = SupplierReturn.query.filter(
+        SupplierReturn.synced_to_1c_at.is_(None),
+        SupplierReturn.invoice_number.isnot(None),
+    ).count()
 
     return render_template(
         "integration_1c/settings.html",
         token=_get_token(),
         pending_movements=pending_movements,
         pending_inventories=pending_inventories,
+        pending_supplier_returns=pending_supplier_returns,
     )
 
 
@@ -131,6 +136,51 @@ def _inventory_payload(doc):
     }
 
 
+def _supplier_returns_export():
+    """Возвраты поставщику из разбраковки приемок (см. receiving.complete) —
+    группируем по приемке в один документ на 1С с несколькими строками
+    (одна разбраковка = один возврат), а не документ на каждую позицию.
+    Возвраты без invoice_number (ручное списание из "Размещения", либо
+    разбраковка приемки, не загруженной из файла накладной — см.
+    ReceivingDocument.is_from_invoice_import) не выгружаем вовсе: 1С не с
+    чем сопоставлять документ поступления, такие возвраты вносятся в 1С
+    вручную."""
+    returns = (
+        SupplierReturn.query.filter(
+            SupplierReturn.synced_to_1c_at.is_(None),
+            SupplierReturn.invoice_number.isnot(None),
+        )
+        .order_by(SupplierReturn.receiving_document_id, SupplierReturn.id)
+        .all()
+    )
+
+    groups = {}
+    for ret in returns:
+        groups.setdefault(ret.receiving_document_id, []).append(ret)
+
+    payloads = []
+    for receiving_document_id, group in groups.items():
+        first = group[0]
+        payloads.append(
+            {
+                "id": receiving_document_id,
+                "invoice_number": first.invoice_number,
+                "supplier": first.supplier_name or "",
+                "warehouse": first.warehouse.name if first.warehouse else "",
+                "comment": f"WMS: возврат по приемке {first.invoice_number}",
+                "lines": [
+                    {
+                        "barcode": r.nomenclature.barcode,
+                        "name": r.nomenclature.name,
+                        "qty": r.qty,
+                    }
+                    for r in group
+                ],
+            }
+        )
+    return payloads
+
+
 @bp.route("/api/export")
 def export():
     """Отдает документы, готовые к переносу в 1С: перемещение — только
@@ -162,6 +212,7 @@ def export():
             "ok": True,
             "movements": [_movement_payload(d) for d in movements],
             "inventories": [_inventory_payload(d) for d in inventories],
+            "supplier_returns": _supplier_returns_export(),
         }
     )
 
@@ -178,6 +229,7 @@ def export_confirm():
     data = request.get_json(silent=True) or {}
     movement_ids = data.get("movement_ids") or []
     inventory_ids = data.get("inventory_ids") or []
+    supplier_return_ids = data.get("supplier_return_ids") or []
 
     now = datetime.utcnow()
     confirmed_movements = (
@@ -196,6 +248,18 @@ def export_confirm():
     for doc in confirmed_inventories:
         doc.synced_to_1c_at = now
 
+    # supplier_return_ids — это receiving_document_id (см. _supplier_returns_export,
+    # где id документа для 1С — это id приемки, объединяющий несколько строк
+    # возврата), а не id отдельных SupplierReturn.
+    confirmed_returns = (
+        SupplierReturn.query.filter(
+            SupplierReturn.receiving_document_id.in_(supplier_return_ids),
+            SupplierReturn.synced_to_1c_at.is_(None),
+        ).all()
+    )
+    for ret in confirmed_returns:
+        ret.synced_to_1c_at = now
+
     db.session.commit()
     return jsonify(
         {
@@ -203,6 +267,7 @@ def export_confirm():
             "confirmed": {
                 "movements": len(confirmed_movements),
                 "inventories": len(confirmed_inventories),
+                "supplier_returns": len(confirmed_returns),
             },
         }
     )

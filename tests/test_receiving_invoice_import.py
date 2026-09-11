@@ -402,6 +402,8 @@ def test_completing_confirmed_invoice_credits_unplaced_stock(db, client_logged_i
     line = doc.lines.first()
     client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/confirm", json={"qty": 79, "confirmed": True})
 
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
     client_logged_in.post(f"/receiving/{doc.id}/complete")
 
     stock = UnplacedStock.query.filter_by(warehouse_id=warehouse.id, nomenclature_id=item.id).first()

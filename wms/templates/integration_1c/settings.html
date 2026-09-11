@@ -28,6 +28,7 @@
       <h5>Что ждет выгрузки</h5>
       <p>Перемещений (принятых на складе): <b>{{ pending_movements }}</b></p>
       <p>Инвентаризаций (завершенных): <b>{{ pending_inventories }}</b></p>
+      <p>Возвратов поставщику (из разбраковки приемок): <b>{{ pending_supplier_returns }}</b></p>
       <p class="text-muted small mb-0">
         Обновляется сразу после того, как 1С подтвердит прием документов
         (кнопка «Синхронизировать» в обработке) — повторно эти же
@@ -39,7 +40,7 @@
       <h5>Адрес для обработки в 1С</h5>
       <p class="text-muted small mb-1">Получить документы (GET, токен — заголовком <code>X-1C-Token</code> или параметром <code>?token=</code>):</p>
       <code class="d-block mb-2">{{ request.url_root }}integrations/1c/api/export</code>
-      <p class="text-muted small mb-1">Подтвердить прием (POST, JSON <code>{"movement_ids": [...], "inventory_ids": [...]}</code>):</p>
+      <p class="text-muted small mb-1">Подтвердить прием (POST, JSON <code>{"movement_ids": [...], "inventory_ids": [...], "supplier_return_ids": [...]}</code>):</p>
       <code class="d-block">{{ request.url_root }}integrations/1c/api/export/confirm</code>
     </div>
   </div>

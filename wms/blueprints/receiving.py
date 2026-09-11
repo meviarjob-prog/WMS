@@ -16,7 +16,16 @@ from flask_login import current_user
 from sqlalchemy import func
 
 from ..extensions import db
-from ..models import Box, BoxItem, Nomenclature, ReceivingDocument, ReceivingLine, Supplier, UnplacedStock
+from ..models import (
+    Box,
+    BoxItem,
+    Nomenclature,
+    ReceivingDocument,
+    ReceivingLine,
+    Supplier,
+    SupplierReturn,
+    UnplacedStock,
+)
 from ..utils.excel_io import export_receiving_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
@@ -36,7 +45,7 @@ def list_documents():
 
     query = ReceivingDocument.query
     if unfinished_only:
-        query = query.filter_by(status="draft")
+        query = query.filter(ReceivingDocument.status != "completed")
     if invoice_only:
         query = query.filter(ReceivingDocument.supplier_id.isnot(None))
 
@@ -508,7 +517,10 @@ def add_line(doc_id):
 @bp.route("/<int:doc_id>/lines/<int:line_id>/update", methods=["POST"])
 def update_line(doc_id, line_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
-    if doc.status != "draft":
+    # draft — обычная правка при вводе; recounting — исправление количества
+    # по факту пересчета (см. send_to_recount), если оно не сошлось с тем,
+    # что внесли при приемке.
+    if doc.status not in ("draft", "recounting"):
         flash("Документ уже завершен", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc_id))
 
@@ -568,33 +580,115 @@ def delete_document(doc_id):
     return redirect(url_for("receiving.list_documents"))
 
 
-@bp.route("/<int:doc_id>/complete", methods=["POST"])
-def complete(doc_id):
+@bp.route("/<int:doc_id>/send-to-recount", methods=["POST"])
+def send_to_recount(doc_id):
+    """draft -> recounting. Товар физически пересчитывают заново — на этом
+    этапе можно поправить qty по строкам (см. update_line), если пересчет
+    разошелся с тем, что внесли при самой приемке."""
     doc = ReceivingDocument.query.get_or_404(doc_id)
     if doc.status != "draft":
-        flash("Документ уже завершен", "danger")
+        flash("Документ уже отправлен дальше по процессу", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id))
 
     if doc.lines.count() == 0:
         flash("В документе нет позиций", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id))
 
+    doc.status = "recounting"
+    db.session.commit()
+    flash(f"Приемка {doc.number} отправлена на пересчет", "success")
+    return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+
+@bp.route("/<int:doc_id>/send-to-sorting", methods=["POST"])
+def send_to_sorting(doc_id):
+    """recounting -> sorting. Пересчет подтвержден — дальше выделяем брак
+    построчно (см. update_defect)."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if doc.status != "recounting":
+        flash("Документ не находится на пересчете", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    doc.status = "sorting"
+    db.session.commit()
+    flash(f"Приемка {doc.number} отправлена на разбраковку", "success")
+    return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+
+@bp.route("/<int:doc_id>/lines/<int:line_id>/update-defect", methods=["POST"])
+def update_defect(doc_id, line_id):
+    """Выделение кол-ва брака построчно на этапе "Разбраковка". Обычным
+    сотрудникам доступно только для приемок, загруженных из файла накладной
+    (see ReceivingDocument.is_from_invoice_import) — иначе номер приемки не
+    настоящий номер накладной, и 1С возврат не сопоставит; администратор
+    может выделить брак в любом случае и завести возврат в 1С вручную."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if doc.status != "sorting":
+        flash("Документ не находится на разбраковке", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    if not doc.is_from_invoice_import() and not current_user.is_admin:
+        flash(
+            "Выделение брака доступно только для приемок, загруженных из накладной, "
+            "либо администратору",
+            "danger",
+        )
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    line = ReceivingLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
+    if line.box_id:
+        flash("Товар уже упакован в короб при приемке — разбраковке не подлежит", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    defect_qty = request.form.get("defect_qty", type=float) or 0
+    if defect_qty < 0 or defect_qty > line.qty:
+        flash("Кол-во брака не может быть отрицательным или больше принятого", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    line.defect_qty = defect_qty
+    db.session.commit()
+    return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+
+@bp.route("/<int:doc_id>/complete", methods=["POST"])
+def complete(doc_id):
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if doc.status != "sorting":
+        flash("Сначала пройдите этапы «Пересчет» и «Разбраковка»", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
     for line in doc.lines:
         if line.box_id:
             # Уже физически упаковано в короб во время приемки — минуя
-            # неразмещенный остаток. Короб останется без ячейки, пока его
-            # не разместят обычным способом через «Размещение».
+            # неразмещенный остаток и разбраковку. Короб останется без
+            # ячейки, пока его не разместят обычным способом через
+            # «Размещение».
             continue
-        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, line.qty, receiving_document=doc)
+        good_qty = line.good_qty()
+        if good_qty > 0:
+            UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, good_qty, receiving_document=doc)
+        if line.defect_qty:
+            db.session.add(
+                SupplierReturn(
+                    warehouse_id=doc.warehouse_id,
+                    nomenclature_id=line.nomenclature_id,
+                    qty=line.defect_qty,
+                    comment=f"Брак при разбраковке приемки {doc.number}",
+                    created_by_id=current_user.id,
+                    receiving_document_id=doc.id,
+                    supplier_name=doc.supplier,
+                    invoice_number=doc.number if doc.is_from_invoice_import() else None,
+                )
+            )
 
     doc.status = "completed"
     doc.completed_at = datetime.utcnow()
     db.session.commit()
     flash(
-        f"Приемка {doc.number} завершена. Товар без короба зачислен в неразмещенный остаток "
-        f"склада «{doc.warehouse.name}» — разместите его в короба и ячейки через «Размещение». "
-        f"Товар, упакованный в короб прямо при приемке, останется в коробе — его нужно только "
-        f"расставить по ячейкам.",
+        f"Приемка {doc.number} завершена. Годный товар без короба зачислен в неразмещенный "
+        f"остаток склада «{doc.warehouse.name}» — разместите его в короба и ячейки через "
+        f"«Размещение». Товар, упакованный в короб прямо при приемке, останется в коробе — его "
+        f"нужно только расставить по ячейкам.",
         "success",
     )
     return redirect(url_for("receiving.detail", doc_id=doc.id))

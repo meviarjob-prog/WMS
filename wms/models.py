@@ -536,7 +536,10 @@ class ReceivingDocument(db.Model):
     # текст остается для отображения и для случаев ручного создания приемки,
     # когда справочника поставщиков еще может не быть).
     supplier_id = db.Column(db.Integer, db.ForeignKey("suppliers.id"), nullable=True)
-    status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed
+    # draft -> recounting -> sorting -> completed. "Разбраковка" (выделение
+    # брака для возврата поставщику) возможна только на этапе sorting —
+    # см. receiving.send_to_sorting/complete.
+    status = db.Column(db.String(20), nullable=False, default="draft")
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
@@ -561,6 +564,13 @@ class ReceivingDocument(db.Model):
 
     def total_qty(self):
         return sum(line.qty for line in self.lines)
+
+    def is_from_invoice_import(self):
+        """True — number это реальный номер накладной 1С (см.
+        receiving.import_invoice_form), можно надежно синхронизировать
+        возврат поставщику по номеру. False — number сгенерирован WMS
+        (см. receiving.new_document), в 1С по нему ничего не найдется."""
+        return self.invoice_file_name is not None
 
 
 class ReceivingLine(db.Model):
@@ -587,9 +597,19 @@ class ReceivingLine(db.Model):
     # только на прогресс сверки; остатки формирует qty при завершении
     # приемки, как обычно.
     confirmed = db.Column(db.Boolean, nullable=False, default=False)
+    # Кол-во брака по этой строке, выявленное на этапе "Разбраковка" (см.
+    # ReceivingDocument.status) — не может превышать qty. При завершении
+    # приемки в неразмещенный остаток уходит только qty-defect_qty, а сам
+    # брак фиксируется отдельным SupplierReturn. Для строк, упакованных в
+    # короб при приемке (box_id заполнен), разбраковка не применяется —
+    # остается 0.
+    defect_qty = db.Column(db.Float, nullable=False, default=0)
 
     nomenclature = db.relationship("Nomenclature")
     box = db.relationship("Box")
+
+    def good_qty(self):
+        return max(self.qty - (self.defect_qty or 0), 0)
 
 
 class PlacementDocument(db.Model):
@@ -895,9 +915,15 @@ class ShipmentPlanLine(db.Model):
 
 
 class SupplierReturn(db.Model):
-    """Списание брака с неразмещенного остатка через возврат поставщику.
-    Сам документ возврата оформляется в 1С отдельно — здесь только
-    фиксируем количество и товар, чтобы было с чем сверить 1С-документ."""
+    """Возврат поставщику — списание брака. Два источника:
+    1) ручное списание с общего неразмещенного остатка (placement.write_off_stock)
+       — receiving_document_id пуст, к конкретной накладной не привязан,
+       синхронизации с 1С не подлежит (нечем сопоставить документ поступления);
+    2) разбраковка конкретной приемки (receiving.complete, после этапов
+       "Пересчет"/"Разбраковка") — receiving_document_id заполнен, есть с
+       каким поставщиком/накладной сверяться, попадает в /api/export для 1С.
+    supplier_name/invoice_number — снимок на момент создания (как у
+    UnplacedStockLot), чтобы отображение не менялось задним числом."""
 
     __tablename__ = "supplier_returns"
 
@@ -908,7 +934,19 @@ class SupplierReturn(db.Model):
     comment = db.Column(db.String(300))
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    receiving_document_id = db.Column(
+        db.Integer, db.ForeignKey("receiving_documents.id"), nullable=True
+    )
+    supplier_name = db.Column(db.String(200), nullable=True)
+    # Номер приемки (ReceivingDocument.number) на момент создания возврата.
+    # Совпадает с реальным номером накладной в 1С только для приемок,
+    # загруженных из файла накладной (см. ReceivingDocument.invoice_file_name)
+    # — для остальных 1С этот номер не найдет, см. SyncWMS.bsl.
+    invoice_number = db.Column(db.String(30), nullable=True)
+    # См. MovementDocument.synced_to_1c_at.
+    synced_to_1c_at = db.Column(db.DateTime, nullable=True)
 
     warehouse = db.relationship("Warehouse")
     nomenclature = db.relationship("Nomenclature")
     created_by = db.relationship("User")
+    receiving_document = db.relationship("ReceivingDocument")

@@ -20,6 +20,7 @@
   </div>
 </form>
 
+{% set status_labels = {'draft': 'Черновик', 'recounting': 'На пересчете', 'sorting': 'На разбраковке', 'completed': 'Завершен'} %}
 <div class="card p-3">
   <table class="table d-none d-md-table">
     <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Поставщик</th><th>№ заявки</th><th>Автор</th><th>Статус</th><th></th></tr></thead>
@@ -32,7 +33,7 @@
         <td>{{ d.supplier or '' }}</td>
         <td>{{ d.order_number or '' }}</td>
         <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
-        <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
+        <td><span class="badge badge-status-{{ d.status }}">{{ status_labels.get(d.status, d.status) }}</span></td>
         <td>
           <a href="{{ url_for('receiving.detail', doc_id=d.id) }}">Открыть</a>
           {% if d.supplier_id %}· <a href="{{ url_for('receiving.confirm_invoice', doc_id=d.id) }}">📱 По накладной</a>{% endif %}
@@ -54,7 +55,7 @@
       <div class="list-group-item py-2 px-2">
         <div class="d-flex justify-content-between align-items-center gap-2">
           <a href="{{ url_for('receiving.detail', doc_id=d.id) }}" class="fw-bold text-decoration-none">{{ d.number }}</a>
-          <span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span>
+          <span class="badge badge-status-{{ d.status }}">{{ status_labels.get(d.status, d.status) }}</span>
         </div>
         <div class="small text-muted">{{ d.warehouse.name }}{% if d.supplier %} · {{ d.supplier }}{% endif %}{% if d.order_number %} · № заявки: {{ d.order_number }}{% endif %}</div>
         <div class="small text-muted">{{ d.created_at.strftime('%d.%m.%Y') }}</div>

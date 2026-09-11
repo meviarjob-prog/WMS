@@ -1,33 +1,53 @@
 {% extends "base.html" %}
 {% block title %}Приемка {{ doc.number }}{% endblock %}
 {% block content %}
+{% set status_labels = {'draft': 'Черновик', 'recounting': 'На пересчете', 'sorting': 'На разбраковке', 'completed': 'Завершен'} %}
 <p><a href="{{ url_for('receiving.list_documents') }}">&larr; Приемка</a></p>
 
 <div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
   <div>
     <h3 class="mb-1">Приемка {{ doc.number }}
-      <span class="badge badge-status-{{ doc.status }}">{{ 'Черновик' if doc.status == 'draft' else 'Завершен' }}</span>
+      <span class="badge badge-status-{{ doc.status }}">{{ status_labels.get(doc.status, doc.status) }}</span>
     </h3>
     <div class="text-muted">Склад: {{ doc.warehouse.name }} {% if doc.supplier %}· Поставщик: {{ doc.supplier }}{% endif %}{% if doc.order_number %} · № заявки: {{ doc.order_number }}{% endif %}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}{% if doc.invoice_file_data %} · <a href="{{ url_for('receiving.download_invoice_file', doc_id=doc.id) }}">📄 Накладная</a>{% endif %}</div>
   </div>
   <div>
     <a class="btn btn-outline-secondary d-none d-md-inline-block" href="{{ url_for('receiving.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
     {% if doc.status == 'draft' %}
-    <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}" class="d-inline">
-      <button type="submit" class="btn btn-success">✅ Завершить приемку</button>
+    <form method="post" action="{{ url_for('receiving.send_to_recount', doc_id=doc.id) }}" class="d-inline">
+      <button type="submit" class="btn btn-success">📊 Отправить на пересчет</button>
     </form>
     {% if current_user.is_admin %}
     <form method="post" action="{{ url_for('receiving.delete_document', doc_id=doc.id) }}" class="d-inline" onsubmit="return confirm('Удалить документ приемки {{ doc.number }} целиком? Действие необратимо.');">
       <button type="submit" class="btn btn-outline-danger">🗑 Удалить документ</button>
     </form>
     {% endif %}
+    {% elif doc.status == 'recounting' %}
+    <form method="post" action="{{ url_for('receiving.send_to_sorting', doc_id=doc.id) }}" class="d-inline">
+      <button type="submit" class="btn btn-success">🔍 Отправить на разбраковку</button>
+    </form>
+    {% elif doc.status == 'sorting' %}
+    <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}" class="d-inline">
+      <button type="submit" class="btn btn-success">✅ Завершить приемку</button>
+    </form>
     {% endif %}
   </div>
 </div>
 
-{% if doc.status == 'completed' %}
+{% if doc.status == 'recounting' %}
+<div class="alert alert-warning">
+  Приемка на пересчете — при необходимости поправьте количество по строкам ниже, затем отправьте на разбраковку.
+</div>
+{% elif doc.status == 'sorting' %}
+<div class="alert alert-warning">
+  Приемка на разбраковке — укажите кол-во брака по строкам, если оно есть (остальное зачислится в неразмещенный остаток как годное). Брак уйдет отдельным возвратом поставщику.
+  {% if not doc.is_from_invoice_import() and not current_user.is_admin %}
+    <br>Эта приемка не загружена из файла накладной — выделение брака здесь доступно только администратору (номер приемки не настоящий номер накладной, 1С возврат не сопоставит).
+  {% endif %}
+</div>
+{% elif doc.status == 'completed' %}
 <div class="alert alert-success">
-  Приемка завершена — товар зачислен в неразмещенный остаток склада «{{ doc.warehouse.name }}».
+  Приемка завершена — годный товар зачислен в неразмещенный остаток склада «{{ doc.warehouse.name }}».
   <a href="{{ url_for('placement.new_document') }}">Разместить его в короба и ячейки →</a>
 </div>
 {% endif %}
@@ -134,10 +154,11 @@
 {% endif %}
 {% endif %}
 
+{% set can_edit_defect = doc.status == 'sorting' and (doc.is_from_invoice_import() or current_user.is_admin) %}
 <div class="card p-3">
   <h5>Позиции приемки</h5>
   <table class="table table-sm d-none d-md-table">
-    <thead><tr><th>Товар</th><th>Короб</th><th>Кол-во</th>{% if doc.status == 'draft' %}<th></th>{% endif %}</tr></thead>
+    <thead><tr><th>Товар</th><th>Короб</th><th>Кол-во</th><th>{% if doc.status in ('sorting', 'completed') %}Брак{% endif %}</th></tr></thead>
     <tbody>
     {% for line in lines %}
       <tr>
@@ -156,8 +177,32 @@
             <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
           </form>
         </td>
+        {% elif doc.status == 'recounting' %}
+        <td style="min-width:160px">
+          <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
+            <input type="number" name="qty" step="0.001" min="0.001" value="{{ line.qty }}" class="form-control form-control-sm" style="width:100px">
+            <span class="align-self-center small text-muted">{{ line.nomenclature.unit }}</span>
+            <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+          </form>
+        </td>
+        <td></td>
+        {% elif doc.status == 'sorting' %}
+        <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
+        <td style="min-width:140px">
+          {% if line.box_id %}
+            <span class="text-muted">не подлежит</span>
+          {% elif can_edit_defect %}
+            <form method="post" action="{{ url_for('receiving.update_defect', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
+              <input type="number" name="defect_qty" step="0.001" min="0" max="{{ line.qty }}" value="{{ line.defect_qty }}" class="form-control form-control-sm" style="width:90px">
+              <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+            </form>
+          {% else %}
+            <span class="text-muted">{{ line.defect_qty }}</span>
+          {% endif %}
+        </td>
         {% else %}
         <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
+        <td>{% if line.defect_qty %}<span class="text-danger">{{ line.defect_qty }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
         {% endif %}
       </tr>
     {% else %}
@@ -166,7 +211,7 @@
     </tbody>
     {% if lines %}
     <tfoot>
-      <tr class="fw-bold"><td>Итого</td><td></td><td>{{ doc.total_qty() }}</td>{% if doc.status == 'draft' %}<td></td>{% endif %}</tr>
+      <tr class="fw-bold"><td>Итого</td><td></td><td>{{ doc.total_qty() }}</td><td></td></tr>
     </tfoot>
     {% endif %}
   </table>
@@ -190,8 +235,32 @@
               <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
             </form>
           </div>
+          {% elif doc.status == 'recounting' %}
+          <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1 align-items-center flex-shrink-0">
+            {% set q = line.qty %}
+            <input type="number" name="qty" step="0.001" min="0.001" value="{{ q | int if q == q | int else q }}" class="form-control form-control-sm" style="width:4.5em">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+          </form>
+          {% elif doc.status == 'sorting' %}
+          <div class="small text-end">
+            <div>{{ line.qty }} {{ line.nomenclature.unit }}</div>
+            {% if line.box_id %}
+              <span class="text-muted">брак не подлежит</span>
+            {% elif can_edit_defect %}
+              <form method="post" action="{{ url_for('receiving.update_defect', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1 align-items-center mt-1">
+                <span class="text-muted">брак:</span>
+                <input type="number" name="defect_qty" step="0.001" min="0" max="{{ line.qty }}" value="{{ line.defect_qty }}" class="form-control form-control-sm" style="width:4.5em">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+              </form>
+            {% else %}
+              <span class="text-muted">брак: {{ line.defect_qty }}</span>
+            {% endif %}
+          </div>
           {% else %}
-          <div class="small">{{ line.qty }} {{ line.nomenclature.unit }}</div>
+          <div class="small text-end">
+            <div>{{ line.qty }} {{ line.nomenclature.unit }}</div>
+            {% if line.defect_qty %}<div class="text-danger">брак: {{ line.defect_qty }}</div>{% endif %}
+          </div>
           {% endif %}
         </div>
       </div>
