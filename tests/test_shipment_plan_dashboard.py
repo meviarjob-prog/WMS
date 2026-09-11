@@ -170,6 +170,49 @@ def test_marketplace_header_fulfilled_includes_in_transit(db, client_logged_in):
     assert "15" in snippet
 
 
+def test_picking_list_has_totals_row_summing_columns(db, client_logged_in):
+    """Строка "Итого" сразу под заголовками — просто сумма по столбцам
+    (На разбраковке/Готово к отгрузке/В пути и по каждому городу)."""
+    from wms.models import UnplacedStock
+
+    sender, city, item = _setup(planned_qty=30)
+    UnplacedStock.add(sender.id, item.id, 8)
+    db.session.commit()
+    _ship_box(sender, city, item, qty=10, box_number="BOX-TOT-1", client=client_logged_in)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("Итого (")
+    assert idx != -1
+    snippet = html[idx : idx + 800]
+    assert "1 поз." in snippet
+    assert ">8<" in snippet  # На разбраковке
+    assert ">30<" in snippet  # Казань remaining_qty (30, полная потребность)
+    assert ">10<" in snippet  # В пути
+
+
+def test_picking_list_has_v_puti_column(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    _ship_box(sender, city, item, qty=10, box_number="BOX-TOT-2", client=client_logged_in)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("В пути")
+    assert idx != -1
+    idx2 = html.find("ART-1")
+    row_snippet = html[idx2 : idx2 + 1200]
+    assert "10" in row_snippet
+
+
+def test_totals_row_not_hidden_by_search_filter(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    _ship_box(sender, city, item, qty=10, box_number="BOX-TOT-3", client=client_logged_in)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    assert "picking-totals-row" in html
+
+
 def test_picking_list_keeps_item_even_when_fully_in_transit(db, client_logged_in):
     """Даже если все нужное количество уже едет (в пути >= план), позиция
     не пропадает из "Что нужно отправить" — потребность закрывается только

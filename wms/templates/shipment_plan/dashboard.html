@@ -123,6 +123,7 @@
           <th rowspan="2" class="align-bottom"></th>
           <th rowspan="2" class="align-bottom text-end" title="Принято на складе-отправителе, но еще не упаковано в короб">На разбраковке</th>
           <th rowspan="2" class="align-bottom text-end" title="Упаковано в короб на складе-отправителе — готово к отправке">Готово к отгрузке</th>
+          <th rowspan="2" class="align-bottom text-end" title="Уже отправлено перемещением по всем городам вместе, но еще не подтверждено кнопкой «Принято на складе»">В пути</th>
           {% if ozon_cities %}<th colspan="{{ ozon_cities|length }}" class="text-center table-info">ОЗОН</th>{% endif %}
           {% if wb_cities %}<th colspan="{{ wb_cities|length }}" class="text-center table-warning border-start border-2 border-dark">ВБ</th>{% endif %}
         </tr>
@@ -132,6 +133,14 @@
         </tr>
       </thead>
       <tbody>
+        <tr class="fw-bold table-secondary picking-totals-row">
+          <td colspan="4">Итого ({{ picking_list|length }} поз.)</td>
+          <td class="text-end">{{ picking_totals.unplaced | round(0) | int }}</td>
+          <td class="text-end">{{ picking_totals.ready_to_ship | round(0) | int }}</td>
+          <td class="text-end">{{ picking_totals.in_transit | round(0) | int }}</td>
+          {% for city in ozon_cities %}<td class="text-end">{{ picking_totals.ozon[city] | round(0) | int }}</td>{% endfor %}
+          {% for city in wb_cities %}<td class="text-end{% if loop.first %} border-start border-2{% endif %}">{{ picking_totals.wb[city] | round(0) | int }}</td>{% endfor %}
+        </tr>
       {% for p in picking_list %}
         <tr{% if p.no_stock %} class="table-danger"{% endif %} data-search-text="{{ (p.article or '') ~ ' ' ~ p.barcode }}">
           <td>{{ p.article }}</td>
@@ -140,6 +149,7 @@
           <td class="text-nowrap">{% if p.no_stock %}<span class="badge bg-danger" title="Нет на складе-отправителе">нет на складе</span>{% endif %}</td>
           <td class="text-end">{% if p.unplaced %}{{ p.unplaced | round(0) | int }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
           <td class="text-end">{% if p.ready_to_ship %}<b>{{ p.ready_to_ship | round(0) | int }}</b>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td class="text-end">{% if p.in_transit_total %}<span class="text-warning-emphasis">{{ p.in_transit_total | round(0) | int }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
           {% for city in ozon_cities %}
             {% set line = p.ozon.get(city) %}
             <td class="text-end">
@@ -178,7 +188,7 @@
     if (!table) return;
     input.addEventListener("input", function () {
       var q = input.value.trim().toLowerCase();
-      table.querySelectorAll("tbody tr").forEach(function (tr) {
+      table.querySelectorAll("tbody tr:not(.picking-totals-row)").forEach(function (tr) {
         var text = (tr.dataset.searchText || "").toLowerCase();
         tr.hidden = q.length > 0 && text.indexOf(q) === -1;
       });

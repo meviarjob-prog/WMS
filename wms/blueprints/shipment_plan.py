@@ -408,10 +408,12 @@ def dashboard():
                     "ozon": {},
                     "wb": {},
                     "max_remaining": 0,
+                    "in_transit_total": 0,
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
             product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
+            product["in_transit_total"] += line.in_transit_qty
 
     picking_list = sorted(
         (p for p in products.values() if p["max_remaining"] > 0),
@@ -423,6 +425,29 @@ def dashboard():
             if m["marketplace"] == marketplace and m.get("cities"):
                 return [row["warehouse"].marketplace_city for row in m["cities"]]
         return []
+
+    ozon_cities = _city_names("ozon")
+    wb_cities = _city_names("wb")
+
+    # Итоговая строка над списком "Что нужно отправить" — просто сумма по
+    # каждой колонке (На разбраковке/Готово к отгрузке/В пути и каждый
+    # город), чтобы сразу видеть общий объем не пролистывая/не считая
+    # вручную по строкам.
+    picking_totals = {
+        "unplaced": sum(p["unplaced"] for p in picking_list),
+        "ready_to_ship": sum(p["ready_to_ship"] for p in picking_list),
+        "in_transit": sum(p["in_transit_total"] for p in picking_list),
+        "ozon": {
+            city: sum(
+                p["ozon"][city].remaining_qty() for p in picking_list if city in p["ozon"]
+            )
+            for city in ozon_cities
+        },
+        "wb": {
+            city: sum(p["wb"][city].remaining_qty() for p in picking_list if city in p["wb"])
+            for city in wb_cities
+        },
+    }
 
     # Сводка в шапке страницы: "в пути" по каждому маркетплейсу и общим
     # итогом, плюс "на складе" и "на производстве" — эти два уже не по
@@ -455,8 +480,9 @@ def dashboard():
         "shipment_plan/dashboard.html",
         marketplaces=marketplaces_data,
         picking_list=picking_list,
-        ozon_cities=_city_names("ozon"),
-        wb_cities=_city_names("wb"),
+        picking_totals=picking_totals,
+        ozon_cities=ozon_cities,
+        wb_cities=wb_cities,
         summary=summary,
     )
 
