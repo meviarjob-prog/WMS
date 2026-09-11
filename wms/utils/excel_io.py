@@ -424,5 +424,39 @@ def export_shipment_plan_to_excel(lines) -> bytes:
     return buffer.getvalue()
 
 
+SHIPPED_REPORT_HEADERS = [
+    "Склад назначения",
+    "Штрихкод",
+    "Наименование",
+    "Артикул",
+    "Кол-во отгружено",
+]
+
+
+def export_shipped_report_to_excel(rows) -> bytes:
+    """rows — список словарей {"warehouse", "nomenclature", "qty"} (см.
+    reports.shipped_report)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Отгружено по складам"
+    _style_header(ws, SHIPPED_REPORT_HEADERS)
+
+    for row in rows:
+        nomenclature = row["nomenclature"]
+        ws.append(
+            [
+                row["warehouse"].name if row["warehouse"] else "",
+                nomenclature.barcode if nomenclature else "",
+                nomenclature.name if nomenclature else "— нет в номенклатуре —",
+                nomenclature.sku if nomenclature else "",
+                row["qty"],
+            ]
+        )
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 def timestamp_for_filename() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")

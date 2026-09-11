@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Отгружено по складам{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('reports.index') }}">&larr; Отчеты</a></p>
+<h3 class="mb-4">Отгружено по складам</h3>
+
+<div class="card p-3 mb-4">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label">Склад назначения</label>
+      <select name="warehouse_id" class="form-select">
+        <option value="">Все склады</option>
+        {% for wh in warehouses %}
+          <option value="{{ wh.id }}" {% if selected_warehouse_id == wh.id %}selected{% endif %}>{{ wh.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">С даты</label>
+      <input type="date" name="date_from" class="form-control" value="{{ date_from }}">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label">По дату</label>
+      <input type="date" name="date_to" class="form-control" value="{{ date_to }}">
+    </div>
+    <div class="col-md-2">
+      <button type="submit" class="btn btn-primary w-100">Показать</button>
+    </div>
+  </form>
+</div>
+
+<div class="card p-3">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h5 class="mb-0">Результат</h5>
+    <a class="btn btn-outline-secondary btn-sm"
+       href="{{ url_for('reports.shipped_report_export', warehouse_id=selected_warehouse_id, date_from=date_from, date_to=date_to) }}">
+      📤 Выгрузить в Excel
+    </a>
+  </div>
+  <table class="table table-sm table-mobile-compact">
+    <thead><tr><th>Склад назначения</th><th>Штрихкод</th><th>Наименование</th><th>Артикул</th><th>Кол-во отгружено</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.warehouse.name if row.warehouse else '—' }}</td>
+        <td>{{ row.nomenclature.barcode if row.nomenclature else '' }}</td>
+        <td>{{ row.nomenclature.name if row.nomenclature else '— нет в номенклатуре —' }}</td>
+        <td>{{ row.nomenclature.sku if row.nomenclature else '' }}</td>
+        <td>{{ row.qty | int if row.qty == row.qty | int else row.qty | round(3) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">За выбранный период отгрузок нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
