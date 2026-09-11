@@ -206,6 +206,7 @@ def _create_movement_line(doc, box):
         from_cell_id=box.cell_id,
     )
     db.session.add(line)
+    box.mark_scanned(current_user)
     return line
 
 

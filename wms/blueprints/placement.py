@@ -248,7 +248,8 @@ def select_box(doc_id):
 
     if box.placement_document_id is None:
         box.placement_document_id = doc.id
-        db.session.commit()
+    box.mark_scanned(current_user)
+    db.session.commit()
 
     return redirect(url_for("placement.detail", doc_id=doc.id, box=box.id))
 
@@ -487,6 +488,7 @@ def _place_box(box, cell_code, expected_warehouse_id):
 
     box.cell_id = cell.id
     box.status = "stored"
+    box.mark_scanned(current_user)
     db.session.commit()
     return None
 

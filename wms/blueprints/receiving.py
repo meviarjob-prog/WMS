@@ -330,6 +330,9 @@ def select_box(doc_id):
         flash(f"Короб '{box_number}' не найден на складе «{doc.warehouse.name}»", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id))
 
+    box.mark_scanned(current_user)
+    db.session.commit()
+
     item_count = box.items.count()
     if item_count > 0:
         # Не блокируем — короб мог использоваться раньше (перемещением,

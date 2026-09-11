@@ -159,6 +159,7 @@ def add_box(doc_id):
             db.session.add(line)
 
     db.session.add(InventoryScannedBox(document_id=doc.id, box_id=box.id))
+    box.mark_scanned(current_user)
     db.session.commit()
 
     if items:

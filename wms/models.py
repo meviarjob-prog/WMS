@@ -316,14 +316,25 @@ class Box(db.Model):
     )
     status = db.Column(db.String(20), nullable=False, default="open")  # open | stored
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    # Когда и кем короб был отсканирован в последний раз — в любой операции
+    # (приемка, размещение, перемещение, инвентаризация), см. Box.mark_scanned.
+    # Не история всех сканов, только последний — для полной истории у
+    # инвентаризации есть отдельная InventoryScannedBox.scanned_at.
+    last_scanned_at = db.Column(db.DateTime, nullable=True)
+    last_scanned_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
 
     warehouse = db.relationship("Warehouse", foreign_keys=[warehouse_id])
+    last_scanned_by = db.relationship("User", foreign_keys=[last_scanned_by_id])
     items = db.relationship(
         "BoxItem", backref="box", lazy="dynamic", cascade="all, delete-orphan"
     )
 
     def total_qty(self):
         return sum(item.qty for item in self.items)
+
+    def mark_scanned(self, user):
+        self.last_scanned_at = datetime.utcnow()
+        self.last_scanned_by_id = user.id if user and user.is_authenticated else None
 
     @property
     def barcode_value(self):
@@ -604,6 +615,10 @@ class MovementLine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     document_id = db.Column(db.Integer, db.ForeignKey("movement_documents.id"), nullable=False, index=True)
     box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=False)
+    # Когда короб был отсканирован именно в ЭТО перемещение — в отличие от
+    # Box.last_scanned_at (перезаписывается любой последующей операцией),
+    # эта отметка навсегда привязана к этой строке документа.
+    scanned_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     from_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"))
     from_cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"))
