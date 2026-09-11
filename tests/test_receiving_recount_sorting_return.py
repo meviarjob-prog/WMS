@@ -18,6 +18,7 @@ from wms.models import (
     ReceivingLine,
     SupplierReturn,
     UnplacedStock,
+    UnplacedStockLot,
     User,
     Warehouse,
 )
@@ -254,3 +255,76 @@ def test_admin_can_flag_defect_without_invoice_import_but_return_has_no_invoice_
     assert ret is not None
     assert ret.qty == 2
     assert ret.invoice_number is None
+
+
+def test_revert_to_sorting_allows_redoing_defect_without_double_counting(db, client_logged_in):
+    """Приемки, завершенные еще до появления пересчета/разбраковки (или
+    просто с ошибкой в браке), админ может вернуть на разбраковку и пройти
+    ее заново — без задвоения зачисленного остатка."""
+    wh = _make_warehouse("WH-RS-15")
+    item = _make_item("7770000112")
+    doc = _make_doc(wh, number="RS-0013")
+    line = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=10)
+    db.session.add(line)
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+    assert UnplacedStock.available(wh.id, item.id) == 10
+
+    resp = client_logged_in.post(f"/receiving/{doc.id}/revert-to-sorting")
+    doc = ReceivingDocument.query.get(doc.id)
+    assert doc.status == "sorting"
+    assert doc.completed_at is None
+    assert UnplacedStock.available(wh.id, item.id) == 0
+    assert UnplacedStockLot.query.filter_by(receiving_document_id=doc.id).count() == 0
+
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/update-defect", data={"defect_qty": "4"})
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+
+    assert UnplacedStock.available(wh.id, item.id) == 6
+    returns = SupplierReturn.query.filter_by(receiving_document_id=doc.id).all()
+    assert len(returns) == 1
+    assert returns[0].qty == 4
+
+
+def test_revert_to_sorting_blocked_once_stock_already_placed(db, client_logged_in):
+    wh = _make_warehouse("WH-RS-16")
+    item = _make_item("7770000113")
+    doc = _make_doc(wh, number="RS-0014")
+    line = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=10)
+    db.session.add(line)
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+
+    # Часть уже разместили в короб (как это делает "Размещение").
+    UnplacedStock.consume(wh.id, item.id, 3)
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/revert-to-sorting")
+
+    doc = ReceivingDocument.query.get(doc.id)
+    assert doc.status == "completed"
+    assert UnplacedStock.available(wh.id, item.id) == 7
+
+
+def test_revert_to_sorting_requires_admin(db, client):
+    wh = _make_warehouse("WH-RS-17")
+    item = _make_item("7770000114")
+    doc = _make_doc(wh, number="RS-0015")
+    line = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=10)
+    db.session.add(line)
+    db.session.commit()
+    staff = _make_staff_user()
+    _login_as(client, staff)
+
+    client.post(f"/receiving/{doc.id}/send-to-recount")
+    client.post(f"/receiving/{doc.id}/send-to-sorting")
+    client.post(f"/receiving/{doc.id}/complete")
+    client.post(f"/receiving/{doc.id}/revert-to-sorting")
+
+    assert ReceivingDocument.query.get(doc.id).status == "completed"

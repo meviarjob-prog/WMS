@@ -411,6 +411,61 @@ def test_completing_confirmed_invoice_credits_unplaced_stock(db, client_logged_i
     assert stock.qty == 79
 
 
+def test_mobile_confirm_invoice_page_can_drive_full_recount_sorting_flow(db, client_logged_in):
+    """Раньше на мобильной сверке "По накладной" не было кнопок пересчета/
+    разбраковки вообще — "Завершить приемку" была доступна только из
+    черновика напрямую. Кладовщик должен уметь пройти весь процесс, не
+    уходя на десктопную страницу приемки."""
+    from wms.models import SupplierReturn
+
+    warehouse = _make_warehouse()
+    item = Nomenclature(sku="НФ-00003575", barcode="8880000007", name=DEFAULT_ROW_NAME, unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        content_type="multipart/form-data",
+    )
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+    line = doc.lines.first()
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/confirm", json={"qty": 80, "confirmed": True})
+
+    resp = client_logged_in.post(
+        f"/receiving/{doc.id}/send-to-recount", data={"next": "confirm"}
+    )
+    assert resp.status_code == 302
+    assert f"/receiving/{doc.id}/confirm" in resp.headers["Location"]
+    assert ReceivingDocument.query.get(doc.id).status == "recounting"
+
+    # Пересчет разошелся — поправляем кол-во прямо со сверки.
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/confirm", json={"qty": 75, "confirmed": True})
+    assert ReceivingLine.query.get(line.id).qty == 75
+
+    resp = client_logged_in.post(
+        f"/receiving/{doc.id}/send-to-sorting", data={"next": "confirm"}
+    )
+    assert f"/receiving/{doc.id}/confirm" in resp.headers["Location"]
+    assert ReceivingDocument.query.get(doc.id).status == "sorting"
+
+    resp = client_logged_in.post(
+        f"/receiving/{doc.id}/lines/{line.id}/update-defect",
+        data={"defect_qty": "5", "next": "confirm"},
+    )
+    assert f"/receiving/{doc.id}/confirm" in resp.headers["Location"]
+
+    resp = client_logged_in.post(f"/receiving/{doc.id}/complete", data={"next": "confirm"})
+    assert f"/receiving/{doc.id}/confirm" in resp.headers["Location"]
+
+    doc = ReceivingDocument.query.get(doc.id)
+    assert doc.status == "completed"
+    stock = UnplacedStock.query.filter_by(warehouse_id=warehouse.id, nomenclature_id=item.id).first()
+    assert stock.qty == 70  # 75 - 5 брака
+    ret = SupplierReturn.query.filter_by(receiving_document_id=doc.id).first()
+    assert ret is not None
+    assert ret.qty == 5
+
+
 def test_confirm_invoice_page_has_add_unlisted_item_button(db, client_logged_in):
     """На мобильной сверке по накладной должна быть возможность добавить
     товар, которого нет в самой накладной — например, поставщик привез

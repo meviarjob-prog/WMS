@@ -45,6 +45,11 @@
     <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}" class="d-inline">
       <button type="submit" class="btn btn-success">✅ Завершить приемку</button>
     </form>
+    {% elif doc.status == 'completed' and current_user.is_admin %}
+    <form method="post" action="{{ url_for('receiving.revert_to_sorting', doc_id=doc.id) }}" class="d-inline"
+          onsubmit="return confirm('Вернуть приемку на разбраковку? Годный товар, зачисленный в неразмещенный остаток, будет списан обратно — сработает, только если ничего из него еще не разместили в короба.');">
+      <button type="submit" class="btn btn-outline-warning">↩ Вернуть на разбраковку</button>
+    </form>
     {% endif %}
   </div>
 </div>

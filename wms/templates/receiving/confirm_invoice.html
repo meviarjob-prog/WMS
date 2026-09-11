@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Накладная {{ doc.number }}{% endblock %}
 {% block content %}
+{% set status_labels = {'draft': 'Черновик', 'recounting': 'На пересчете', 'sorting': 'На разбраковке', 'completed': 'Завершена'} %}
+{% set can_edit_defect = doc.status == 'sorting' and (doc.is_from_invoice_import() or current_user.is_admin) %}
 <p><a href="{{ url_for('receiving.list_documents') }}">&larr; Приемка</a></p>
 
 <h4 class="mb-1">Накладная № {{ doc.number }}</h4>
@@ -8,15 +10,32 @@
   {% if doc.supplier %}{{ doc.supplier }} · {% endif %}{{ doc.warehouse.name }}
   {% if doc.order_number %} · № заявки: {{ doc.order_number }}{% endif %}
   {% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}
-  {% if doc.status == 'completed' %} · <span class="badge bg-success">Завершена</span>{% endif %}
+  · <span class="badge badge-status-{{ doc.status }}">{{ status_labels.get(doc.status, doc.status) }}</span>
   {% if doc.invoice_file_data %} · <a href="{{ url_for('receiving.download_invoice_file', doc_id=doc.id) }}">📄 Скачать накладную</a>{% endif %}
 </div>
+
+{% if doc.status == 'sorting' and not can_edit_defect %}
+<div class="alert alert-warning py-2 px-3 small">
+  Эта приемка не загружена из файла накладной — выделение брака здесь доступно только администратору.
+</div>
+{% endif %}
 
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
   <div class="fw-bold" id="confirmProgress">Отмечено: {{ confirmed_count }} из {{ lines|length }}</div>
   {% if doc.status == 'draft' %}
+  <form method="post" action="{{ url_for('receiving.send_to_recount', doc_id=doc.id) }}">
+    <input type="hidden" name="next" value="confirm">
+    <button type="submit" class="btn btn-success btn-sm">📊 Отправить на пересчет</button>
+  </form>
+  {% elif doc.status == 'recounting' %}
+  <form method="post" action="{{ url_for('receiving.send_to_sorting', doc_id=doc.id) }}">
+    <input type="hidden" name="next" value="confirm">
+    <button type="submit" class="btn btn-success btn-sm">🔍 Отправить на разбраковку</button>
+  </form>
+  {% elif doc.status == 'sorting' %}
   <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}"
-        onsubmit="return confirm('Завершить приемку? Неотмеченные позиции тоже зачтутся по указанному количеству.');">
+        onsubmit="return confirm('Завершить приемку? Брак уйдет отдельным возвратом поставщику, остальное — в неразмещенный остаток.');">
+    <input type="hidden" name="next" value="confirm">
     <button type="submit" class="btn btn-success btn-sm">✅ Завершить приемку</button>
   </form>
   {% endif %}
@@ -63,13 +82,34 @@
         {% set q = line.qty %}
         <input type="number" inputmode="decimal" step="0.001" min="0" class="form-control form-control-sm qty-input"
                style="width:5.5em" value="{{ q | int if q == q | int else q | round(3) }}"
-               {% if doc.status != 'draft' %}disabled{% endif %}>
+               {% if doc.status not in ('draft', 'recounting') %}disabled{% endif %}>
         <div class="form-check form-switch mb-0">
           <input class="form-check-input confirm-checkbox" type="checkbox" role="switch" style="width:2.5em; height:1.25em"
-                 {% if line.confirmed %}checked{% endif %} {% if doc.status != 'draft' %}disabled{% endif %}>
+                 {% if line.confirmed %}checked{% endif %} {% if doc.status not in ('draft', 'recounting') %}disabled{% endif %}>
         </div>
       </div>
     </div>
+    {% if doc.status == 'sorting' %}
+    <div class="d-flex align-items-center justify-content-end gap-2 mt-1">
+      {% if line.box_id %}
+        <span class="text-muted small">упаковано в короб — брак не подлежит</span>
+      {% elif can_edit_defect %}
+        <form method="post" action="{{ url_for('receiving.update_defect', doc_id=doc.id, line_id=line.id) }}" class="d-flex align-items-center gap-1">
+          <input type="hidden" name="next" value="confirm">
+          <span class="text-muted small">Брак:</span>
+          <input type="number" name="defect_qty" inputmode="decimal" step="0.001" min="0" max="{{ line.qty }}"
+                 value="{{ line.defect_qty }}" class="form-control form-control-sm" style="width:4.5em">
+          <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+        </form>
+      {% else %}
+        <span class="text-muted small">Брак: {{ line.defect_qty }}</span>
+      {% endif %}
+    </div>
+    {% elif doc.status == 'completed' and line.defect_qty %}
+    <div class="d-flex align-items-center justify-content-end gap-2 mt-1">
+      <span class="text-danger small">Брак: {{ line.defect_qty }}</span>
+    </div>
+    {% endif %}
   </div>
 {% else %}
   <div class="list-group-item text-muted">Позиций еще нет</div>

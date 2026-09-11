@@ -25,6 +25,7 @@ from ..models import (
     Supplier,
     SupplierReturn,
     UnplacedStock,
+    UnplacedStockLot,
 )
 from ..utils.excel_io import export_receiving_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
@@ -32,6 +33,16 @@ from ..utils.numbering import next_number
 from ..utils.receiving_invoice_import import InvoiceParseError, parse_invoice
 
 bp = Blueprint("receiving", __name__)
+
+
+def _next_redirect(doc_id):
+    """Некоторые действия (переходы статуса, разбраковка) доступны и с
+    обычной страницы приемки, и с мобильной сверки по накладной (см.
+    add_line, тот же прием с next=confirm) — возвращаемся туда же, откуда
+    пришли, вместо того чтобы всегда уводить на десктопную страницу."""
+    if request.form.get("next") == "confirm":
+        return redirect(url_for("receiving.confirm_invoice", doc_id=doc_id))
+    return redirect(url_for("receiving.detail", doc_id=doc_id))
 
 
 @bp.route("/")
@@ -246,7 +257,9 @@ def confirm_line(doc_id, line_id):
     строки накладной — без перезагрузки страницы, чтобы сверка на телефоне
     шла быстро, строка за строкой."""
     doc = ReceivingDocument.query.get_or_404(doc_id)
-    if doc.status != "draft":
+    # draft — обычная сверка при вводе; recounting — исправление количества
+    # по факту пересчета (см. send_to_recount).
+    if doc.status not in ("draft", "recounting"):
         return jsonify({"ok": False, "error": "Документ уже завершен"}), 400
 
     line = ReceivingLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
@@ -632,16 +645,16 @@ def send_to_recount(doc_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
     if doc.status != "draft":
         flash("Документ уже отправлен дальше по процессу", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return _next_redirect(doc.id)
 
     if doc.lines.count() == 0:
         flash("В документе нет позиций", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return _next_redirect(doc.id)
 
     doc.status = "recounting"
     db.session.commit()
     flash(f"Приемка {doc.number} отправлена на пересчет", "success")
-    return redirect(url_for("receiving.detail", doc_id=doc.id))
+    return _next_redirect(doc.id)
 
 
 @bp.route("/<int:doc_id>/send-to-sorting", methods=["POST"])
@@ -651,12 +664,12 @@ def send_to_sorting(doc_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
     if doc.status != "recounting":
         flash("Документ не находится на пересчете", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return _next_redirect(doc.id)
 
     doc.status = "sorting"
     db.session.commit()
     flash(f"Приемка {doc.number} отправлена на разбраковку", "success")
-    return redirect(url_for("receiving.detail", doc_id=doc.id))
+    return _next_redirect(doc.id)
 
 
 @bp.route("/<int:doc_id>/lines/<int:line_id>/update-defect", methods=["POST"])
@@ -669,7 +682,7 @@ def update_defect(doc_id, line_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
     if doc.status != "sorting":
         flash("Документ не находится на разбраковке", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return _next_redirect(doc.id)
 
     if not doc.is_from_invoice_import() and not current_user.is_admin:
         flash(
@@ -677,21 +690,21 @@ def update_defect(doc_id, line_id):
             "либо администратору",
             "danger",
         )
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return _next_redirect(doc.id)
 
     line = ReceivingLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
     if line.box_id:
         flash("Товар уже упакован в короб при приемке — разбраковке не подлежит", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return _next_redirect(doc.id)
 
     defect_qty = request.form.get("defect_qty", type=float) or 0
     if defect_qty < 0 or defect_qty > line.qty:
         flash("Кол-во брака не может быть отрицательным или больше принятого", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return _next_redirect(doc.id)
 
     line.defect_qty = defect_qty
     db.session.commit()
-    return redirect(url_for("receiving.detail", doc_id=doc.id))
+    return _next_redirect(doc.id)
 
 
 @bp.route("/<int:doc_id>/complete", methods=["POST"])
@@ -699,7 +712,7 @@ def complete(doc_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
     if doc.status != "sorting":
         flash("Сначала пройдите этапы «Пересчет» и «Разбраковка»", "danger")
-        return redirect(url_for("receiving.detail", doc_id=doc.id))
+        return _next_redirect(doc.id)
 
     for line in doc.lines:
         if line.box_id:
@@ -735,6 +748,66 @@ def complete(doc_id):
         f"нужно только расставить по ячейкам.",
         "success",
     )
+    return _next_redirect(doc.id)
+
+
+@bp.route("/<int:doc_id>/revert-to-sorting", methods=["POST"])
+def revert_to_sorting(doc_id):
+    """Админ может вернуть завершенную приемку на разбраковку задним числом
+    (например, приемки, завершенные еще до появления пересчета/разбраковки,
+    или ошиблись с браком). Безопасно, только пока НИЧЕГО из зачисленного
+    по этой приемке остатка еще не размещено в короба — см.
+    UnplacedStockLot.qty_remaining. Если часть уже разместили, откатить
+    нельзя: непонятно, какие именно физические единицы из общего остатка
+    (там могли уже перемешаться с другими партиями) забирать обратно."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if not current_user.is_admin:
+        flash("Вернуть приемку на разбраковку может только администратор", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    if doc.status != "completed":
+        flash("Приемка не завершена", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    lots = UnplacedStockLot.query.filter_by(receiving_document_id=doc.id).all()
+    already_placed = [lot for lot in lots if lot.qty_remaining < lot.qty_received]
+    if already_placed:
+        names = ", ".join(sorted({lot.nomenclature.name for lot in already_placed}))
+        flash(
+            f"Нельзя вернуть на разбраковку — товар уже частично размещен в короба: {names}",
+            "danger",
+        )
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    for lot in lots:
+        row = UnplacedStock.query.filter_by(
+            warehouse_id=doc.warehouse_id, nomenclature_id=lot.nomenclature_id
+        ).first()
+        if row:
+            row.qty = max(row.qty - lot.qty_remaining, 0)
+        db.session.delete(lot)
+
+    # Возвраты, которые 1С уже забрала, отменить нельзя — предупреждаем и
+    # оставляем как есть; неподтвержденные (еще не выгруженные) удаляем —
+    # разбраковка сейчас пройдет заново и решит по браку заново.
+    synced_returns = SupplierReturn.query.filter_by(
+        receiving_document_id=doc.id
+    ).filter(SupplierReturn.synced_to_1c_at.isnot(None)).count()
+    SupplierReturn.query.filter_by(
+        receiving_document_id=doc.id, synced_to_1c_at=None
+    ).delete()
+
+    doc.status = "sorting"
+    doc.completed_at = None
+    db.session.commit()
+
+    message = f"Приемка {doc.number} возвращена на разбраковку."
+    if synced_returns:
+        message += (
+            f" Внимание: по ней уже выгружен(о) в 1С {synced_returns} возврат(ов) поставщику — "
+            f"они не отменены, сверьте вручную."
+        )
+    flash(message, "warning" if synced_returns else "success")
     return redirect(url_for("receiving.detail", doc_id=doc.id))
 
 
