@@ -280,6 +280,8 @@ def confirm_line(doc_id, line_id):
 
 @bp.route("/<int:doc_id>")
 def detail(doc_id):
+    from ..models import Warehouse
+
     doc = ReceivingDocument.query.get_or_404(doc_id)
     lines = doc.lines.all()
 
@@ -298,12 +300,15 @@ def detail(doc_id):
         Box.query.filter(Box.id.in_(packed_box_ids)).all() if packed_box_ids else []
     )
 
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
+
     return render_template(
         "receiving/detail.html",
         doc=doc,
         lines=lines,
         active_box=active_box,
         packed_boxes=packed_boxes,
+        warehouses=warehouses,
     )
 
 
@@ -578,6 +583,45 @@ def delete_document(doc_id):
     db.session.commit()
     flash(f"Документ приемки {number} удален", "success")
     return redirect(url_for("receiving.list_documents"))
+
+
+@bp.route("/<int:doc_id>/change-warehouse", methods=["POST"])
+def change_warehouse(doc_id):
+    """Исправление ошибочно выбранного склада — например, сразу после
+    загрузки приходной накладной (см. import_invoice_form) заметили, что
+    выбрали не тот склад. Доступно, пока приемка не завершена — после
+    завершения склад уже зафиксирован в неразмещенном остатке и партиях
+    (см. UnplacedStock/UnplacedStockLot), менять его задним числом нельзя.
+    Короба, уже упакованные в рамках этой приемки, физически остаются на
+    прежнем складе (у Box свой warehouse_id) — поэтому пока такие есть,
+    сначала нужно разобраться с ними, иначе документ будет указывать на
+    один склад, а короба физически лежать на другом."""
+    from ..models import Warehouse
+
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if doc.status == "completed":
+        flash("Приемка уже завершена — склад изменить нельзя", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc_id))
+
+    packed_box_ids = {line.box_id for line in doc.lines if line.box_id}
+    if packed_box_ids:
+        flash(
+            "В этой приемке уже есть товар, упакованный в короб — сменить склад нельзя, "
+            "пока эти короба привязаны к приемке",
+            "danger",
+        )
+        return redirect(url_for("receiving.detail", doc_id=doc_id))
+
+    warehouse_id = request.form.get("warehouse_id", type=int)
+    warehouse = Warehouse.query.get(warehouse_id) if warehouse_id else None
+    if not warehouse:
+        flash("Выберите склад", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc_id))
+
+    doc.warehouse_id = warehouse.id
+    db.session.commit()
+    flash(f"Склад приемки изменен на «{warehouse.name}»", "success")
+    return redirect(url_for("receiving.detail", doc_id=doc_id))
 
 
 @bp.route("/<int:doc_id>/send-to-recount", methods=["POST"])

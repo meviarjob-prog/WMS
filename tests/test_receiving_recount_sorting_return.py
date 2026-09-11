@@ -186,6 +186,53 @@ def test_non_admin_cannot_flag_defect_without_invoice_import(db, client):
     assert ReceivingLine.query.get(line.id).defect_qty == 0
 
 
+def test_change_warehouse_updates_document_before_completion(db, client_logged_in):
+    wh1 = _make_warehouse("WH-RS-9")
+    wh2 = _make_warehouse("WH-RS-10")
+    item = _make_item("7770000109")
+    doc = _make_doc(wh1, number="RS-0010")
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=5))
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/change-warehouse", data={"warehouse_id": wh2.id})
+
+    assert ReceivingDocument.query.get(doc.id).warehouse_id == wh2.id
+
+
+def test_change_warehouse_blocked_after_completion(db, client_logged_in):
+    wh1 = _make_warehouse("WH-RS-11")
+    wh2 = _make_warehouse("WH-RS-12")
+    item = _make_item("7770000110")
+    doc = _make_doc(wh1, number="RS-0011")
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=5))
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+
+    client_logged_in.post(f"/receiving/{doc.id}/change-warehouse", data={"warehouse_id": wh2.id})
+
+    assert ReceivingDocument.query.get(doc.id).warehouse_id == wh1.id
+
+
+def test_change_warehouse_blocked_when_boxes_packed(db, client_logged_in):
+    wh1 = _make_warehouse("WH-RS-13")
+    wh2 = _make_warehouse("WH-RS-14")
+    item = _make_item("7770000111")
+    doc = _make_doc(wh1, number="RS-0012")
+    box = Box(box_number="BOX-RS-2", warehouse_id=wh1.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=2))
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=2, box_id=box.id))
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/change-warehouse", data={"warehouse_id": wh2.id})
+
+    assert ReceivingDocument.query.get(doc.id).warehouse_id == wh1.id
+
+
 def test_admin_can_flag_defect_without_invoice_import_but_return_has_no_invoice_number(db, client_logged_in):
     """Админ может выделить брак даже для вручную созданной приемки — но
     возврат создается без invoice_number, чтобы автосинхронизация с 1С его

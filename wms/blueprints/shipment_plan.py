@@ -12,6 +12,8 @@ from ..models import (
     MovementLine,
     Nomenclature,
     ProductionRecord,
+    ReceivingDocument,
+    ReceivingLine,
     ShipmentPlan,
     ShipmentPlanLine,
     UnplacedStock,
@@ -204,6 +206,36 @@ def _unplaced_by_nomenclature(warehouse_ids):
     }
 
 
+def _pending_sorting_by_nomenclature(warehouse_ids):
+    """{nomenclature_id: кол-во} по строкам приемок в статусе "На пересчете"
+    или "На разбраковке" (см. ReceivingDocument.status) — с этого момента
+    (кнопка "Отправить на пересчет") товар физически уже принят на складе,
+    но еще не попадает в UnplacedStock (это происходит только при
+    завершении приемки, см. receiving.complete) — без этой раскладки он
+    "исчезал" бы из плана отгрузок на все время пересчета/разбраковки,
+    как будто его еще нет на складе. Годное кол-во считаем за вычетом уже
+    выделенного брака (defect_qty) — бракованное в остаток не попадет.
+    Упакованные в короб прямо при приемке строки (box_id заполнен) сюда не
+    входят — они разбраковке не подлежат и не были неразмещенными."""
+    if not warehouse_ids:
+        return {}
+    rows = (
+        db.session.query(
+            ReceivingLine.nomenclature_id,
+            func.sum(ReceivingLine.qty - ReceivingLine.defect_qty),
+        )
+        .join(ReceivingDocument, ReceivingDocument.id == ReceivingLine.document_id)
+        .filter(
+            ReceivingDocument.warehouse_id.in_(warehouse_ids),
+            ReceivingDocument.status.in_(("recounting", "sorting")),
+            ReceivingLine.box_id.is_(None),
+        )
+        .group_by(ReceivingLine.nomenclature_id)
+        .all()
+    )
+    return {nomenclature_id: qty or 0 for nomenclature_id, qty in rows}
+
+
 def _production_by_nomenclature(nomenclature_ids, period_start):
     """{nomenclature_id: кол-во} отсканированного на производстве с начала
     периода плана — просто сумма, без вычета уже принятого через Приемку
@@ -297,6 +329,9 @@ def dashboard():
     sender_ids = _sender_warehouse_ids()
     stock = _stock_by_nomenclature(sender_ids)
     unplaced_stock = _unplaced_by_nomenclature(sender_ids)
+    for nomenclature_id, qty in _pending_sorting_by_nomenclature(sender_ids).items():
+        stock[nomenclature_id] = stock.get(nomenclature_id, 0) + qty
+        unplaced_stock[nomenclature_id] = unplaced_stock.get(nomenclature_id, 0) + qty
     in_transit_by_item = _in_transit_by_warehouse_and_item()
     in_transit_by_warehouse = {}
     for (wh_id, _nom_id), qty in in_transit_by_item.items():

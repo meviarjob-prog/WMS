@@ -12,6 +12,8 @@ from wms.models import (
     MovementDocument,
     MovementLine,
     Nomenclature,
+    ReceivingDocument,
+    ReceivingLine,
     ShipmentPlan,
     ShipmentPlanLine,
     Warehouse,
@@ -227,3 +229,33 @@ def test_picking_list_keeps_item_even_when_fully_in_transit(db, client_logged_in
     snippet = html[idx : idx + 3000]
     assert ">10<" in snippet
     assert "(10)" in snippet
+
+
+def test_picking_list_shows_receiving_on_recount_and_sorting_as_unplaced(db, client_logged_in):
+    """С момента "Отправить на пересчет" и до завершения приемки товар еще
+    не попал в UnplacedStock (см. receiving.complete), но физически уже
+    принят на складе — должен считаться "на разбраковке" наравне с обычным
+    неразмещенным остатком, а не пропадать из плана как будто его нет."""
+    sender, city, item = _setup(planned_qty=30)
+    doc = ReceivingDocument(number="REC-PLAN-1", warehouse_id=sender.id, supplier="ИП Тестов")
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=12))
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    assert ">12<" in snippet  # На разбраковке
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+
+    line = ReceivingLine.query.filter_by(document_id=doc.id).first()
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/update-defect", data={"defect_qty": "2"})
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    assert ">10<" in snippet  # 12 - 2 брака = 10 годного "на разбраковке"

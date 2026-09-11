@@ -107,13 +107,18 @@ def _movement_payload(doc):
                     "qty": item.qty,
                 }
             )
+    to_warehouse_name = doc.to_warehouse.name if doc.to_warehouse else ""
     return {
         "id": doc.id,
         "number": doc.number,
         "date": (doc.completed_at or doc.created_at).isoformat(),
         "from_warehouse": doc.from_warehouse.name if doc.from_warehouse else "",
         "to_warehouse": _to_warehouse_name_for_1c(doc),
-        "comment": f"WMS: {doc.number}",
+        # Реальный склад-город WMS (например, "ОЗОН: Казань") — когда
+        # to_warehouse выше подменен на общий "Товары в пути на
+        # Фулфилмент" (см. _to_warehouse_name_for_1c), это единственное
+        # место, где виден настоящий адресат перемещения.
+        "comment": f"WMS: {doc.number} (склад получатель: {to_warehouse_name})",
         "lines": lines,
     }
 
