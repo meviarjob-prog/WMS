@@ -34,6 +34,12 @@
   </div>
 </div>
 
+{% if doc.sync_warning %}
+<div class="alert alert-danger">
+  ⚠️ Документ создан в 1С не полностью: {{ doc.sync_warning }}. Проверьте/дозаполните документ в 1С вручную.
+</div>
+{% endif %}
+
 {% set can_edit = doc.status == 'draft' or current_user.is_admin %}
 {% if doc.status != 'draft' and current_user.is_admin %}
 <div class="alert alert-warning">

@@ -129,7 +129,12 @@
       {% for d in documents %}
         <tr>
           <td><input type="checkbox" class="form-check-input doc-checkbox" name="doc_ids" value="{{ d.id }}"></td>
-          <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+          <td>
+            <a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a>
+            {% if d.sync_warning %}
+              <span class="text-danger" title="1С создала документ не полностью — часть строк не сопоставлена с номенклатурой и пропущена: {{ d.sync_warning }}">⚠️</span>
+            {% endif %}
+          </td>
           <td>{{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
           <td>{{ d.from_warehouse.name }}</td>
           <td>{{ d.to_warehouse.name }}</td>

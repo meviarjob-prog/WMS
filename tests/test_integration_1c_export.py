@@ -247,3 +247,55 @@ def test_export_confirm_auto_ticks_accounting_checkbox_for_movements(db, client_
     doc = MovementDocument.query.get(doc.id)
     assert doc.synced_to_1c_at is not None
     assert doc.accounting_entered_at is not None
+
+
+def test_export_confirm_stores_movement_warning(db, client_logged_in):
+    """1С может подтвердить документ, но сообщить, что часть строк не
+    сопоставилась с номенклатурой и была пропущена (см. SyncWMS.bsl
+    СоздатьПеремещениеТоваров) — WMS сохраняет текст предупреждения, чтобы
+    показать "!" в списке перемещений."""
+    _set_token()
+    sender = Warehouse(code="WH-1C-11", name="Основной склад")
+    receiver = Warehouse(code="WH-1C-12", name="Склад №2 (Шоссейная 167)")
+    db.session.add_all([sender, receiver])
+    db.session.commit()
+    item = _make_item("9990000008")
+    doc = _ship_box(sender, receiver, item, 3, "BOX-1C-WARN", client_logged_in)
+
+    resp = client_logged_in.post(
+        "/integrations/1c/api/export/confirm",
+        data=json.dumps(
+            {
+                "movement_ids": [doc.id],
+                "inventory_ids": [],
+                "supplier_return_ids": [],
+                "movement_warnings": {str(doc.id): "строка 2 не сопоставлена (barcode=\"999\")"},
+            }
+        ),
+        content_type="application/json",
+        headers={"X-1C-Token": TOKEN},
+    )
+    assert resp.get_json()["confirmed"]["movements"] == 1
+
+    doc = MovementDocument.query.get(doc.id)
+    assert doc.synced_to_1c_at is not None
+    assert doc.sync_warning == 'строка 2 не сопоставлена (barcode="999")'
+
+
+def test_export_confirm_without_warnings_leaves_sync_warning_empty(db, client_logged_in):
+    _set_token()
+    sender = Warehouse(code="WH-1C-13", name="Основной склад")
+    receiver = Warehouse(code="WH-1C-14", name="Склад №2 (Шоссейная 167)")
+    db.session.add_all([sender, receiver])
+    db.session.commit()
+    item = _make_item("9990000009")
+    doc = _ship_box(sender, receiver, item, 3, "BOX-1C-NOWARN", client_logged_in)
+
+    client_logged_in.post(
+        "/integrations/1c/api/export/confirm",
+        data=json.dumps({"movement_ids": [doc.id], "inventory_ids": [], "supplier_return_ids": []}),
+        content_type="application/json",
+        headers={"X-1C-Token": TOKEN},
+    )
+
+    assert MovementDocument.query.get(doc.id).sync_warning is None

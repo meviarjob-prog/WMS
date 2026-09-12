@@ -703,6 +703,14 @@ class MovementDocument(db.Model):
     # бухгалтеру не нужно было дублировать галочку руками по факту, который
     # система и так подтвердила.
     accounting_entered_at = db.Column(db.DateTime, nullable=True)
+    # Заполняется через export_confirm, когда 1С подтвердила создание
+    # документа, но часть строк не сопоставилась с номенклатурой и была
+    # пропущена (см. SyncWMS.bsl СоздатьПеремещениеТоваров — раньше одна
+    # такая строка проваливала весь документ, теперь он создается по
+    # совпавшим строкам, а несовпавшие видны здесь) — текст пришедших от
+    # 1С предупреждений, показывается значком "!" в списке перемещений.
+    # NULL — документ выгрузился полностью, без пропусков.
+    sync_warning = db.Column(db.Text, nullable=True)
 
     from_warehouse = db.relationship("Warehouse", foreign_keys=[from_warehouse_id])
     to_warehouse = db.relationship("Warehouse", foreign_keys=[to_warehouse_id])

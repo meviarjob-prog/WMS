@@ -268,6 +268,11 @@ def export_confirm():
     movement_ids = data.get("movement_ids") or []
     inventory_ids = data.get("inventory_ids") or []
     supplier_return_ids = data.get("supplier_return_ids") or []
+    # {str(movement_id): "текст предупреждения"} — часть строк документа не
+    # сопоставилась с номенклатурой в 1С и была пропущена (см. SyncWMS.bsl
+    # СоздатьПеремещениеТоваров); документ при этом всё равно создан и
+    # подтвержден, только не полностью — показываем "!" в списке.
+    movement_warnings = data.get("movement_warnings") or {}
 
     now = datetime.utcnow()
     confirmed_movements = (
@@ -279,6 +284,7 @@ def export_confirm():
         doc.synced_to_1c_at = now
         if doc.accounting_entered_at is None:
             doc.accounting_entered_at = now
+        doc.sync_warning = movement_warnings.get(str(doc.id))
 
     confirmed_inventories = (
         InventoryDocument.query.filter(
