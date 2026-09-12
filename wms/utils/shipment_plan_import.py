@@ -60,13 +60,28 @@ def _norm(value):
 def _find_plan_sheets(wb, marketplace):
     """Все листы этого маркетплейса, а не только первый найденный — иначе
     при появлении в выгрузке второго листа "Распределение..." для того же
-    маркетплейса (например, под отдельную категорию) он молча терялся бы."""
-    markers = _SHEET_ALIASES[marketplace]
-    return [
-        name
-        for name in wb.sheetnames
-        if "распределение" in name.lower() and any(m in name.lower() for m in markers)
+    маркетплейса (например, под отдельную категорию) он молча терялся бы.
+
+    Лист, чье название не называет явно ни одну площадку (например,
+    "Распределение Свитеры-27.08" — сводит ОБЕ площадки в одну таблицу с
+    отдельными колонками штрихкода и городов на каждую, см.
+    _parse_combined_marketplace_sheet), тоже считается кандидатом сразу для
+    обеих площадок — по имени не различить, какая площадка на нем есть,
+    это решает разбор по содержимому (parse_plan_sheet пробует оба
+    парсера и просто ничего не находит для той площадки, которой на листе
+    нет)."""
+    own_markers = _SHEET_ALIASES[marketplace]
+    other_markers = [
+        m for mp, markers in _SHEET_ALIASES.items() if mp != marketplace for m in markers
     ]
+    result = []
+    for name in wb.sheetnames:
+        lower = name.lower()
+        if "распределение" not in lower:
+            continue
+        if any(m in lower for m in own_markers) or not any(m in lower for m in other_markers):
+            result.append(name)
+    return result
 
 
 def _find_header_row(ws, max_scan_rows=40):
@@ -88,14 +103,22 @@ def _find_label_col(ws, header_row, barcode_col, keyword):
     return None
 
 
-def _find_city_columns(ws, header_row, barcode_col):
+def _find_city_columns(ws, header_row, start_col, end_col=None):
     """[(plan_col, city_name, fact_col), ...] — plan_col это первая колонка
     группы города (план по количеству); fact_col — колонка "отгружен / в
     пути" из той же группы (уже фактически отгружено на момент выгрузки
     плана), если она есть, иначе None. Остальные служебные колонки группы
-    (например "остатки" у ОЗОН) пропускаем — они не нужны."""
+    (например "остатки" у ОЗОН) пропускаем — они не нужны.
+
+    start_col/end_col — диапазон колонок для поиска: на обычном листе это
+    все, что правее штрихкода (end_col не задан — до конца листа); на
+    листе с обеими площадками сразу (см. _parse_combined_marketplace_sheet)
+    — только колонки конкретной группы площадки, иначе города одной
+    площадки задвоились бы с городами другой."""
+    if end_col is None:
+        end_col = ws.max_column
     raw = []
-    for c in range(barcode_col + 1, ws.max_column + 1):
+    for c in range(start_col, end_col + 1):
         text = _norm(ws.cell(row=header_row, column=c).value)
         raw.append((c, text))
 
@@ -175,7 +198,7 @@ def _parse_one_sheet(ws):
 
     article_col = _find_label_col(ws, header_row, barcode_col, "артикул")
     size_col = _find_label_col(ws, header_row, barcode_col, "размер")
-    city_columns = _find_city_columns(ws, header_row, barcode_col)
+    city_columns = _find_city_columns(ws, header_row, barcode_col + 1)
 
     cities = [name for _, name, _ in city_columns]
     rows = []
@@ -217,6 +240,105 @@ def _parse_one_sheet(ws):
     return cities, rows
 
 
+# Заголовки колонки штрихкода на листах, где ОБЕ площадки сведены в одну
+# таблицу (см. _parse_combined_marketplace_sheet) — там нет общей колонки
+# "Баркод", у каждой площадки своя, например "ШК ВБ (Горсани)"/"ШК Ozon".
+_MARKETPLACE_BARCODE_MARKERS = {
+    "wb": ("шк вб", "штрихкод вб"),
+    "ozon": ("шк ozon", "шк озон", "штрихкод ozon", "штрихкод озон"),
+}
+
+
+def _find_marketplace_barcode_col(ws, marketplace, max_scan_rows=40):
+    """Аналог _find_header_row, но ищет колонку штрихкода конкретной
+    площадки по ее собственной подписи, а не общее "Баркод" — для листов
+    вида _parse_combined_marketplace_sheet."""
+    markers = _MARKETPLACE_BARCODE_MARKERS[marketplace]
+    max_row = min(ws.max_row, max_scan_rows)
+    for r in range(1, max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            text = _norm(ws.cell(row=r, column=c).value).lower()
+            if any(m in text for m in markers):
+                return r, c
+    return None, None
+
+
+def _find_group_start_columns(ws, max_scan_rows=5):
+    """{marketplace: column} по объединенным заголовкам групп городов
+    ("ВБ (2 склада)"/"Озон (2 склада)") в строках НАД шапкой таблицы —
+    только для листов с обеими площадками сразу. Ищем подпись с "склад",
+    чтобы не зацепить, например, "Артикул ВБ (Горсани)" в самой шапке."""
+    found = {}
+    max_row = min(ws.max_row, max_scan_rows)
+    for r in range(1, max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            text = _norm(ws.cell(row=r, column=c).value).lower()
+            if not text or "склад" not in text:
+                continue
+            for marketplace, markers in _SHEET_ALIASES.items():
+                if marketplace not in found and any(m in text for m in markers):
+                    found[marketplace] = c
+    return found
+
+
+def _parse_combined_marketplace_sheet(ws, marketplace):
+    """Разбирает лист, где ОБЕ площадки сведены в одну таблицу — раздельная
+    колонка штрихкода на каждую площадку ("ШК ВБ (Горсани)"/"ШК Ozon") и
+    раздельная группа городов под объединенным заголовком ("ВБ (2
+    склада)"/"Озон (2 склада)"), например реальный лист "Распределение
+    Свитеры-27.08". В отличие от _parse_one_sheet, вызывается отдельно для
+    каждой площадки — один такой лист дает вклад в план и ОЗОН, и ВБ.
+
+    None, None — на листе нет ни колонки штрихкода, ни группы городов этой
+    площадки (либо лист не такого формата вовсе, либо на нем есть данные
+    только по другой площадке)."""
+    header_row, barcode_col = _find_marketplace_barcode_col(ws, marketplace)
+    if header_row is None:
+        return None, None
+
+    group_columns = _find_group_start_columns(ws)
+    start_col = group_columns.get(marketplace)
+    if start_col is None:
+        return None, None
+    later_group_starts = [
+        c for mp, c in group_columns.items() if mp != marketplace and c > start_col
+    ]
+    end_col = min(later_group_starts) - 1 if later_group_starts else ws.max_column
+
+    article_col = _find_label_col(ws, header_row, barcode_col, "артикул")
+    size_col = _find_label_col(ws, header_row, barcode_col, "размер")
+    city_columns = _find_city_columns(ws, header_row, start_col, end_col)
+
+    cities = [name for _, name, _ in city_columns]
+    rows = []
+
+    for r in range(header_row + 1, ws.max_row + 1):
+        barcode = _to_barcode_str(ws.cell(row=r, column=barcode_col).value)
+        if not barcode:
+            continue
+
+        article = _norm(ws.cell(row=r, column=article_col).value) if article_col else ""
+        size = _norm(ws.cell(row=r, column=size_col).value) if size_col else ""
+
+        for col, city, fact_col in city_columns:
+            qty = _to_qty(ws.cell(row=r, column=col).value)
+            fact = _to_fact_qty(ws.cell(row=r, column=fact_col).value) if fact_col else 0.0
+            if qty is None and fact <= 0:
+                continue
+            rows.append(
+                {
+                    "barcode": barcode,
+                    "article": article,
+                    "size": size,
+                    "city": city,
+                    "qty": qty or 0.0,
+                    "fact": fact,
+                }
+            )
+
+    return cities, rows
+
+
 def parse_plan_sheet(file_stream, marketplace):
     """Возвращает ParsedPlan либо None, если не найдено ни одного подходящего
     листа. Если листов, подходящих этому маркетплейсу, несколько (например,
@@ -231,9 +353,17 @@ def parse_plan_sheet(file_stream, marketplace):
     seen_cities = set()
     matched_any = False
     for sheet_name in sheet_names:
-        cities, rows = _parse_one_sheet(wb[sheet_name])
+        ws = wb[sheet_name]
+        cities, rows = _parse_one_sheet(ws)
         if cities is None:
-            continue  # лист с таким именем есть, но не стандартного формата — пропускаем
+            # Не обычный формат (нет общей колонки "Баркод") — пробуем формат
+            # с обеими площадками на одном листе (см.
+            # _parse_combined_marketplace_sheet). Ничего не нашлось и там —
+            # лист либо не такого формата вовсе, либо на нем данные только
+            # для другой площадки (см. _find_plan_sheets).
+            cities, rows = _parse_combined_marketplace_sheet(ws, marketplace)
+        if cities is None:
+            continue
         matched_any = True
         for city in cities:
             if city not in seen_cities:

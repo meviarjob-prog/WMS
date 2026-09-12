@@ -96,3 +96,70 @@ def test_parse_returns_none_when_no_matching_sheet():
     )
 
     assert parse_plan_sheet(data, "ozon") is None
+
+
+def _combined_marketplace_sheet_rows():
+    """Реальная структура листа "Распределение Свитеры-27.08" — обе площадки
+    в одной таблице: раздельная колонка штрихкода на каждую ("ШК ВБ
+    (Горсани)"/"ШК Ozon") и раздельная группа городов под объединенным
+    заголовком ("ВБ (2 склада)"/"Озон (2 склада)"), без общей колонки
+    "Баркод" вообще."""
+    return [
+        [None, None, None, None, None, None, None, "ВБ (2 склада)", None, "Озон (2 склада)", None],
+        [
+            "Артикул", "Размер", "Артикул ВБ (Горсани)", "ШК ВБ (Горсани)", "GTIN",
+            "SKU Ozon", "ШК Ozon", "Пятигорск", "Москва", "Пятигорск", "Москва",
+        ],
+        [
+            "Свитер_серый", "42-44", 111, "1111111111111", 222, 333,
+            "2222222222222", 10, 15, 20, 25,
+        ],
+    ]
+
+
+def test_parse_combined_marketplace_sheet_for_wb():
+    """Лист без слов "озон"/"вб" в названии и без общей колонки "Баркод" —
+    раньше терялся целиком для обеих площадок (реальный кейс: свежий
+    товар с отдельным листом "Распределение Свитеры-27.08" не подгружался
+    ни в один из планов)."""
+    data = _sheet_to_bytes({"Распределение Свитеры-27.08": _combined_marketplace_sheet_rows()})
+
+    plan = parse_plan_sheet(data, "wb")
+
+    assert plan is not None
+    assert set(plan.cities) == {"Пятигорск", "Москва"}
+    by_city = {r["city"]: r["qty"] for r in plan.rows}
+    assert by_city == {"Пятигорск": 10.0, "Москва": 15.0}
+    assert plan.rows[0]["barcode"] == "1111111111111"
+    assert plan.rows[0]["article"] == "Свитер_серый"
+    assert plan.rows[0]["size"] == "42-44"
+
+
+def test_parse_combined_marketplace_sheet_for_ozon():
+    data = _sheet_to_bytes({"Распределение Свитеры-27.08": _combined_marketplace_sheet_rows()})
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    assert set(plan.cities) == {"Пятигорск", "Москва"}
+    by_city = {r["city"]: r["qty"] for r in plan.rows}
+    assert by_city == {"Пятигорск": 20.0, "Москва": 25.0}
+    assert plan.rows[0]["barcode"] == "2222222222222"
+
+
+def test_combined_marketplace_sheet_merges_with_regular_sheet_of_same_marketplace():
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБС от 27.08": [
+                ["Артикул", "Размер", "Баркод", "Краснодар"],
+                ["A1", "46", "3333333333333", 8],
+            ],
+            "Распределение Свитеры-27.08": _combined_marketplace_sheet_rows(),
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    assert set(plan.cities) == {"Краснодар", "Пятигорск", "Москва"}
+    assert len(plan.rows) == 3
