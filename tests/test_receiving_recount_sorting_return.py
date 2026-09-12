@@ -1,13 +1,18 @@
-"""Приемка теперь идет в три этапа вместо одной кнопки "Завершить приемку":
-draft -> (Отправить на пересчет) -> recounting -> (Отправить на разбраковку)
--> sorting -> (Завершить приемку) -> completed.
+"""Приемка ИЗ НАКЛАДНОЙ (is_from_invoice_import()) идет в три этапа вместо
+одной кнопки "Завершить приемку": draft -> (Отправить на пересчет) ->
+recounting -> (Отправить на разбраковку) -> sorting -> (Завершить приемку)
+-> completed.
 
 На "Пересчете" можно поправить кол-во по строке, если оно разошлось с тем,
 что внесли при самой приемке. На "Разбраковке" по каждой строке (кроме уже
 упакованных в короб при приемке — они разбраковке не подлежат) выделяется
 кол-во брака: остальное уходит в неразмещенный остаток как обычно, а брак —
 отдельным SupplierReturn, привязанным к этой приемке (supplier_name/
-invoice_number — снимок для будущей синхронизации с 1С)."""
+invoice_number — снимок для будущей синхронизации с 1С).
+
+Обычная приемка в короба (не из накладной) статусов не имеет вообще —
+пересчет/разбраковка ей не нужны (нечего сопоставлять с 1С), она
+завершается сразу из черновика, как и до появления этой функциональности."""
 
 from wms.extensions import db
 from wms.models import (
@@ -234,11 +239,12 @@ def test_change_warehouse_blocked_when_boxes_packed(db, client_logged_in):
     assert ReceivingDocument.query.get(doc.id).warehouse_id == wh1.id
 
 
-def test_admin_can_flag_defect_without_invoice_import_but_return_has_no_invoice_number(db, client_logged_in):
-    """Админ может выделить брак даже для вручную созданной приемки — но
-    возврат создается без invoice_number, чтобы автосинхронизация с 1С его
-    не подхватила (сопоставлять там нечего — номер не настоящий номер
-    накладной)."""
+def test_non_invoice_receiving_completes_directly_from_draft(db, client_logged_in):
+    """Обычная приемка в короба (не из накладной) не проходит пересчет и
+    разбраковку — статусы нужны только для приемок по накладным (см.
+    ReceivingDocument.is_from_invoice_import). Завершается сразу из
+    черновика, весь принятый товар уходит в неразмещенный остаток без
+    разбраковки, как это было до появления пересчета/разбраковки."""
     wh = _make_warehouse("WH-RS-8")
     item = _make_item("7770000108")
     doc = _make_doc(wh, from_invoice=False, number="RS-0009")
@@ -246,15 +252,31 @@ def test_admin_can_flag_defect_without_invoice_import_but_return_has_no_invoice_
     db.session.add(line)
     db.session.commit()
 
-    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
-    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
-    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/update-defect", data={"defect_qty": "2"})
     client_logged_in.post(f"/receiving/{doc.id}/complete")
 
-    ret = SupplierReturn.query.filter_by(receiving_document_id=doc.id).first()
-    assert ret is not None
-    assert ret.qty == 2
-    assert ret.invoice_number is None
+    doc = ReceivingDocument.query.get(doc.id)
+    assert doc.status == "completed"
+    assert UnplacedStock.available(wh.id, item.id) == 10
+    assert SupplierReturn.query.filter_by(receiving_document_id=doc.id).count() == 0
+
+
+def test_non_invoice_receiving_cannot_enter_recount_sorting_flow(db, client_logged_in):
+    """send-to-recount и revert-to-sorting отказывают для приемки не из
+    накладной — статус для нее всегда остается draft/completed напрямую."""
+    wh = _make_warehouse("WH-RS-8b")
+    item = _make_item("7770000108b")
+    doc = _make_doc(wh, from_invoice=False, number="RS-0009b")
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=10))
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    assert ReceivingDocument.query.get(doc.id).status == "draft"
+
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+    assert ReceivingDocument.query.get(doc.id).status == "completed"
+
+    client_logged_in.post(f"/receiving/{doc.id}/revert-to-sorting")
+    assert ReceivingDocument.query.get(doc.id).status == "completed"
 
 
 def test_revert_to_sorting_allows_redoing_defect_without_double_counting(db, client_logged_in):

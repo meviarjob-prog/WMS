@@ -237,7 +237,15 @@ def test_picking_list_shows_receiving_on_recount_and_sorting_as_unplaced(db, cli
     принят на складе — должен считаться "на разбраковке" наравне с обычным
     неразмещенным остатком, а не пропадать из плана как будто его нет."""
     sender, city, item = _setup(planned_qty=30)
-    doc = ReceivingDocument(number="REC-PLAN-1", warehouse_id=sender.id, supplier="ИП Тестов")
+    # Пересчет/разбраковка доступны только приемкам из накладной (см.
+    # ReceivingDocument.is_from_invoice_import) — иначе send-to-recount
+    # откажет.
+    doc = ReceivingDocument(
+        number="REC-PLAN-1",
+        warehouse_id=sender.id,
+        supplier="ИП Тестов",
+        invoice_file_name="накладная.xlsx",
+    )
     db.session.add(doc)
     db.session.commit()
     db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=12))

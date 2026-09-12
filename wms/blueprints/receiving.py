@@ -641,8 +641,15 @@ def change_warehouse(doc_id):
 def send_to_recount(doc_id):
     """draft -> recounting. Товар физически пересчитывают заново — на этом
     этапе можно поправить qty по строкам (см. update_line), если пересчет
-    разошелся с тем, что внесли при самой приемке."""
+    разошелся с тем, что внесли при самой приемке. Пересчет/разбраковка
+    нужны только для приемок, загруженных из накладной (номер приемки —
+    настоящий номер накладной, есть с чем сверять возврат в 1С); обычная
+    приемка в короба завершается сразу из черновика, см. complete()."""
     doc = ReceivingDocument.query.get_or_404(doc_id)
+    if not doc.is_from_invoice_import():
+        flash("Эта приемка не из накладной — пересчет и разбраковка ей не нужны, завершите ее сразу", "danger")
+        return _next_redirect(doc.id)
+
     if doc.status != "draft":
         flash("Документ уже отправлен дальше по процессу", "danger")
         return _next_redirect(doc.id)
@@ -709,9 +716,17 @@ def update_defect(doc_id, line_id):
 
 @bp.route("/<int:doc_id>/complete", methods=["POST"])
 def complete(doc_id):
+    """Приемка из накладной проходит пересчет/разбраковку и завершается из
+    sorting (см. send_to_recount/send_to_sorting). Обычная приемка в короба
+    статусов не имеет вообще — завершается сразу из черновика, как и до
+    появления пересчета/разбраковки."""
     doc = ReceivingDocument.query.get_or_404(doc_id)
-    if doc.status != "sorting":
-        flash("Сначала пройдите этапы «Пересчет» и «Разбраковка»", "danger")
+    if doc.is_from_invoice_import():
+        if doc.status != "sorting":
+            flash("Сначала пройдите этапы «Пересчет» и «Разбраковка»", "danger")
+            return _next_redirect(doc.id)
+    elif doc.status != "draft":
+        flash("Документ уже завершен", "danger")
         return _next_redirect(doc.id)
 
     for line in doc.lines:
@@ -763,6 +778,10 @@ def revert_to_sorting(doc_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
     if not current_user.is_admin:
         flash("Вернуть приемку на разбраковку может только администратор", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+    if not doc.is_from_invoice_import():
+        flash("Эта приемка не из накладной — разбраковки у нее не было, откатывать некуда", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc.id))
 
     if doc.status != "completed":

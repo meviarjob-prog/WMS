@@ -120,8 +120,14 @@ def test_active_lots_excludes_fully_consumed(db):
 def test_receiving_complete_creates_lot_with_document_provenance(db, client_logged_in):
     wh = _make_warehouse("WH-LOT-6")
     item = _make_item("7770000006")
+    # Пересчет/разбраковка доступны только приемкам из накладной (см.
+    # ReceivingDocument.is_from_invoice_import).
     doc = ReceivingDocument(
-        number="LOT-DOC-2", warehouse_id=wh.id, supplier="ИП Тестов", order_number="З-100"
+        number="LOT-DOC-2",
+        warehouse_id=wh.id,
+        supplier="ИП Тестов",
+        order_number="З-100",
+        invoice_file_name="накладная.xlsx",
     )
     db.session.add(doc)
     db.session.commit()
