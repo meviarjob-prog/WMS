@@ -580,6 +580,49 @@ def update_line(doc_id, line_id):
     return redirect(url_for("receiving.detail", doc_id=doc_id))
 
 
+@bp.route("/<int:doc_id>/lines/update-bulk", methods=["POST"])
+def update_lines_bulk(doc_id):
+    """Сохранить количество сразу по всем строкам одной кнопкой — чтобы не
+    перезагружать страницу после правки каждой отдельной строки (см.
+    update_line). Поля формы — qty_<line_id>; строки без изменений и с
+    некорректным значением просто пропускаются, без прерывания остальных."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if doc.status not in ("draft", "recounting"):
+        flash("Документ уже завершен", "danger")
+        return redirect(url_for("receiving.detail", doc_id=doc_id))
+
+    updated = 0
+    for line in doc.lines:
+        raw = request.form.get(f"qty_{line.id}")
+        if raw is None:
+            continue
+        try:
+            qty = float(raw)
+        except ValueError:
+            continue
+        if qty <= 0 or qty == line.qty:
+            continue
+
+        if line.box_id:
+            box_item = BoxItem.query.filter_by(
+                box_id=line.box_id, nomenclature_id=line.nomenclature_id
+            ).first()
+            if box_item:
+                box_item.qty += qty - line.qty
+                if box_item.qty <= 0:
+                    db.session.delete(box_item)
+
+        line.qty = qty
+        updated += 1
+
+    db.session.commit()
+    if updated:
+        flash(f"Количество обновлено: {updated} поз.", "success")
+    else:
+        flash("Изменений не найдено", "info")
+    return redirect(url_for("receiving.detail", doc_id=doc_id))
+
+
 @bp.route("/<int:doc_id>/lines/<int:line_id>/delete", methods=["POST"])
 def delete_line(doc_id, line_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)

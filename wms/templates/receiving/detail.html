@@ -181,8 +181,16 @@
 {% endif %}
 
 {% set can_edit_defect = doc.status == 'sorting' and (doc.is_from_invoice_import() or current_user.is_admin) %}
+{% set can_bulk_edit_qty = doc.status in ('draft', 'recounting') %}
 <div class="card p-3">
   <h5>Позиции приемки</h5>
+  {% if can_bulk_edit_qty %}
+  <p class="text-muted small mb-2">Поправьте количество по нужным строкам и нажмите «Сохранить количества» один раз — страница не перезагружается после каждой строки.</p>
+  {% for line in lines %}
+    <form id="deleteLine{{ line.id }}" method="post" action="{{ url_for('receiving.delete_line', doc_id=doc.id, line_id=line.id) }}" hidden></form>
+  {% endfor %}
+  <form id="bulkQtyForm" method="post" action="{{ url_for('receiving.update_lines_bulk', doc_id=doc.id) }}">
+  {% endif %}
   <table class="table table-sm d-none d-md-table">
     <thead><tr><th>Товар</th><th>Короб</th><th>Кол-во</th><th>{% if doc.status in ('sorting', 'completed') %}Брак{% endif %}</th></tr></thead>
     <tbody>
@@ -190,28 +198,19 @@
       <tr>
         <td>{{ line.nomenclature.name }} <span class="text-muted">({{ line.nomenclature.sku }})</span></td>
         <td>{% if line.box %}<a href="{{ url_for('boxes.detail', box_id=line.box.id) }}">{{ line.box.box_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-        {% if doc.status == 'draft' %}
+        {% if doc.status in ('draft', 'recounting') %}
         <td style="min-width:160px">
-          <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
-            <input type="number" name="qty" step="0.001" min="0.001" value="{{ line.qty }}" class="form-control form-control-sm" style="width:100px">
+          <div class="d-flex gap-1">
+            <input type="number" name="qty_{{ line.id }}" step="0.001" min="0.001" value="{{ line.qty }}"
+                   class="form-control form-control-sm bulk-qty-input" data-line-id="{{ line.id }}" style="width:100px">
             <span class="align-self-center small text-muted">{{ line.nomenclature.unit }}</span>
-            <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
-          </form>
+          </div>
         </td>
         <td>
-          <form method="post" action="{{ url_for('receiving.delete_line', doc_id=doc.id, line_id=line.id) }}">
-            <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
-          </form>
+          {% if doc.status == 'draft' %}
+          <button type="submit" form="deleteLine{{ line.id }}" class="btn btn-sm btn-outline-danger">✕</button>
+          {% endif %}
         </td>
-        {% elif doc.status == 'recounting' %}
-        <td style="min-width:160px">
-          <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
-            <input type="number" name="qty" step="0.001" min="0.001" value="{{ line.qty }}" class="form-control form-control-sm" style="width:100px">
-            <span class="align-self-center small text-muted">{{ line.nomenclature.unit }}</span>
-            <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
-          </form>
-        </td>
-        <td></td>
         {% elif doc.status == 'sorting' %}
         <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
         <td style="min-width:140px">
@@ -250,23 +249,15 @@
           <div class="small text-muted">
             {% if line.box %}<a href="{{ url_for('boxes.detail', box_id=line.box.id) }}">{{ line.box.box_number }}</a>{% else %}без короба{% endif %}
           </div>
-          {% if doc.status == 'draft' %}
-          <div class="d-flex gap-2 flex-shrink-0">
-            <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1 align-items-center">
-              {% set q = line.qty %}
-              <input type="number" name="qty" step="0.001" min="0.001" value="{{ q | int if q == q | int else q }}" class="form-control form-control-sm" style="width:4.5em">
-              <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
-            </form>
-            <form method="post" action="{{ url_for('receiving.delete_line', doc_id=doc.id, line_id=line.id) }}">
-              <button type="submit" class="btn btn-sm btn-outline-danger">✕</button>
-            </form>
-          </div>
-          {% elif doc.status == 'recounting' %}
-          <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1 align-items-center flex-shrink-0">
+          {% if doc.status in ('draft', 'recounting') %}
+          <div class="d-flex gap-2 flex-shrink-0 align-items-center">
             {% set q = line.qty %}
-            <input type="number" name="qty" step="0.001" min="0.001" value="{{ q | int if q == q | int else q }}" class="form-control form-control-sm" style="width:4.5em">
-            <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
-          </form>
+            <input type="number" name="qty_{{ line.id }}" step="0.001" min="0.001" value="{{ q | int if q == q | int else q }}"
+                   class="form-control form-control-sm bulk-qty-input" data-line-id="{{ line.id }}" style="width:4.5em">
+            {% if doc.status == 'draft' %}
+            <button type="submit" form="deleteLine{{ line.id }}" class="btn btn-sm btn-outline-danger">✕</button>
+            {% endif %}
+          </div>
           {% elif doc.status == 'sorting' %}
           <div class="small text-end">
             <div>{{ line.qty }} {{ line.nomenclature.unit }}</div>
@@ -299,6 +290,12 @@
       </div>
     {% endif %}
   </div>
+  {% if can_bulk_edit_qty %}
+  {% if lines %}
+  <button type="submit" form="bulkQtyForm" class="btn btn-primary mt-3">💾 Сохранить количества</button>
+  {% endif %}
+  </form>
+  {% endif %}
 </div>
 {% endblock %}
 
@@ -321,6 +318,22 @@
       { debounceMs: 900 }
     );
   }
+
+  // Количество редактируется в двух местах разметки одновременно (таблица
+  // для десктопа, список для телефона — видна только одна, по ширине
+  // экрана), у обоих одинаковый name="qty_<id>" для отправки формой одной
+  // кнопкой. Держим оба поля одной строки синхронными, иначе браузер
+  // отправит два разных значения под одним именем и до сервера дойдет
+  // только первое по DOM-порядку — не обязательно то, что правили.
+  document.querySelectorAll(".bulk-qty-input").forEach((input) => {
+    input.addEventListener("input", () => {
+      document
+        .querySelectorAll('.bulk-qty-input[data-line-id="' + input.dataset.lineId + '"]')
+        .forEach((other) => {
+          if (other !== input) other.value = input.value;
+        });
+    });
+  });
 
 </script>
 {% endblock %}
