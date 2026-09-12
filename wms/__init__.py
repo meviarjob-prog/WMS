@@ -55,6 +55,33 @@ def _ensure_columns():
                             )
                         )
                     print("[schema] movement_documents.received_at заполнен для уже завершенных документов")
+                if table.name == "warehouses" and column.name == "fulfillment_1c_name":
+                    # Известные соответствия "город -> склад 1С" (см.
+                    # wms.blueprints.warehouses.FULFILLMENT_1C_DEFAULTS) —
+                    # проставляем сразу при появлении колонки на уже
+                    # работающем сервере, чтобы выгрузка перемещений в 1С
+                    # начала разбивать склад-получатель по городу без ручной
+                    # настройки; администратор может поправить на странице
+                    # «Настройки». Новые склады-города, создаваемые после
+                    # этого момента, получают значение сразу при создании
+                    # (см. shipment_plan._get_or_create_city_warehouse), эта
+                    # разовая раскладка нужна только для уже существующих.
+                    from .blueprints.warehouses import FULFILLMENT_1C_DEFAULTS
+
+                    with db.engine.begin() as conn:
+                        for city_key, name_1c in FULFILLMENT_1C_DEFAULTS.items():
+                            conn.execute(
+                                text(
+                                    "UPDATE warehouses SET fulfillment_1c_name = :name_1c "
+                                    "WHERE fulfillment_1c_name IS NULL "
+                                    "AND lower(replace(marketplace_city, 'ё', 'е')) = :city_key"
+                                ),
+                                {"name_1c": name_1c, "city_key": city_key},
+                            )
+                    print(
+                        "[schema] warehouses.fulfillment_1c_name заполнен известными "
+                        "складами 1С по городу"
+                    )
                 if table.name == "users" and column.name == "nomenclature_edit_allowed":
                     # ALTER TABLE ADD COLUMN не проставляет DEFAULT задним
                     # числом — у уже существующих пользователей колонка

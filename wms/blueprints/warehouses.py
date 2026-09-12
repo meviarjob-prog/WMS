@@ -13,6 +13,37 @@ bp = Blueprint("warehouses", __name__)
 # именно "ряд", а не свободно называемая "зона".
 CELL_NUMBER_WIDTH = 4
 
+# Известные соответствия "город WMS -> склад 1С" для автоматического
+# заполнения Warehouse.fulfillment_1c_name (см. модель) — ключи в нижнем
+# регистре, сверяются через default_fulfillment_1c_name(). Несколько
+# городов (Черкесск и Пятигорск) намеренно указывают на один и тот же склад
+# 1С — обе точки физически обслуживает один и тот же промежуточный склад
+# фулфилмента. Администратор может поправить/дополнить список на странице
+# «Настройки», это только стартовые значения.
+FULFILLMENT_1C_DEFAULTS = {
+    "екатеринбург": "Товары в пути ФФ ЕКБ",
+    "екб": "Товары в пути ФФ ЕКБ",
+    "казань": "Товары в пути ФФ КАЗАНЬ, Взлётная 30",
+    "краснодар": "Товары в пути ФФ КРАСНОДАР",
+    "москва": "Товары в пути ФФ МОСКВА",
+    "новосибирск": "Товары в пути ФФ НОВОСИБИРСК",
+    "самара": "Товары в пути ФФ САМАРА",
+    "санкт-петербург": "Товары в пути ФФ СПБ",
+    "спб": "Товары в пути ФФ СПБ",
+    "питер": "Товары в пути ФФ СПБ",
+    "черкесск": "Товары в пути ФФ ЧЕРКЕССК (Лейла)",
+    "пятигорск": "Товары в пути ФФ ЧЕРКЕССК (Лейла)",
+}
+
+
+def default_fulfillment_1c_name(city):
+    """Стартовая догадка склада 1С по названию города WMS (см.
+    FULFILLMENT_1C_DEFAULTS) — None, если город не из списка известных
+    (тогда поле остается пустым для ручного заполнения администратором)."""
+    if not city:
+        return None
+    return FULFILLMENT_1C_DEFAULTS.get(city.strip().lower().replace("ё", "е"))
+
 
 def _generate_cells(zone, count):
     """Создает `count` новых ячеек в ряду с кодами вида "<код ряда><NNNN>",
@@ -86,6 +117,34 @@ def update_recipient(warehouse_id):
     wh.recipient_info = request.form.get("recipient_info", "").strip() or None
     db.session.commit()
     flash(f"Получатель для «{wh.name}» обновлен", "success")
+    return redirect(url_for("auth.users"))
+
+
+@bp.route("/fulfillment-1c-mapping", methods=["POST"])
+def update_fulfillment_1c_mapping():
+    """Склад 1С для этого города — применяется сразу ко ВСЕМ складам-городам
+    WMS с таким marketplace_city (обычно их два: ОЗОН и ВБ отдельно, а для
+    Черкесска/Пятигорска это еще и два разных города на один склад 1С) —
+    настраивается один раз на город, а не на каждый склад по отдельности.
+    См. Warehouse.fulfillment_1c_name и integration_1c._to_warehouse_name_for_1c."""
+    if not current_user.is_admin:
+        flash("Настраивать соответствие складов 1С может только администратор", "danger")
+        return redirect(url_for("auth.users"))
+
+    city = request.form.get("city", "").strip()
+    if not city:
+        flash("Не указан город", "danger")
+        return redirect(url_for("auth.users"))
+
+    name_1c = request.form.get("fulfillment_1c_name", "").strip() or None
+    updated = Warehouse.query.filter_by(marketplace_city=city).update(
+        {"fulfillment_1c_name": name_1c}
+    )
+    db.session.commit()
+    if name_1c:
+        flash(f"Склад 1С для «{city}» обновлен: «{name_1c}» ({updated} складов)", "success")
+    else:
+        flash(f"Склад 1С для «{city}» очищен — будет использован общий запасной склад", "success")
     return redirect(url_for("auth.users"))
 
 

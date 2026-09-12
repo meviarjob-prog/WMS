@@ -56,14 +56,34 @@ def users():
     if not _require_admin():
         return redirect(url_for("main.index"))
     from .movement import get_shipping_label_sender_override
+    from .shipment_plan import MARKETPLACE_LABELS
 
     all_users = User.query.order_by(User.username).all()
     warehouses = Warehouse.query.order_by(Warehouse.code).all()
+
+    # Склады выгрузки в 1С настраиваются по городу целиком (одно поле сразу
+    # на все склады-маркетплейсы этого города, а не на каждый ОЗОН/ВБ
+    # отдельно) — см. warehouses.update_fulfillment_1c_mapping.
+    cities = {}
+    for wh in warehouses:
+        if wh.marketplace is None:
+            continue
+        row = cities.setdefault(
+            wh.marketplace_city, {"city": wh.marketplace_city, "marketplaces": [], "fulfillment_1c_name": None}
+        )
+        label = MARKETPLACE_LABELS.get(wh.marketplace, wh.marketplace)
+        if label not in row["marketplaces"]:
+            row["marketplaces"].append(label)
+        if wh.fulfillment_1c_name:
+            row["fulfillment_1c_name"] = wh.fulfillment_1c_name
+    fulfillment_cities = sorted(cities.values(), key=lambda r: r["city"] or "")
+
     return render_template(
         "auth/users.html",
         users=all_users,
         sections=SECTIONS,
         warehouses=warehouses,
+        fulfillment_cities=fulfillment_cities,
         shipping_label_sender=get_shipping_label_sender_override(),
     )
 

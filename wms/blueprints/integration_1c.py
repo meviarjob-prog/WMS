@@ -32,6 +32,10 @@ DIRECT_TRANSFER_WAREHOUSE_NAMES = {"Основной склад", "Склад �
 
 
 def _to_warehouse_name_for_1c(doc):
+    """Каждый документ перемещения выгружается сам по себе, как и раньше —
+    здесь меняется только то, ЧЬЕ имя склада подставляется в него в поле
+    получателя, без какой-либо группировки/объединения документов между
+    собой."""
     from_name = doc.from_warehouse.name if doc.from_warehouse else ""
     to_name = doc.to_warehouse.name if doc.to_warehouse else ""
     if (
@@ -39,6 +43,15 @@ def _to_warehouse_name_for_1c(doc):
         and to_name in DIRECT_TRANSFER_WAREHOUSE_NAMES
     ):
         return to_name
+    # Склад-город маркетплейса (например "ОЗОН: Казань") — 1С ведет свой
+    # набор промежуточных складов "Товары в пути ФФ <город>", один на город
+    # независимо от площадки (ОЗОН/ВБ), причем несколько городов WMS могут
+    # указывать на один и тот же склад 1С (см. Warehouse.fulfillment_1c_name
+    # и warehouses.update_fulfillment_1c_mapping — настраивается
+    # администратором на странице «Настройки»). Не настроено для этого
+    # города — используем общий запасной склад, как было раньше.
+    if doc.to_warehouse and doc.to_warehouse.fulfillment_1c_name:
+        return doc.to_warehouse.fulfillment_1c_name
     return FULFILLMENT_WAREHOUSE_NAME
 
 # Именно эти два endpoint'а обмена с 1С не требуют логина в WMS — только

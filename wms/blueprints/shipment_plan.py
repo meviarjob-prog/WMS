@@ -23,6 +23,7 @@ from ..utils.excel_io import export_shipment_plan_to_excel, timestamp_for_filena
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
 from ..utils.shipment_plan_import import extract_period_start, parse_plan_sheet
+from .warehouses import default_fulfillment_1c_name
 
 bp = Blueprint("shipment_plan", __name__)
 
@@ -40,6 +41,10 @@ def _get_or_create_city_warehouse(marketplace, city_name):
         name=f"{MARKETPLACE_LABELS[marketplace]}: {city_name}",
         marketplace=marketplace,
         marketplace_city=city_name,
+        # Стартовая догадка склада 1С по городу (см.
+        # warehouses.FULFILLMENT_1C_DEFAULTS) — для неизвестных городов
+        # останется пустым, администратор донастроит на странице «Настройки».
+        fulfillment_1c_name=default_fulfillment_1c_name(city_name),
     )
     db.session.add(wh)
     db.session.flush()
