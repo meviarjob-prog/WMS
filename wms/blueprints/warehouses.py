@@ -120,31 +120,26 @@ def update_recipient(warehouse_id):
     return redirect(url_for("auth.users"))
 
 
-@bp.route("/fulfillment-1c-mapping", methods=["POST"])
-def update_fulfillment_1c_mapping():
-    """Склад 1С для этого города — применяется сразу ко ВСЕМ складам-городам
-    WMS с таким marketplace_city (обычно их два: ОЗОН и ВБ отдельно, а для
-    Черкесска/Пятигорска это еще и два разных города на один склад 1С) —
-    настраивается один раз на город, а не на каждый склад по отдельности.
+@bp.route("/<int:warehouse_id>/fulfillment-1c-name", methods=["POST"])
+def update_fulfillment_1c_name(warehouse_id):
+    """Склад 1С для КОНКРЕТНОГО склада-города — раздельно для ОЗОН и ВБ даже
+    в одном городе: одна и та же площадка одного города может возить на
+    разные склады 1С в зависимости от маркетплейса (например, ВБ Краснодар
+    едет на СЦ, а ОЗОН Краснодар — на фулфилмент), так что общее значение
+    сразу на оба маркетплейса города не подходит — настраивается отдельно
+    на каждый склад, как и получатель на стикерах (см. update_recipient).
     См. Warehouse.fulfillment_1c_name и integration_1c._to_warehouse_name_for_1c."""
     if not current_user.is_admin:
-        flash("Настраивать соответствие складов 1С может только администратор", "danger")
+        flash("Настраивать склад 1С может только администратор", "danger")
         return redirect(url_for("auth.users"))
 
-    city = request.form.get("city", "").strip()
-    if not city:
-        flash("Не указан город", "danger")
-        return redirect(url_for("auth.users"))
-
-    name_1c = request.form.get("fulfillment_1c_name", "").strip() or None
-    updated = Warehouse.query.filter_by(marketplace_city=city).update(
-        {"fulfillment_1c_name": name_1c}
-    )
+    wh = Warehouse.query.get_or_404(warehouse_id)
+    wh.fulfillment_1c_name = request.form.get("fulfillment_1c_name", "").strip() or None
     db.session.commit()
-    if name_1c:
-        flash(f"Склад 1С для «{city}» обновлен: «{name_1c}» ({updated} складов)", "success")
+    if wh.fulfillment_1c_name:
+        flash(f"Склад 1С для «{wh.name}» обновлен: «{wh.fulfillment_1c_name}»", "success")
     else:
-        flash(f"Склад 1С для «{city}» очищен — будет использован общий запасной склад", "success")
+        flash(f"Склад 1С для «{wh.name}» очищен — будет использован общий запасной склад", "success")
     return redirect(url_for("auth.users"))
 
 

@@ -56,34 +56,23 @@ def users():
     if not _require_admin():
         return redirect(url_for("main.index"))
     from .movement import get_shipping_label_sender_override
-    from .shipment_plan import MARKETPLACE_LABELS
 
     all_users = User.query.order_by(User.username).all()
     warehouses = Warehouse.query.order_by(Warehouse.code).all()
 
-    # Склады выгрузки в 1С настраиваются по городу целиком (одно поле сразу
-    # на все склады-маркетплейсы этого города, а не на каждый ОЗОН/ВБ
-    # отдельно) — см. warehouses.update_fulfillment_1c_mapping.
-    cities = {}
-    for wh in warehouses:
-        if wh.marketplace is None:
-            continue
-        row = cities.setdefault(
-            wh.marketplace_city, {"city": wh.marketplace_city, "marketplaces": [], "fulfillment_1c_name": None}
-        )
-        label = MARKETPLACE_LABELS.get(wh.marketplace, wh.marketplace)
-        if label not in row["marketplaces"]:
-            row["marketplaces"].append(label)
-        if wh.fulfillment_1c_name:
-            row["fulfillment_1c_name"] = wh.fulfillment_1c_name
-    fulfillment_cities = sorted(cities.values(), key=lambda r: r["city"] or "")
+    # Склад 1С настраивается отдельно на каждый склад-город маркетплейса
+    # (не по городу целиком) — одна и та же площадка одного города может
+    # возить на разные склады 1С в зависимости от маркетплейса (например,
+    # ВБ Краснодар едет на СЦ, а ОЗОН Краснодар — на фулфилмент), см.
+    # warehouses.update_fulfillment_1c_name.
+    fulfillment_warehouses = [wh for wh in warehouses if wh.marketplace is not None]
 
     return render_template(
         "auth/users.html",
         users=all_users,
         sections=SECTIONS,
         warehouses=warehouses,
-        fulfillment_cities=fulfillment_cities,
+        fulfillment_warehouses=fulfillment_warehouses,
         shipping_label_sender=get_shipping_label_sender_override(),
     )
 

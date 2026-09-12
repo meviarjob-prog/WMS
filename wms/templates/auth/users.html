@@ -144,7 +144,7 @@
 {% set hint_stickers = "Печатаются на стикерах отправления (см. «Перемещение» → печать стикеров по выбранным документам)." %}
 {% set hint_sender = "Если задано — печатается на всех стикерах вместо названия фактического склада-отправителя каждого документа. Пустое поле возвращает поведение по умолчанию (свой склад-отправитель на каждом направлении)." %}
 {% set hint_recipients = "Название/адрес/телефон получателя на складе назначения, в первую очередь для складов-городов маркетплейсов." %}
-{% set hint_fulfillment_1c = "1С не заводит отдельный физический склад под каждый склад-город WMS — вместо этого у нее свой набор промежуточных складов \"Товары в пути ФФ <город>\". Один город здесь — сразу оба маркетплейса (ОЗОН и ВБ), а несколько городов WMS могут указывать на один и тот же склад 1С (например Черкесск и Пятигорск). Пусто — при выгрузке подставится общий запасной склад «Товары в пути на Фулфилмент»." %}
+{% set hint_fulfillment_1c = "1С не заводит отдельный физический склад под каждый склад-город WMS — вместо этого у нее свой набор промежуточных складов (например \"Товары в пути ФФ <город>\", СЦ и т.п.). Настраивается отдельно на каждый склад-город, а не на город целиком — одна и та же площадка одного города может ехать на разные склады 1С в зависимости от маркетплейса (например, ВБ Краснодар — на СЦ, а ОЗОН Краснодар — на фулфилмент). Пусто — при выгрузке подставится общий запасной склад «Товары в пути на Фулфилмент»." %}
 
 <h5 class="mb-3 d-flex align-items-center gap-2">
   Склады выгрузки в 1С <span class="badge bg-success">новое</span>
@@ -154,22 +154,20 @@
 <p class="text-muted small d-none d-md-block">{{ hint_fulfillment_1c }}</p>
 <div class="card p-3 mb-4">
   <table class="table table-sm table-mobile-compact mb-0">
-    <thead><tr><th>Город</th><th>Маркетплейсы</th><th>Склад в 1С</th></tr></thead>
+    <thead><tr><th>Склад</th><th>Склад в 1С</th></tr></thead>
     <tbody>
-    {% for row in fulfillment_cities %}
+    {% for wh in fulfillment_warehouses %}
       <tr>
-        <td>{{ row.city }}</td>
-        <td class="text-muted small">{{ row.marketplaces | join(', ') }}</td>
+        <td>{{ wh.name }}</td>
         <td style="min-width:340px">
-          <form method="post" action="{{ url_for('warehouses.update_fulfillment_1c_mapping') }}" class="d-flex gap-1">
-            <input type="hidden" name="city" value="{{ row.city }}">
-            <input type="text" name="fulfillment_1c_name" value="{{ row.fulfillment_1c_name or '' }}" class="form-control form-control-sm" placeholder="Товары в пути ФФ ...">
+          <form method="post" action="{{ url_for('warehouses.update_fulfillment_1c_name', warehouse_id=wh.id) }}" class="d-flex gap-1">
+            <input type="text" name="fulfillment_1c_name" value="{{ wh.fulfillment_1c_name or '' }}" class="form-control form-control-sm" placeholder="Товары в пути ФФ ...">
             <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
           </form>
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="3" class="text-muted">Складов-городов маркетплейсов еще нет</td></tr>
+      <tr><td colspan="2" class="text-muted">Складов-городов маркетплейсов еще нет</td></tr>
     {% endfor %}
     </tbody>
   </table>
