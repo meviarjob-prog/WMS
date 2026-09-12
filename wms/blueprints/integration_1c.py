@@ -166,6 +166,16 @@ def _supplier_returns_export():
     for receiving_document_id, group in groups.items():
         first = group[0]
         order_number = first.receiving_document.order_number if first.receiving_document else None
+        # ИНН поставщика (из справочника Supplier, заполняется при загрузке
+        # накладной — см. receiving._find_or_create_supplier) — надежный
+        # уникальный идентификатор для поиска контрагента в 1С, в отличие
+        # от сравнения по названию: "Наименование" контрагента в 1С часто
+        # внутренний короткий алиас, а не то, что написано в накладной,
+        # так что текстовое совпадение с supplier_name может не найтись
+        # вовсе (см. SyncWMS.bsl НайтиКонтрагентаПоИНН/ПоИмени).
+        supplier_inn = None
+        if first.receiving_document and first.receiving_document.supplier_ref:
+            supplier_inn = first.receiving_document.supplier_ref.inn
         payloads.append(
             {
                 "id": receiving_document_id,
@@ -178,6 +188,7 @@ def _supplier_returns_export():
                 # а не к заказу поставщику.
                 "order_number": order_number or "",
                 "supplier": first.supplier_name or "",
+                "supplier_inn": supplier_inn or "",
                 "warehouse": first.warehouse.name if first.warehouse else "",
                 "comment": f"WMS: возврат по приемке {first.invoice_number}",
                 "lines": [
