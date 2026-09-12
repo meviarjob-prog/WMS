@@ -12,7 +12,7 @@
     · без ячейки
   {% endif %}
   {% if box.last_scanned_at %}
-    · Последнее сканирование: {{ box.last_scanned_at.strftime('%d.%m.%Y %H:%M') }}{% if box.last_scanned_by %} ({{ box.last_scanned_by.display_name() }}){% endif %}
+    · Последнее сканирование: {{ (box.last_scanned_at|msk).strftime('%d.%m.%Y %H:%M') }}{% if box.last_scanned_by %} ({{ box.last_scanned_by.display_name() }}){% endif %}
   {% endif %}
 </div>
 

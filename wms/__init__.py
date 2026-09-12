@@ -10,6 +10,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .config import Config, INSTANCE_DIR
 from .extensions import db, login_manager
 from .paths import resource_dir
+from .utils.timezone import to_moscow
 
 
 _sqlite_functions_registered = False
@@ -174,6 +175,12 @@ def create_app(config_class=Config):
         static_folder=resource_dir("static"),
     )
     app.config.from_object(config_class)
+
+    # Все даты в БД хранятся в UTC (datetime.utcnow() по всей модели) —
+    # шаблоны показывают их через этот фильтр в московском времени, а не
+    # как есть, чтобы время в списках документов совпадало с реальным
+    # часовым поясом склада.
+    app.jinja_env.filters["msk"] = to_moscow
 
     if app.config.get("BEHIND_PROXY"):
         # За nginx: доверяем X-Forwarded-For/-Proto/-Host от ровно одного

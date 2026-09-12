@@ -84,7 +84,7 @@
                 {{ item_count }}
               {% endif %}
             </td>
-            <td class="d-none d-md-table-cell text-muted small">{{ box.created_at.strftime('%d.%m.%Y %H:%M') if box.created_at else '' }}</td>
+            <td class="d-none d-md-table-cell text-muted small">{{ (box.created_at|msk).strftime('%d.%m.%Y %H:%M') if box.created_at else '' }}</td>
             <td><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('labels.box_label', box_id=box.id) }}" target="_blank">🖨</a></td>
           </tr>
         {% endfor %}

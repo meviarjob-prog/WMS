@@ -43,7 +43,7 @@
         <p class="text-muted mb-0">План еще не загружен.</p>
       {% else %}
         <p class="text-muted small mb-2">
-          Лист «{{ mp.plan.sheet_name }}», загружен {{ mp.plan.uploaded_at.strftime('%d.%m.%Y %H:%M') }}
+          Лист «{{ mp.plan.sheet_name }}», загружен {{ (mp.plan.uploaded_at|msk).strftime('%d.%m.%Y %H:%M') }}
           {% if mp.plan.uploaded_by %}({{ mp.plan.uploaded_by.display_name() }}){% endif %}
         </p>
         <p class="mb-2">

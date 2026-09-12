@@ -52,7 +52,7 @@
         <tbody>
         {% for r in records %}
           <tr>
-            <td>{{ r.created_at.strftime('%H:%M:%S') }}</td>
+            <td>{{ (r.created_at|msk).strftime('%H:%M:%S') }}</td>
             <td>{{ r.nomenclature.name }}</td>
             <td>
               <form method="post" action="{{ url_for('production.delete_record', record_id=r.id) }}">

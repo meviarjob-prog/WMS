@@ -36,7 +36,7 @@
     <tbody>
     {% for r in returns %}
       <tr>
-        <td class="text-nowrap">{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td class="text-nowrap">{{ (r.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
         <td>
           {% if r.receiving_document %}
             <a href="{{ url_for('receiving.detail', doc_id=r.receiving_document.id) }}">{{ r.receiving_document.number }}</a>
@@ -52,7 +52,7 @@
           {% if not r.invoice_number %}
             <span class="badge bg-secondary" title="Нет номера накладной — сопоставлять с 1С нечем, заводится вручную">— вручную</span>
           {% elif r.synced_to_1c_at %}
-            <span class="badge bg-success" title="{{ r.synced_to_1c_at.strftime('%d.%m.%Y %H:%M') }}">✅ Выгружен {{ r.synced_to_1c_at.strftime('%d.%m') }}</span>
+            <span class="badge bg-success" title="{{ (r.synced_to_1c_at|msk).strftime('%d.%m.%Y %H:%M') }}">✅ Выгружен {{ (r.synced_to_1c_at|msk).strftime('%d.%m') }}</span>
           {% else %}
             <span class="badge bg-warning text-dark">⏳ Ожидает выгрузки</span>
           {% endif %}
@@ -74,13 +74,13 @@
               {{ r.qty }} {{ r.nomenclature.unit }} · {{ r.supplier_name or '' }}
               {% if r.receiving_document %} · <a href="{{ url_for('receiving.detail', doc_id=r.receiving_document.id) }}">{{ r.receiving_document.number }}</a>{% endif %}
             </div>
-            <div class="small text-muted">{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</div>
+            <div class="small text-muted">{{ (r.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</div>
           </div>
           <div class="text-end flex-shrink-0">
             {% if not r.invoice_number %}
               <span class="badge bg-secondary">— вручную</span>
             {% elif r.synced_to_1c_at %}
-              <span class="badge bg-success" title="{{ r.synced_to_1c_at.strftime('%d.%m.%Y %H:%M') }}">✅ {{ r.synced_to_1c_at.strftime('%d.%m') }}</span>
+              <span class="badge bg-success" title="{{ (r.synced_to_1c_at|msk).strftime('%d.%m.%Y %H:%M') }}">✅ {{ (r.synced_to_1c_at|msk).strftime('%d.%m') }}</span>
             {% else %}
               <span class="badge bg-warning text-dark">⏳</span>
             {% endif %}

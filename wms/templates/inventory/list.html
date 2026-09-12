@@ -29,7 +29,7 @@
             {% endif %}
           </td>
           <td><a href="{{ url_for('inventory.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
-          <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>{{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
           <td>{{ d.warehouse.name }}</td>
           <td>{{ d.scanned_boxes.count() }}</td>
           <td>{{ d.lines.count() }}</td>
@@ -70,7 +70,7 @@
                 </span>
               </div>
               <div class="small text-muted">{{ d.warehouse.name }}</div>
-              <div class="small text-muted">{{ d.created_at.strftime('%d.%m.%Y') }} · {{ d.scanned_boxes.count() }} короб. · {{ d.lines.count() }} поз.</div>
+              <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }} · {{ d.scanned_boxes.count() }} короб. · {{ d.lines.count() }} поз.</div>
               {% if d.status == 'merged' and d.merged_into %}
                 <a class="small" href="{{ url_for('inventory.detail', doc_id=d.merged_into_id) }}">→ {{ d.merged_into.number }}</a>
               {% endif %}

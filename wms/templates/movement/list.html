@@ -130,7 +130,7 @@
         <tr>
           <td><input type="checkbox" class="form-check-input doc-checkbox" name="doc_ids" value="{{ d.id }}"></td>
           <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
-          <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>{{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
           <td>{{ d.from_warehouse.name }}</td>
           <td>{{ d.to_warehouse.name }}</td>
           <td>{{ d.lines.count() }}</td>
@@ -142,7 +142,7 @@
             {% if d.status != 'completed' %}
               <span class="text-muted">—</span>
             {% elif d.received_at %}
-              <span class="badge bg-success" title="{{ d.received_at.strftime('%d.%m.%Y %H:%M') }}">Принято {{ d.received_at.strftime('%d.%m') }}</span>
+              <span class="badge bg-success" title="{{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') }}">Принято {{ (d.received_at|msk).strftime('%d.%m') }}</span>
               {% if d.discrepancies %}<span class="badge bg-warning text-dark">С расхождением</span>{% endif %}
             {% else %}
               <button type="submit" formmethod="post" formaction="{{ url_for('movement.receive', doc_id=d.id) }}" class="btn btn-sm btn-warning" title="Товар считается «в пути», пока не нажата эта кнопка">📥 Принято на складе</button>
@@ -152,7 +152,7 @@
           </td>
           <td class="text-center">
             <button type="submit" formmethod="post" formaction="{{ url_for('movement.toggle_accounting', doc_id=d.id) }}"
-                  title="{{ 'Внесено в 1С бухгалтерией ' + d.accounting_entered_at.strftime('%d.%m.%Y %H:%M') if d.accounting_entered_at else 'Отметить: бухгалтерия внесла документ в 1С' }}"
+                  title="{{ 'Внесено в 1С бухгалтерией ' + (d.accounting_entered_at|msk).strftime('%d.%m.%Y %H:%M') if d.accounting_entered_at else 'Отметить: бухгалтерия внесла документ в 1С' }}"
                   class="btn btn-sm btn-link p-0" style="font-size:1.15rem; line-height:1; text-decoration:none;">{{ '✅' if d.accounting_entered_at else '☐' }}</button>
           </td>
           <td>
@@ -177,11 +177,11 @@
           <span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span>
         </div>
         <div class="small text-muted">{{ d.from_warehouse.name }} → {{ d.to_warehouse.name }}</div>
-        <div class="small text-muted">{{ d.created_at.strftime('%d.%m.%Y') }} · {{ d.lines.count() }} короб.</div>
+        <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }} · {{ d.lines.count() }} короб.</div>
         {% if d.status == 'completed' %}
           <div class="mt-1">
             {% if d.received_at %}
-              <span class="badge bg-success">Принято {{ d.received_at.strftime('%d.%m') }}</span>
+              <span class="badge bg-success">Принято {{ (d.received_at|msk).strftime('%d.%m') }}</span>
             {% else %}
               <span class="text-warning-emphasis small">В пути</span>
             {% endif %}

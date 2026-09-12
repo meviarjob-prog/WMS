@@ -106,7 +106,7 @@
     <tbody>
     {% for r in returns %}
       <tr>
-        <td>{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ (r.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
         <td>{{ r.warehouse.name }}</td>
         <td>{{ r.nomenclature.name }} {{ r.nomenclature.size or '' }}</td>
         <td>{{ r.qty }} {{ r.nomenclature.unit }}</td>
@@ -127,7 +127,7 @@
     {% for d in documents %}
       <tr>
         <td>{{ d.number }}</td>
-        <td>{{ d.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
         <td>{{ d.warehouse.name }}</td>
         <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
         <td><span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span></td>
@@ -150,7 +150,7 @@
           <span class="badge badge-status-{{ d.status }}">{{ 'Черновик' if d.status == 'draft' else 'Завершен' }}</span>
         </div>
         <div class="small text-muted">{{ d.warehouse.name }}</div>
-        <div class="small text-muted">{{ d.created_at.strftime('%d.%m.%Y') }}</div>
+        <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }}</div>
       </div>
     {% else %}
       <div class="list-group-item text-muted">Документов еще нет</div>

@@ -152,7 +152,7 @@
         {% for sb in scanned_boxes %}
           <tr>
             <td><a href="{{ url_for('boxes.detail', box_id=sb.box.id) }}">{{ sb.box.box_number }}</a></td>
-            <td>{{ sb.scanned_at.strftime('%H:%M:%S') }}</td>
+            <td>{{ (sb.scanned_at|msk).strftime('%H:%M:%S') }}</td>
             {% if doc.status == 'draft' %}
             <td>
               <form method="post" action="{{ url_for('inventory.delete_scanned_box', doc_id=doc.id, scanned_id=sb.id) }}">

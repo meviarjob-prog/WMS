@@ -23,7 +23,7 @@
     <a class="btn btn-outline-warning" href="{{ url_for('movement.receive_with_discrepancy', doc_id=doc.id) }}"
        title="Если на месте приняли не столько, сколько отправили — недостача или излишек">⚠️ Принято с расхождением</a>
     {% else %}
-    <span class="badge bg-success">Принято на складе {{ doc.received_at.strftime('%d.%m.%Y %H:%M') }}</span>
+    <span class="badge bg-success">Принято на складе {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
     {% if doc.discrepancies %}<span class="badge bg-warning text-dark">С расхождением</span>{% endif %}
     {% endif %}
     {% if doc.status == 'draft' and current_user.is_admin %}
