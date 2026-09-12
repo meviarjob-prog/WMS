@@ -34,7 +34,7 @@
   </form>
   {% elif doc.status == 'sorting' %}
   <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}"
-        onsubmit="return confirm('Завершить приемку? Брак уйдет отдельным возвратом поставщику, остальное — в неразмещенный остаток.');">
+        onsubmit="return confirm('Завершить приемку? Брак и недостача (если кол-во на пересчете оказалось меньше, чем по накладной) уйдут отдельными возвратами поставщику, остальное — в неразмещенный остаток.');">
     <input type="hidden" name="next" value="confirm">
     <button type="submit" class="btn btn-success btn-sm">✅ Завершить приемку</button>
   </form>

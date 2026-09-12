@@ -814,6 +814,30 @@ def complete(doc_id):
                     invoice_number=doc.number if doc.is_from_invoice_import() else None,
                 )
             )
+        # Недостача — по накладной заявлено больше, чем фактически подтвердили
+        # на пересчете (line.qty поправляется прямо в строке, исходное
+        # expected_qty не трогается специально для этого сравнения). Только
+        # для строк из накладной (expected_qty есть только у них — см.
+        # import_invoice_form); вручную добавленные строки сравнивать не с
+        # чем. Как и брак, это отдельный возврат поставщику — попадет в тот
+        # же документ 1С, что и брак по этой приемке (см. _supplier_returns_export).
+        shortage = (line.expected_qty - line.qty) if line.expected_qty is not None else 0
+        if shortage > 0:
+            db.session.add(
+                SupplierReturn(
+                    warehouse_id=doc.warehouse_id,
+                    nomenclature_id=line.nomenclature_id,
+                    qty=shortage,
+                    comment=(
+                        f"Недостача при пересчете приемки {doc.number} "
+                        f"(по накладной {line.expected_qty}, принято {line.qty})"
+                    ),
+                    created_by_id=current_user.id,
+                    receiving_document_id=doc.id,
+                    supplier_name=doc.supplier,
+                    invoice_number=doc.number if doc.is_from_invoice_import() else None,
+                )
+            )
 
     doc.status = "completed"
     doc.completed_at = datetime.utcnow()

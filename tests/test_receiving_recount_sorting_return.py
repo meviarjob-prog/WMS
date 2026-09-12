@@ -138,6 +138,93 @@ def test_sorting_defect_creates_return_and_credits_only_good_qty(db, client_logg
     assert ret.invoice_number == "RS-0005"
 
 
+def test_recount_shortage_creates_return(db, client_logged_in):
+    """Накладная заявляла 10, но на пересчете физически оказалось только 7 —
+    недостача (3) должна уйти отдельным возвратом поставщику, как и брак,
+    даже если разбраковка потом ничего не выделила."""
+    wh = _make_warehouse("WH-RS-SHORT-1")
+    item = _make_item("7770000201")
+    doc = _make_doc(wh, supplier="ИП Недопоставщиков", from_invoice=True, number="RS-SHORT-1")
+    line = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=10, expected_qty=10)
+    db.session.add(line)
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/update", data={"qty": "7"})
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+
+    assert UnplacedStock.available(wh.id, item.id) == 7
+
+    ret = SupplierReturn.query.filter_by(receiving_document_id=doc.id).first()
+    assert ret is not None
+    assert ret.qty == 3
+    assert "Недостача" in ret.comment
+    assert ret.supplier_name == "ИП Недопоставщиков"
+    assert ret.invoice_number == "RS-SHORT-1"
+
+
+def test_recount_shortage_and_sorting_defect_both_create_separate_returns(db, client_logged_in):
+    wh = _make_warehouse("WH-RS-SHORT-2")
+    item = _make_item("7770000202")
+    doc = _make_doc(wh, number="RS-SHORT-2")
+    line = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=10, expected_qty=10)
+    db.session.add(line)
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/update", data={"qty": "8"})
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/update-defect", data={"defect_qty": "2"})
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+
+    assert UnplacedStock.available(wh.id, item.id) == 6  # 8 - 2 брака
+
+    returns = SupplierReturn.query.filter_by(receiving_document_id=doc.id).order_by(SupplierReturn.id).all()
+    assert len(returns) == 2
+    comments = {r.comment for r in returns}
+    assert any("Недостача" in c for c in comments)
+    assert any("Брак" in c for c in comments)
+    assert sorted(r.qty for r in returns) == [2, 2]
+
+
+def test_recount_qty_increase_does_not_create_shortage_return(db, client_logged_in):
+    """Нашли БОЛЬШЕ, чем заявлено в накладной — это не недостача, возврат
+    создавать не нужно."""
+    wh = _make_warehouse("WH-RS-SHORT-3")
+    item = _make_item("7770000203")
+    doc = _make_doc(wh, number="RS-SHORT-3")
+    line = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=10, expected_qty=10)
+    db.session.add(line)
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{line.id}/update", data={"qty": "12"})
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+
+    assert UnplacedStock.available(wh.id, item.id) == 12
+    assert SupplierReturn.query.filter_by(receiving_document_id=doc.id).count() == 0
+
+
+def test_manually_added_line_without_expected_qty_has_no_shortage_return(db, client_logged_in):
+    wh = _make_warehouse("WH-RS-SHORT-4")
+    item = _make_item("7770000204")
+    doc = _make_doc(wh, number="RS-SHORT-4")
+    # Как строка, добавленная вручную ("Добавить товар") — без expected_qty,
+    # сравнивать не с чем.
+    line = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=5)
+    db.session.add(line)
+    db.session.commit()
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    client_logged_in.post(f"/receiving/{doc.id}/complete")
+
+    assert UnplacedStock.available(wh.id, item.id) == 5
+    assert SupplierReturn.query.filter_by(receiving_document_id=doc.id).count() == 0
+
+
 def test_defect_qty_cannot_exceed_line_qty(db, client_logged_in):
     wh = _make_warehouse("WH-RS-5")
     item = _make_item("7770000105")
