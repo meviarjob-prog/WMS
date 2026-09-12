@@ -267,3 +267,48 @@ def test_picking_list_shows_receiving_on_recount_and_sorting_as_unplaced(db, cli
     idx = html.find("ART-1")
     snippet = html[idx : idx + 3000]
     assert ">10<" in snippet  # 12 - 2 брака = 10 годного "на разбраковке"
+
+
+def test_picking_list_shows_invoice_receiving_still_in_draft_as_unplaced(db, client_logged_in):
+    """Сразу после загрузки накладной документ еще в draft (кладовщик пока
+    сверяет первичное кол-во) — до "Отправить на пересчет" далеко, но товар
+    физически уже привезли на склад. План отгрузок не должен ждать перехода
+    в пересчет/разбраковку, чтобы это увидеть."""
+    sender, city, item = _setup(planned_qty=30)
+    doc = ReceivingDocument(
+        number="REC-PLAN-2",
+        warehouse_id=sender.id,
+        supplier="ИП Тестов",
+        invoice_file_name="накладная.xlsx",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=7))
+    db.session.commit()
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    assert ">7<" in snippet
+
+
+def test_picking_list_ignores_plain_draft_receiving_without_invoice(db, client_logged_in):
+    """Обычная приемка в короба (не из накладной) в draft еще может быть не
+    досчитана кладовщиком — в отличие от накладной, тут нет отдельного шага
+    подтверждения количества, поэтому в "на разбраковке"/остаток она не
+    попадает до самого завершения приемки (см. receiving.complete)."""
+    sender, city, item = _setup(planned_qty=30)
+    doc = ReceivingDocument(
+        number="REC-PLAN-3",
+        warehouse_id=sender.id,
+        supplier="ИП Тестов",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=9))
+    db.session.commit()
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    assert ">9<" not in snippet

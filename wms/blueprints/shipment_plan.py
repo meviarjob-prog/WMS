@@ -207,16 +207,21 @@ def _unplaced_by_nomenclature(warehouse_ids):
 
 
 def _pending_sorting_by_nomenclature(warehouse_ids):
-    """{nomenclature_id: кол-во} по строкам приемок в статусе "На пересчете"
-    или "На разбраковке" (см. ReceivingDocument.status) — с этого момента
-    (кнопка "Отправить на пересчет") товар физически уже принят на складе,
-    но еще не попадает в UnplacedStock (это происходит только при
-    завершении приемки, см. receiving.complete) — без этой раскладки он
-    "исчезал" бы из плана отгрузок на все время пересчета/разбраковки,
-    как будто его еще нет на складе. Годное кол-во считаем за вычетом уже
-    выделенного брака (defect_qty) — бракованное в остаток не попадет.
-    Упакованные в короб прямо при приемке строки (box_id заполнен) сюда не
-    входят — они разбраковке не подлежат и не были неразмещенными."""
+    """{nomenclature_id: кол-во} по строкам незавершенных приемок из накладной
+    (draft/recounting/sorting, см. ReceivingDocument.status) — товар физически
+    уже принят на складе с момента загрузки накладной (первый же этап,
+    "черновик" до нажатия "Отправить на пересчет"), но не попадает в
+    UnplacedStock до самого завершения приемки (см. receiving.complete) —
+    без этой раскладки он "исчезал" бы из плана отгрузок на все время
+    приемки/пересчета/разбраковки, как будто его еще нет на складе, вне
+    зависимости от того, на каком именно этапе сейчас документ. Годное
+    кол-во считаем за вычетом уже выделенного брака (defect_qty) —
+    бракованное в остаток не попадет. Упакованные в короб прямо при приемке
+    строки (box_id заполнен) сюда не входят — они уже видны через
+    _stock_by_nomenclature (BoxItem), а разбраковке не подлежат. Обычная
+    приемка в короба (не из накладной) сюда не входит вовсе — она никогда не
+    выходит из draft этим путем (см. status-guard в send_to_recount), и ее
+    строки без короба до завершения физически еще могут быть не досчитаны."""
     if not warehouse_ids:
         return {}
     rows = (
@@ -227,7 +232,8 @@ def _pending_sorting_by_nomenclature(warehouse_ids):
         .join(ReceivingDocument, ReceivingDocument.id == ReceivingLine.document_id)
         .filter(
             ReceivingDocument.warehouse_id.in_(warehouse_ids),
-            ReceivingDocument.status.in_(("recounting", "sorting")),
+            ReceivingDocument.status.in_(("draft", "recounting", "sorting")),
+            ReceivingDocument.invoice_file_name.isnot(None),
             ReceivingLine.box_id.is_(None),
         )
         .group_by(ReceivingLine.nomenclature_id)
