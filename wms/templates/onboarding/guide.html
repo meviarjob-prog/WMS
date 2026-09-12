@@ -96,16 +96,18 @@
       <nav class="og-toc">
         <a href="#login"><span class="og-n">01</span> Вход в систему</a>
         <a href="#nomenclature"><span class="og-n">02</span> Номенклатура</a>
-        <a href="#receiving"><span class="og-n">03</span> Приёмка</a>
-        <a href="#placement"><span class="og-n">04</span> Размещение</a>
-        <a href="#movement"><span class="og-n">05</span> Перемещение</a>
-        <a href="#findbox"><span class="og-n">06</span> Поиск короба</a>
-        <a href="#waybills"><span class="og-n">07</span> Стикеры и накладные</a>
-        <a href="#plan"><span class="og-n">08</span> План отгрузок</a>
-        <a href="#settings"><span class="og-n">09</span> Настройки (админ)</a>
-        <a href="#inventory"><span class="og-n">10</span> Инвентаризация</a>
-        <a href="#locate"><span class="og-n">11</span> Где товар</a>
-        <a href="#checklist"><span class="og-n">12</span> Памятка на первую неделю</a>
+        <a href="#receiving"><span class="og-n">03</span> Приёмка в короба</a>
+        <a href="#receiving-invoice"><span class="og-n">04</span> Приёмка по накладной</a>
+        <a href="#returns"><span class="og-n">05</span> Возвраты поставщику</a>
+        <a href="#placement"><span class="og-n">06</span> Размещение</a>
+        <a href="#movement"><span class="og-n">07</span> Перемещение</a>
+        <a href="#findbox"><span class="og-n">08</span> Поиск короба</a>
+        <a href="#waybills"><span class="og-n">09</span> Стикеры и накладные</a>
+        <a href="#plan"><span class="og-n">10</span> План отгрузок</a>
+        <a href="#settings"><span class="og-n">11</span> Настройки (админ)</a>
+        <a href="#inventory"><span class="og-n">12</span> Инвентаризация</a>
+        <a href="#locate"><span class="og-n">13</span> Где товар</a>
+        <a href="#checklist"><span class="og-n">14</span> Памятка на первую неделю</a>
       </nav>
     </aside>
 
@@ -133,8 +135,8 @@
       </section>
 
       <section class="og-step-block" id="receiving">
-        <div class="og-step-head"><div class="og-step-num">3</div><h2>Приёмка товара</h2></div>
-        <p class="og-step-lede">Когда приезжает поставка — начинаем с «Приёмки». Список документов выглядит так:</p>
+        <div class="og-step-head"><div class="og-step-num">3</div><h2>Приёмка в короба</h2></div>
+        <p class="og-step-lede">Когда приезжает поставка без файла накладной (или сразу видно, что удобнее упаковывать по факту приёмки) — начинаем с «Приёмки». Список документов выглядит так:</p>
         <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/03_receiving_list.png') }}" alt="Список документов приёмки"></div>
         <div class="og-shot-caption">Список приёмок — кнопка «Новая приемка» создаёт документ.</div>
         <p>Внутри документа — два способа принять товар. Можно просто отсканировать штрихкод и указать количество (товар уйдёт в общий неразмещённый остаток). А можно упаковать товар сразу в короб — это быстрее, если короба под рукой:</p>
@@ -148,8 +150,35 @@
         <div class="og-callout info"><span class="og-cico">✅</span><div>Когда всё принято — жмите «Завершить приемку». Товар без короба уйдёт в неразмещённый остаток (его нужно будет разложить по коробам через «Размещение»), а то, что уже упаковано в короб — останется в нём, нужно только расставить по ячейкам.</div></div>
       </section>
 
+      <section class="og-step-block" id="receiving-invoice">
+        <div class="og-step-head"><div class="og-step-num">4</div><h2>Приёмка по накладной <span class="og-badge new">новое</span></h2></div>
+        <p class="og-step-lede">Если поставка идёт по настоящей накладной из 1С — грузите файл через «Приёмка» → «Загрузить накладную»: номер накладной станет номером документа, поставщик и список товаров с количеством подставятся из файла автоматически.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/17_import_invoice.png') }}" alt="Форма загрузки приходной накладной"></div>
+        <div class="og-shot-caption">«№ заявки» вносится вручную — это внутренний номер заказа поставщику, в самом файле накладной от 1С его нет, но по нему потом ищется возврат в 1С.</div>
+        <p>Дальше документ идёт по трём этапам — <b>пересчёт → разбраковка → завершение</b> — вместо приёмки одним кликом, как в обычных коробах:</p>
+        <ol class="og-steps">
+          <li>Сразу после загрузки документ в статусе «Черновик» — можно поправить количество, если что-то не сошлось при первичном осмотре.</li>
+          <li>«Отправить на пересчет» переводит в статус «На пересчете» — здесь пересчитываете товар по факту и правите количество по строкам.</li>
+          <li>«Отправить на разбраковку» — на этом этапе по каждой строке указываете кол-во брака (если есть); годное количество зачислится в остаток, а брак уйдёт отдельным возвратом поставщику.</li>
+          <li>«Завершить приемку» — как и в обычной приёмке, годный товар без короба уходит в неразмещённый остаток.</li>
+        </ol>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/18_receiving_recounting.png') }}" alt="Приёмка на пересчёте с пакетным редактированием количества"></div>
+        <div class="og-shot-caption">На пересчёте: правьте количество сразу по всем строкам и нажмите «Сохранить количества» один раз — страница не перезагружается после каждой строки.</div>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/19_receiving_sorting.png') }}" alt="Приёмка на разбраковке с указанием брака по строкам"></div>
+        <div class="og-shot-caption">На разбраковке: брак указывается построчно, годное количество (20.0 − 2.0 брака) уйдёт в остаток при завершении.</div>
+        <div class="og-callout warn"><span class="og-cico">⚠️</span><div>Пересчёт и разбраковка доступны только приёмкам, загруженным из файла накладной — у обычной приёмки в короба этих этапов нет, она завершается сразу, как в разделе 3 выше.</div></div>
+      </section>
+
+      <section class="og-step-block" id="returns">
+        <div class="og-step-head"><div class="og-step-num">5</div><h2>Возвраты поставщику <span class="og-badge new">новое</span></h2></div>
+        <p class="og-step-lede">Весь брак, выделенный на разбраковке (см. выше), собирается в одном списке — «Приёмка» → «Возвраты поставщику». Здесь видно, какие возвраты уже ушли в 1С, а какие ещё ждут выгрузки.</p>
+        <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/20_returns.png') }}" alt="Список возвратов поставщику со статусом выгрузки в 1С"></div>
+        <div class="og-shot-caption">Колонка «1С»: зелёный — уже выгружен и подтверждён 1С, жёлтый — ещё в очереди, серый — выгружается только вручную (обычно возврат без привязки к настоящей накладной).</div>
+        <div class="og-callout info"><span class="og-cico">ℹ️</span><div>Отметку «Выгружен» ставит сама система, когда 1С подтверждает получение документа — вручную здесь ничего не отмечают, это только для контроля.</div></div>
+      </section>
+
       <section class="og-step-block" id="placement">
-        <div class="og-step-head"><div class="og-step-num">4</div><h2>Размещение по ячейкам</h2></div>
+        <div class="og-step-head"><div class="og-step-num">6</div><h2>Размещение по ячейкам</h2></div>
         <p class="og-step-lede">Раздел «Размещение» — здесь неразмещённый остаток раскладывается по коробам, а короба расставляются по ячейкам склада.</p>
         <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/05_placement_list.png') }}" alt="Экран размещения: остаток и открытые короба"></div>
         <div class="og-shot-caption">Слева — что ещё не упаковано, справа — короба без ячейки с готовой подсказкой, куда их поставить.</div>
@@ -161,7 +190,7 @@
       </section>
 
       <section class="og-step-block" id="movement">
-        <div class="og-step-head"><div class="og-step-num">5</div><h2>Перемещение между складами</h2></div>
+        <div class="og-step-head"><div class="og-step-num">7</div><h2>Перемещение между складами</h2></div>
         <p class="og-step-lede">Когда товар нужно отправить с основного склада на склад-город маркетплейса (ОЗОН, ВБ) — используется «Перемещение». Самый быстрый способ — карточка «Куда везти короб» вверху страницы: сканируете короб, система сама подсказывает город по текущему плану отгрузок.</p>
         <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/06_movement_list.png') }}" alt="Список перемещений и Куда везти короб"></div>
         <div class="og-shot-caption">«Куда везти короб» сверху и список документов перемещения снизу.</div>
@@ -172,14 +201,14 @@
       </section>
 
       <section class="og-step-block" id="findbox">
-        <div class="og-step-head"><div class="og-step-num">6</div><h2>Поиск короба <span class="og-badge new">новое</span></h2></div>
+        <div class="og-step-head"><div class="og-step-num">8</div><h2>Поиск короба <span class="og-badge new">новое</span></h2></div>
         <p class="og-step-lede">Не помните, в какое перемещение попал конкретный короб? На странице «Перемещение» есть карточка «Найти короб» — вводите номер и сразу видите все документы, где он упоминался.</p>
         <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/13_find_box.png') }}" alt="Результат поиска короба по перемещениям"></div>
         <div class="og-shot-caption">Короб BOX-000105 найден в перемещении PER-000029: видно откуда, куда, статус документа и отметку о приёмке.</div>
       </section>
 
       <section class="og-step-block" id="waybills">
-        <div class="og-step-head"><div class="og-step-num">7</div><h2>Стикеры и накладные <span class="og-badge new">новое</span></h2></div>
+        <div class="og-step-head"><div class="og-step-num">9</div><h2>Стикеры и накладные <span class="og-badge new">новое</span></h2></div>
         <p class="og-step-lede">В списке перемещений у каждой строки — флажок. Отметьте нужные документы — появятся сразу две кнопки печати.</p>
         <ol class="og-steps">
           <li>Отметьте галочками нужные перемещения (или нажмите «Выбрать все») — обе кнопки станут синими и покажут счётчик выбранного.</li>
@@ -192,7 +221,7 @@
       </section>
 
       <section class="og-step-block" id="plan">
-        <div class="og-step-head"><div class="og-step-num">8</div><h2>План отгрузок — зачем нужны рекомендации</h2></div>
+        <div class="og-step-head"><div class="og-step-num">10</div><h2>План отгрузок — зачем нужны рекомендации</h2></div>
         <p class="og-step-lede">Раздел «План отгрузок» объясняет, откуда берётся подсказка в «Куда везти короб»: сколько нужно по плану и сколько уже готово. Пока короб едет и не нажата кнопка «Принято на складе» — потребность слева не уменьшается, а количество в пути показано отдельно, в скобках справа от остатка.</p>
         <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/10_shipment_plan.png') }}" alt="Дашборд плана отгрузок"></div>
         <div class="og-shot-caption">Москва: план 28, остаток 28, в скобках (12) — уже отправлено перемещением, но пока не подтверждено приёмкой.</div>
@@ -200,7 +229,7 @@
       </section>
 
       <section class="og-step-block" id="settings">
-        <div class="og-step-head"><div class="og-step-num">9</div><h2>Настройки — раздел администратора <span class="og-badge new">новое</span></h2></div>
+        <div class="og-step-head"><div class="og-step-num">11</div><h2>Настройки — раздел администратора <span class="og-badge new">новое</span></h2></div>
         <p class="og-step-lede">Все административные настройки собраны в одном месте: пользователи, доступ к разделам меню и параметры стикеров перемещения. Обычному складскому сотруднику пункт «Настройки» в меню не виден.</p>
         <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/15_settings.png') }}" alt="Страница Настройки: пользователи и стикеры перемещений"></div>
         <div class="og-shot-caption">Сверху — пользователи и их роли, снизу — отправитель на все направления и получатели по складам-городам.</div>
@@ -214,7 +243,7 @@
       </section>
 
       <section class="og-step-block" id="inventory">
-        <div class="og-step-head"><div class="og-step-num">10</div><h2>Инвентаризация</h2></div>
+        <div class="og-step-head"><div class="og-step-num">12</div><h2>Инвентаризация</h2></div>
         <p class="og-step-lede">Пересчёт склада — сканируете короба один за другим, содержимое суммируется в позиции автоматически.</p>
         <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/11b_inventory_detail.png') }}" alt="Документ инвентаризации со сканированными коробами"></div>
         <div class="og-shot-caption">Три короба отсканированы — слева итоговый список товара, справа — история сканирования.</div>
@@ -222,14 +251,14 @@
       </section>
 
       <section class="og-step-block" id="locate">
-        <div class="og-step-head"><div class="og-step-num">11</div><h2>«Где товар» — быстрый поиск</h2></div>
+        <div class="og-step-head"><div class="og-step-num">13</div><h2>«Где товар» — быстрый поиск</h2></div>
         <p class="og-step-lede">Нужно быстро найти конкретный товар физически — не ищите по ячейкам вручную, отсканируйте штрихкод здесь.</p>
         <div class="og-shot"><img src="{{ url_for('static', filename='onboarding/12_locate.png') }}" alt="Результат поиска товара по местам хранения"></div>
         <div class="og-shot-caption">Видно каждый короб с этим товаром, его ячейку и склад, плюс неразмещённый остаток отдельно.</div>
       </section>
 
       <section class="og-step-block" id="checklist">
-        <div class="og-step-head"><div class="og-step-num">12</div><h2>Памятка на первую неделю</h2></div>
+        <div class="og-step-head"><div class="og-step-num">14</div><h2>Памятка на первую неделю</h2></div>
         <div class="og-checklist">
           <h3>Прежде чем звать старшего смены — проверьте:</h3>
           <ul>
