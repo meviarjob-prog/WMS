@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Возвраты поставщику{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+  <h3 class="mb-0">Возвраты поставщику</h3>
+  <a class="btn btn-outline-secondary" href="{{ url_for('receiving.list_documents') }}">&larr; Приемка</a>
+</div>
+
+<form method="get" class="d-flex flex-wrap gap-3 mb-3">
+  <div class="form-check">
+    <input type="checkbox" name="unsynced" class="form-check-input" id="filterUnsynced" onchange="this.form.submit()" {% if unsynced_only %}checked{% endif %}>
+    <label class="form-check-label" for="filterUnsynced">Показывать только невыгруженные</label>
+  </div>
+</form>
+
+<div class="card p-3">
+  <p class="text-muted small mb-3">
+    «Выгружен» ставится автоматически, когда 1С подтверждает прием документа
+    через <code>/api/export/confirm</code> — вручную здесь ничего не отмечают.
+    Возвраты без «№ заявки»/накладной (ручное списание из «Размещения», либо
+    разбраковка приемки, не загруженной из файла) в 1С не выгружаются вовсе —
+    сопоставлять их там не с чем, заводятся в 1С вручную.
+  </p>
+  <table class="table table-sm d-none d-md-table">
+    <thead>
+      <tr>
+        <th>Дата</th>
+        <th>Приемка</th>
+        <th>№ заявки</th>
+        <th>Поставщик</th>
+        <th>Товар</th>
+        <th>Кол-во</th>
+        <th>1С</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in returns %}
+      <tr>
+        <td class="text-nowrap">{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>
+          {% if r.receiving_document %}
+            <a href="{{ url_for('receiving.detail', doc_id=r.receiving_document.id) }}">{{ r.receiving_document.number }}</a>
+          {% else %}
+            <span class="text-muted">без приемки</span>
+          {% endif %}
+        </td>
+        <td>{{ r.receiving_document.order_number if r.receiving_document else '' }}</td>
+        <td>{{ r.supplier_name or '' }}</td>
+        <td>{{ r.nomenclature.name }} <span class="text-muted">({{ r.nomenclature.sku }})</span></td>
+        <td>{{ r.qty }} {{ r.nomenclature.unit }}</td>
+        <td class="text-nowrap">
+          {% if not r.invoice_number %}
+            <span class="badge bg-secondary" title="Нет номера накладной — сопоставлять с 1С нечем, заводится вручную">— вручную</span>
+          {% elif r.synced_to_1c_at %}
+            <span class="badge bg-success" title="{{ r.synced_to_1c_at.strftime('%d.%m.%Y %H:%M') }}">✅ Выгружен {{ r.synced_to_1c_at.strftime('%d.%m') }}</span>
+          {% else %}
+            <span class="badge bg-warning text-dark">⏳ Ожидает выгрузки</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="text-muted">Возвратов еще нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="list-group d-md-none">
+    {% for r in returns %}
+      <div class="list-group-item py-2 px-2">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <div>{{ r.nomenclature.name }} <span class="text-muted small">({{ r.nomenclature.sku }})</span></div>
+            <div class="small text-muted">
+              {{ r.qty }} {{ r.nomenclature.unit }} · {{ r.supplier_name or '' }}
+              {% if r.receiving_document %} · <a href="{{ url_for('receiving.detail', doc_id=r.receiving_document.id) }}">{{ r.receiving_document.number }}</a>{% endif %}
+            </div>
+            <div class="small text-muted">{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</div>
+          </div>
+          <div class="text-end flex-shrink-0">
+            {% if not r.invoice_number %}
+              <span class="badge bg-secondary">— вручную</span>
+            {% elif r.synced_to_1c_at %}
+              <span class="badge bg-success" title="{{ r.synced_to_1c_at.strftime('%d.%m.%Y %H:%M') }}">✅ {{ r.synced_to_1c_at.strftime('%d.%m') }}</span>
+            {% else %}
+              <span class="badge bg-warning text-dark">⏳</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% else %}
+      <div class="list-group-item text-muted">Возвратов еще нет</div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

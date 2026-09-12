@@ -69,6 +69,25 @@ def list_documents():
     )
 
 
+@bp.route("/returns")
+def returns_list():
+    """Возвраты поставщику (см. complete()/is_from_invoice_import) с
+    видимостью, что из них уже забрала 1С (synced_to_1c_at, см.
+    integration_1c.export_confirm), а что еще ждет выгрузки — аналог
+    галочки "1С" у перемещений, но здесь только для чтения: подтверждение
+    ставит сама интеграция, вручную его на возврате не отмечают."""
+    unsynced_only = request.args.get("unsynced") == "on"
+
+    query = SupplierReturn.query
+    if unsynced_only:
+        query = query.filter(SupplierReturn.synced_to_1c_at.is_(None))
+
+    returns = query.order_by(SupplierReturn.created_at.desc()).all()
+    return render_template(
+        "receiving/returns.html", returns=returns, unsynced_only=unsynced_only
+    )
+
+
 @bp.route("/new", methods=["GET", "POST"])
 def new_document():
     from ..models import Warehouse
