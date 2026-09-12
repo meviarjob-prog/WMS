@@ -610,6 +610,77 @@ def test_parse_invoice_finds_supplier_several_columns_to_the_right():
     assert invoice.rows[0]["barcode"] == "2049731406376"
 
 
+def test_parse_invoice_extracts_barcode_from_trailing_digits_in_name():
+    """Часть накладных не выделяет штрихкод отдельной колонкой вообще, а
+    печатает его в конце той же ячейки с названием через пробел — см.
+    реальный пример "Кардиган_айла_беж ... (42-46) 2051137627033". Без
+    отдельной колонки "Штрихкод" сопоставление шло только по названию, а
+    название в номенклатуре может не совпадать буквально — штрихкод из
+    хвоста строки надежнее."""
+    file_stream = _build_invoice_xlsx(
+        rows=(("НФ-00003575", f"{DEFAULT_ROW_NAME} 2051137627033", 80),)
+    )
+
+    invoice = parse_invoice(file_stream)
+
+    assert invoice.rows[0]["barcode"] == "2051137627033"
+    assert invoice.rows[0]["name"] == DEFAULT_ROW_NAME
+
+
+def test_parse_invoice_ignores_short_trailing_number_in_name():
+    """Короткие числа в конце названия (например размер без скобок) не
+    похожи на реальный штрихкод (8-14 цифр) — не должны приниматься за
+    него по ошибке."""
+    file_stream = _build_invoice_xlsx(rows=(("НФ-00003575", "Свитер размер 54", 80),))
+
+    invoice = parse_invoice(file_stream)
+
+    assert invoice.rows[0]["barcode"] == ""
+    assert invoice.rows[0]["name"] == "Свитер размер 54"
+
+
+def test_parse_invoice_does_not_scrape_name_when_barcode_column_exists_but_empty():
+    """Если в файле явно есть колонка "Штрихкод", пустая ячейка в этой
+    колонке означает, что штрихкода у товара действительно нет — не нужно
+    угадывать его из хвоста названия, даже если тот оканчивается цифрами."""
+    file_stream = _build_invoice_xlsx(
+        rows=(("НФ-00003575", f"{DEFAULT_ROW_NAME} 2051137627033", 80, ""),),
+        with_barcode_column=True,
+    )
+
+    invoice = parse_invoice(file_stream)
+
+    assert invoice.rows[0]["barcode"] == ""
+    assert invoice.rows[0]["name"] == f"{DEFAULT_ROW_NAME} 2051137627033"
+
+
+def test_upload_matches_by_barcode_extracted_from_name_suffix(db, client_logged_in):
+    """Сквозной сценарий: накладная без колонки "Штрихкод", штрихкод —
+    хвост из цифр в названии; название в WMS-номенклатуре отличается
+    формулировкой (не совпало бы напрямую), но штрихкод сходится."""
+    warehouse = _make_warehouse()
+    item = Nomenclature(
+        sku="ANY-SKU-3", barcode="2051137627033", name="Совсем другая формулировка в системе", unit="шт"
+    )
+    db.session.add(item)
+    db.session.commit()
+
+    file_stream = _build_invoice_xlsx(
+        rows=(("НФ-00003575", f"{DEFAULT_ROW_NAME} 2051137627033", 80),)
+    )
+    resp = client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "file": (file_stream, "invoice.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    doc = ReceivingDocument.query.filter_by(number="1706").first()
+    assert doc is not None
+    assert doc.lines.first().nomenclature_id == item.id
+
+
 def test_parse_invoice_date_not_truncated_by_letter_ge_in_month_name():
     """Регекс даты раньше исключал ЛЮБУЮ букву "г"/"Г" до конца строки —
     ломалось на названиях месяцев, содержащих "г" (например, "августа"),

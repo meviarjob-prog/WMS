@@ -30,6 +30,14 @@ _TITLE_RE = re.compile(
 )
 _INN_RE = re.compile(r"инн[:\s]*([0-9]{10,12})", re.IGNORECASE)
 _PHONE_RE = re.compile(r"тел\.?:?\s*([+0-9][0-9()\-\s]{5,}[0-9])", re.IGNORECASE)
+# Некоторые накладные не выделяют штрихкод отдельной колонкой (см.
+# _find_header_row), а печатают его прямо в конце ячейки с названием товара
+# через пробел — например "Кардиган бежевый (42-46) 2051137627033". Ищем
+# такой хвост из 8-14 цифр (диапазон длин реальных штрихкодов: EAN-8..GS1),
+# только когда явной колонки "Штрихкод" в файле нет вообще — если колонка
+# есть, но у конкретной строки пусто, значит штрихкода у товара
+# действительно нет, а не то, что он "спрятан" в названии.
+_TRAILING_BARCODE_RE = re.compile(r"(?:^|\s)(\d{8,14})$")
 
 _HEADER_CODE_MARKERS = ("код",)
 _HEADER_NAME_MARKERS = ("товар",)
@@ -297,6 +305,11 @@ def parse_invoice(file_stream):
         if qty is None:
             continue
         barcode = _norm(ws.cell(row=r, column=barcode_col).value) if barcode_col else ""
+        if barcode_col is None:
+            trailing_match = _TRAILING_BARCODE_RE.search(name)
+            if trailing_match:
+                barcode = trailing_match.group(1)
+                name = name[: trailing_match.start()].rstrip()
         invoice.rows.append({"code": code, "name": name, "qty": qty, "barcode": barcode})
 
     if not invoice.rows:
