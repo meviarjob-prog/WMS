@@ -108,6 +108,8 @@
     <div class="d-flex align-items-center justify-content-end gap-2 mt-1">
       {% if line.box_id %}
         <span class="text-muted small">упаковано в короб — брак не подлежит</span>
+      {% elif line.line_completed_at %}
+        <span class="badge bg-success">Готово</span>
       {% elif can_edit_defect %}
         <form method="post" action="{{ url_for('receiving.update_defect', doc_id=doc.id, line_id=line.id) }}" class="d-flex align-items-center gap-1">
           <input type="hidden" name="next" value="confirm">
@@ -118,6 +120,13 @@
         </form>
       {% else %}
         <span class="text-muted small">Брак: {{ line.defect_qty }}</span>
+      {% endif %}
+      {% if not line.box_id and not line.line_completed_at and can_edit_defect %}
+        <form method="post" action="{{ url_for('receiving.complete_line', doc_id=doc.id, line_id=line.id) }}"
+              onsubmit="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Отменить нельзя.');">
+          <input type="hidden" name="next" value="confirm">
+          <button type="submit" class="btn btn-sm btn-outline-success">✓ Готово</button>
+        </form>
       {% endif %}
     </div>
     {% elif doc.status == 'completed' and line.defect_qty %}

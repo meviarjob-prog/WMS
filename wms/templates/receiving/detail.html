@@ -202,7 +202,7 @@
   <form id="bulkQtyForm" method="post" action="{{ url_for('receiving.update_lines_bulk', doc_id=doc.id) }}">
   {% endif %}
   <table class="table table-sm d-none d-md-table">
-    <thead><tr><th>Товар</th><th>Короб</th><th>Кол-во</th><th>{% if doc.status in ('sorting', 'completed') %}Брак{% endif %}</th></tr></thead>
+    <thead><tr><th>Товар</th><th>Короб</th><th>Кол-во</th><th>{% if doc.status in ('sorting', 'completed') %}Брак{% endif %}</th>{% if doc.status == 'sorting' %}<th>Статус</th>{% endif %}</tr></thead>
     <tbody>
     {% for line in lines %}
       <tr>
@@ -226,6 +226,8 @@
         <td style="min-width:140px">
           {% if line.box_id %}
             <span class="text-muted">не подлежит</span>
+          {% elif line.line_completed_at %}
+            <span class="text-muted">{{ line.defect_qty }}</span>
           {% elif can_edit_defect %}
             <form method="post" action="{{ url_for('receiving.update_defect', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
               <input type="number" name="defect_qty" step="0.001" min="0" max="{{ line.qty }}" value="{{ line.defect_qty }}" class="form-control form-control-sm" style="width:90px">
@@ -235,18 +237,30 @@
             <span class="text-muted">{{ line.defect_qty }}</span>
           {% endif %}
         </td>
+        <td style="min-width:110px">
+          {% if line.box_id %}
+            <span class="text-muted small">в коробе</span>
+          {% elif line.line_completed_at %}
+            <span class="badge bg-success">Готово</span>
+          {% elif can_edit_defect %}
+            <form method="post" action="{{ url_for('receiving.complete_line', doc_id=doc.id, line_id=line.id) }}"
+                  onsubmit="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Годное количество зачислится в остаток, брак — в возврат поставщику. Отменить нельзя.');">
+              <button type="submit" class="btn btn-sm btn-outline-success">✓ Готово</button>
+            </form>
+          {% endif %}
+        </td>
         {% else %}
         <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
         <td>{% if line.defect_qty %}<span class="text-danger">{{ line.defect_qty }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
         {% endif %}
       </tr>
     {% else %}
-      <tr><td colspan="4" class="text-muted">Позиций еще нет</td></tr>
+      <tr><td colspan="5" class="text-muted">Позиций еще нет</td></tr>
     {% endfor %}
     </tbody>
     {% if lines %}
     <tfoot>
-      <tr class="fw-bold"><td>Итого</td><td></td><td>{{ doc.total_qty() }}</td><td></td></tr>
+      <tr class="fw-bold"><td>Итого</td><td></td><td>{{ doc.total_qty() }}</td><td></td>{% if doc.status == 'sorting' %}<td></td>{% endif %}</tr>
     </tfoot>
     {% endif %}
   </table>
@@ -273,6 +287,8 @@
             <div>{{ line.qty }} {{ line.nomenclature.unit }}</div>
             {% if line.box_id %}
               <span class="text-muted">брак не подлежит</span>
+            {% elif line.line_completed_at %}
+              <span class="badge bg-success">Готово</span>
             {% elif can_edit_defect %}
               <form method="post" action="{{ url_for('receiving.update_defect', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1 align-items-center mt-1">
                 <span class="text-muted">брак:</span>
@@ -281,6 +297,12 @@
               </form>
             {% else %}
               <span class="text-muted">брак: {{ line.defect_qty }}</span>
+            {% endif %}
+            {% if not line.box_id and not line.line_completed_at and can_edit_defect %}
+              <form method="post" action="{{ url_for('receiving.complete_line', doc_id=doc.id, line_id=line.id) }}" class="mt-1"
+                    onsubmit="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Годное количество зачислится в остаток, брак — в возврат поставщику. Отменить нельзя.');">
+                <button type="submit" class="btn btn-sm btn-outline-success">✓ Готово</button>
+              </form>
             {% endif %}
           </div>
           {% else %}

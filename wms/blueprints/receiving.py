@@ -1000,6 +1000,9 @@ def update_defect(doc_id, line_id):
     if line.box_id:
         flash("Товар уже упакован в короб при приемке — разбраковке не подлежит", "danger")
         return _next_redirect(doc.id)
+    if line.line_completed_at is not None:
+        flash("Строка уже завершена — брак больше нельзя поменять", "danger")
+        return _next_redirect(doc.id)
 
     defect_qty = request.form.get("defect_qty", type=float) or 0
     if defect_qty < 0 or defect_qty > line.qty:
@@ -1021,12 +1024,39 @@ def update_defect(doc_id, line_id):
     return _next_redirect(doc.id)
 
 
+def _credit_receiving_line(doc, line):
+    """Зачисляет годное количество строки в неразмещенный остаток и, если
+    есть брак, заводит возврат поставщику — общая логика для завершения
+    приемки целиком (complete()) и по отдельной строке (complete_line()).
+    Расхождение с накладной не является возвратом — SupplierReturn
+    создается только из явно указанного defect_qty."""
+    good_qty = line.good_qty()
+    if good_qty > 0:
+        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, good_qty, receiving_document=doc)
+    if line.defect_qty:
+        db.session.add(
+            SupplierReturn(
+                warehouse_id=doc.warehouse_id,
+                nomenclature_id=line.nomenclature_id,
+                qty=line.defect_qty,
+                comment=f"Брак при разбраковке приемки {doc.number}",
+                created_by_id=current_user.id,
+                receiving_document_id=doc.id,
+                supplier_name=doc.supplier,
+                invoice_number=doc.number if doc.is_from_invoice_import() else None,
+            )
+        )
+
+
 @bp.route("/<int:doc_id>/complete", methods=["POST"])
 def complete(doc_id):
     """Приемка из накладной проходит пересчет/разбраковку и завершается из
     sorting (см. send_to_recount/send_to_sorting). Обычная приемка в короба
     статусов не имеет вообще — завершается сразу из черновика, как и до
-    появления пересчета/разбраковки."""
+    появления пересчета/разбраковки. Строки, уже завершенные по отдельности
+    (см. complete_line — на разбраковке можно завершать построчно, не
+    дожидаясь проверки остальных) пропускаются здесь, чтобы не зачислить их
+    дважды — эта кнопка довершает только то, что еще не завершили."""
     doc = ReceivingDocument.query.get_or_404(doc_id)
     if doc.is_from_invoice_import():
         if doc.status != "sorting":
@@ -1037,36 +1067,18 @@ def complete(doc_id):
         return _next_redirect(doc.id)
 
     for line in doc.lines:
-        if line.box_id:
-            # Уже физически упаковано в короб во время приемки — минуя
-            # неразмещенный остаток и разбраковку. Короб останется без
-            # ячейки, пока его не разместят обычным способом через
-            # «Размещение».
+        if line.box_id or line.line_completed_at is not None:
+            # box_id — уже физически упаковано в короб во время приемки,
+            # минуя неразмещенный остаток и разбраковку. line_completed_at —
+            # уже завершено отдельно через "Готово" на этой же строке.
             continue
         # У строки из накладной qty до подтверждения равно заявленному
         # поставщиком количеству. Неподтвержденная позиция не является
         # фактически принятой и не должна создавать остаток на нашем складе.
         if line.expected_qty is not None and not line.confirmed:
             continue
-        good_qty = line.good_qty()
-        if good_qty > 0:
-            UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, good_qty, receiving_document=doc)
-        if line.defect_qty:
-            db.session.add(
-                SupplierReturn(
-                    warehouse_id=doc.warehouse_id,
-                    nomenclature_id=line.nomenclature_id,
-                    qty=line.defect_qty,
-                    comment=f"Брак при разбраковке приемки {doc.number}",
-                    created_by_id=current_user.id,
-                    receiving_document_id=doc.id,
-                    supplier_name=doc.supplier,
-                    invoice_number=doc.number if doc.is_from_invoice_import() else None,
-                )
-            )
-        # Расхождение с накладной не является возвратом. Во всех статусах,
-        # кроме разбраковки, учет ведется по фактически принятому line.qty;
-        # SupplierReturn создается только из явно указанного defect_qty.
+        _credit_receiving_line(doc, line)
+        line.line_completed_at = datetime.utcnow()
 
     doc.status = "completed"
     doc.completed_at = datetime.utcnow()
@@ -1078,6 +1090,59 @@ def complete(doc_id):
         f"нужно только расставить по ячейкам.",
         "success",
     )
+    return _next_redirect(doc.id)
+
+
+@bp.route("/<int:doc_id>/lines/<int:line_id>/complete-line", methods=["POST"])
+def complete_line(doc_id, line_id):
+    """Завершает ОДНУ строку разбраковки по отдельности, не дожидаясь, пока
+    проверят остальные строки документа (раньше приемку можно было
+    завершить только целиком кнопкой "Завершить приемку" — см. complete()).
+    Как только завершена последняя еще не завершенная строка, документ
+    целиком переходит в completed — так же, как при обычном завершении."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    if doc.status != "sorting":
+        flash("Документ не находится на разбраковке", "danger")
+        return _next_redirect(doc.id)
+
+    if not doc.is_from_invoice_import() and not current_user.is_admin:
+        flash(
+            "Завершение строк по отдельности доступно только для приемок, загруженных "
+            "из накладной, либо администратору",
+            "danger",
+        )
+        return _next_redirect(doc.id)
+
+    line = ReceivingLine.query.filter_by(id=line_id, document_id=doc_id).first_or_404()
+    if line.box_id:
+        flash("Товар уже упакован в короб — эта строка уже учтена", "danger")
+        return _next_redirect(doc.id)
+    if line.line_completed_at is not None:
+        flash("Строка уже завершена", "danger")
+        return _next_redirect(doc.id)
+    if line.expected_qty is not None and not line.confirmed:
+        flash("Сначала подтвердите фактическое количество на пересчете", "danger")
+        return _next_redirect(doc.id)
+
+    _credit_receiving_line(doc, line)
+    line.line_completed_at = datetime.utcnow()
+
+    remaining = [l for l in doc.lines if not l.box_id and l.line_completed_at is None]
+    if not remaining:
+        doc.status = "completed"
+        doc.completed_at = datetime.utcnow()
+
+    db.session.commit()
+
+    if not remaining:
+        flash(
+            f"Строка «{line.nomenclature.name}» завершена — это была последняя, приемка "
+            f"{doc.number} полностью завершена. Годный товар без короба зачислен в "
+            f"неразмещенный остаток склада «{doc.warehouse.name}».",
+            "success",
+        )
+    else:
+        flash(f"Строка «{line.nomenclature.name}» завершена", "success")
     return _next_redirect(doc.id)
 
 
@@ -1130,6 +1195,14 @@ def revert_to_sorting(doc_id):
     SupplierReturn.query.filter_by(
         receiving_document_id=doc.id, synced_to_1c_at=None
     ).delete()
+
+    # Строки, завершенные по отдельности (см. complete_line), тоже
+    # откатываются — иначе после возврата на разбраковку они остались бы
+    # помеченными "Готово" без возможности поправить брак или завершить
+    # заново, хотя их зачисленный остаток/возврат уже отменены выше.
+    for line in doc.lines:
+        if not line.box_id:
+            line.line_completed_at = None
 
     doc.status = "sorting"
     doc.completed_at = None
