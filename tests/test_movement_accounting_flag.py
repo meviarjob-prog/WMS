@@ -1,8 +1,14 @@
 """Ручная отметка бухгалтера "внесено в 1С" в списке перемещений — просто
 переключаемая галочка, независимая от автоматической выгрузки в 1С
-(MovementDocument.synced_to_1c_at)."""
+(MovementDocument.synced_to_1c_at). Переключается через fetch() (см.
+movement/list.html) — сама кнопка при этом несет оба варианта иконки в
+data-атрибутах (для JS), поэтому проверяем именно ВИДИМЫЙ текст кнопки
+(между > и </button>), а не просто наличие символа где-то в HTML."""
+
+import re
 
 from wms.models import MovementDocument, Warehouse
+from wms.utils.timezone import to_moscow
 
 
 def _make_document():
@@ -18,27 +24,36 @@ def _make_document():
     return doc
 
 
+def _accounting_button_text(html, doc_id):
+    match = re.search(
+        rf'data-url="/movement/{doc_id}/toggle-accounting"[^>]*>([^<]*)</button>', html
+    )
+    assert match, "Кнопка галочки '1С' не найдена в HTML"
+    return match.group(1).strip()
+
+
 def test_list_shows_unchecked_by_default(db, client_logged_in):
     doc = _make_document()
 
-    resp = client_logged_in.get("/movement/")
-    html = resp.get_data(as_text=True)
-    idx = html.find(doc.number)
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
 
-    assert "☐" in html[idx : idx + 800]
-    assert "✅" not in html[idx : idx + 800]
+    assert _accounting_button_text(html, doc.id) == "☐"
 
 
 def test_toggle_sets_and_clears_timestamp(db, client_logged_in):
     doc = _make_document()
 
-    client_logged_in.post(f"/movement/{doc.id}/toggle-accounting")
+    resp = client_logged_in.post(f"/movement/{doc.id}/toggle-accounting")
     assert doc.accounting_entered_at is not None
+    assert resp.get_json() == {
+        "ok": True,
+        "checked": True,
+        "at": to_moscow(doc.accounting_entered_at).strftime("%d.%m.%Y %H:%M"),
+    }
 
-    resp = client_logged_in.get("/movement/")
-    html = resp.get_data(as_text=True)
-    idx = html.find(doc.number)
-    assert "✅" in html[idx : idx + 800]
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    assert _accounting_button_text(html, doc.id) == "✅"
 
-    client_logged_in.post(f"/movement/{doc.id}/toggle-accounting")
+    resp = client_logged_in.post(f"/movement/{doc.id}/toggle-accounting")
     assert doc.accounting_entered_at is None
+    assert resp.get_json() == {"ok": True, "checked": False, "at": None}

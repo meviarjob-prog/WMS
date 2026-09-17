@@ -184,17 +184,25 @@
           </td>
           <td class="text-center">
             {% if can_manage_document %}
-            <button type="submit" formmethod="post" formaction="{{ url_for('movement.toggle_accounting', doc_id=d.id) }}"
+            <button type="button" class="btn btn-sm btn-link p-0 toggle-flag-btn" style="font-size:1.15rem; line-height:1; text-decoration:none;"
+                  data-url="{{ url_for('movement.toggle_accounting', doc_id=d.id) }}"
+                  data-on-icon="✅" data-off-icon="☐"
+                  data-on-title-prefix="Внесено в 1С бухгалтерией "
+                  data-off-title="Отметить: бухгалтерия внесла документ в 1С"
                   title="{{ 'Внесено в 1С бухгалтерией ' + (d.accounting_entered_at|msk).strftime('%d.%m.%Y %H:%M') if d.accounting_entered_at else 'Отметить: бухгалтерия внесла документ в 1С' }}"
-                  class="btn btn-sm btn-link p-0" style="font-size:1.15rem; line-height:1; text-decoration:none;">{{ '✅' if d.accounting_entered_at else '☐' }}</button>
+                  >{{ '✅' if d.accounting_entered_at else '☐' }}</button>
             {% else %}
               {{ '✅' if d.accounting_entered_at else '☐' }}
             {% endif %}
           </td>
           <td class="text-center">
-            <button type="submit" formmethod="post" formaction="{{ url_for('movement.toggle_marketplace_request', doc_id=d.id) }}"
+            <button type="button" class="btn btn-sm btn-link p-0 text-primary toggle-flag-btn" style="font-size:1.15rem; line-height:1; text-decoration:none;"
+                  data-url="{{ url_for('movement.toggle_marketplace_request', doc_id=d.id) }}"
+                  data-on-icon="✔" data-off-icon="☐"
+                  data-on-title-prefix="Заявка на МП создана "
+                  data-off-title="Отметить: заявка на маркетплейс создана"
                   title="{{ 'Заявка на МП создана ' + (d.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if d.marketplace_request_created_at else 'Отметить: заявка на маркетплейс создана' }}"
-                  class="btn btn-sm btn-link p-0 text-primary" style="font-size:1.15rem; line-height:1; text-decoration:none;">{{ '✔' if d.marketplace_request_created_at else '☐' }}</button>
+                  >{{ '✔' if d.marketplace_request_created_at else '☐' }}</button>
           </td>
           <td style="min-width:100px">
             <div class="d-flex flex-nowrap gap-1">
@@ -302,5 +310,24 @@
     if (!cb.checked) selectAllDocs.checked = false;
     updatePrintButtonState();
   }));
+
+  // Галочки "1С"/"Заявка на МП" — просто пометки для контроля, не влияют
+  // на сам документ (см. movement.toggle_accounting/toggle_marketplace_request),
+  // поэтому переключаем их через fetch() без перезагрузки страницы: список
+  // перемещений может быть длинным, и дергать его целиком ради одной
+  // галочки неудобно.
+  document.querySelectorAll(".toggle-flag-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      fetch(btn.dataset.url, { method: "POST" })
+        .then((r) => r.json())
+        .then((data) => {
+          if (!data.ok) return;
+          btn.textContent = data.checked ? btn.dataset.onIcon : btn.dataset.offIcon;
+          btn.title = data.checked ? btn.dataset.onTitlePrefix + data.at : btn.dataset.offTitle;
+        })
+        .finally(() => { btn.disabled = false; });
+    });
+  });
 </script>
 {% endblock %}

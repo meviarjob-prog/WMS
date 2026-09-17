@@ -1,7 +1,14 @@
 """Ручная отметка "заявка на МП создана" в списке перемещений — синяя
 галочка, независимая и от автоматической выгрузки в 1С, и от отметки
 бухгалтера "внесено в 1С" (тот же принцип, что и toggle_accounting, но
-отдельное поле — см. MovementDocument.marketplace_request_created_at)."""
+отдельное поле — см. MovementDocument.marketplace_request_created_at).
+Переключается через fetch() (см. movement/list.html) — кнопка несет оба
+варианта иконки в data-атрибутах (для JS), поэтому проверяем именно
+ВИДИМЫЙ текст кнопки (между > и </button>), а не просто наличие символа
+где-то в HTML (иначе data-off-icon="☐" ложно "находится" даже когда
+галочка на самом деле отмечена)."""
+
+import re
 
 from wms.extensions import db
 from wms.models import MovementDocument, Warehouse
@@ -18,14 +25,20 @@ def _make_document():
     return doc
 
 
+def _marketplace_button_text(html, doc_id):
+    match = re.search(
+        rf'data-url="/movement/{doc_id}/toggle-marketplace-request"[^>]*>([^<]*)</button>', html
+    )
+    assert match, "Кнопка галочки 'Заявка на МП' не найдена в HTML"
+    return match.group(1).strip()
+
+
 def test_list_shows_unchecked_by_default(db, client_logged_in):
     doc = _make_document()
 
-    resp = client_logged_in.get("/movement/")
-    html = resp.get_data(as_text=True)
-    idx = html.find(doc.number)
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
 
-    assert "☐" in html[idx : idx + 1200]
+    assert _marketplace_button_text(html, doc.id) == "☐"
 
 
 def test_toggle_sets_and_clears_timestamp(db, client_logged_in):
@@ -34,10 +47,8 @@ def test_toggle_sets_and_clears_timestamp(db, client_logged_in):
     client_logged_in.post(f"/movement/{doc.id}/toggle-marketplace-request")
     assert doc.marketplace_request_created_at is not None
 
-    resp = client_logged_in.get("/movement/")
-    html = resp.get_data(as_text=True)
-    idx = html.find(doc.number)
-    assert "✔" in html[idx : idx + 1200]
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    assert _marketplace_button_text(html, doc.id) == "✔"
 
     client_logged_in.post(f"/movement/{doc.id}/toggle-marketplace-request")
     assert doc.marketplace_request_created_at is None
@@ -90,8 +101,7 @@ def test_set_marketplace_request_number(db, client_logged_in):
     assert resp.status_code == 200
     assert doc.marketplace_request_number == "МП-12345"
     html = resp.get_data(as_text=True)
-    idx = html.find(doc.number)
-    assert "МП-12345" in html[idx : idx + 1500]
+    assert f'value="МП-12345"' in html
 
 
 def test_marketplace_request_number_can_be_cleared(db, client_logged_in):

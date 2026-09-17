@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 from sqlalchemy import and_, func, or_
 
@@ -22,6 +22,7 @@ from ..utils.excel_io import export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
 from ..utils.shipping_label_pdf import build_movement_shipping_labels_pdf
+from ..utils.timezone import to_moscow
 from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
@@ -900,11 +901,22 @@ def receive_with_discrepancy(doc_id):
 def toggle_accounting(doc_id):
     """Ручная отметка бухгалтера "внесено в 1С" — просто галочка для
     контроля, никак не влияет на сам документ и не связана с автоматической
-    выгрузкой (см. MovementDocument.accounting_entered_at)."""
+    выгрузкой (см. MovementDocument.accounting_entered_at). Отвечает JSON, а
+    не редиректом — в списке перемещений эта галочка переключается через
+    fetch(), без перезагрузки страницы (список может быть большим, а сама
+    отметка ничего в самом документе не меняет)."""
     doc = MovementDocument.query.get_or_404(doc_id)
     doc.accounting_entered_at = None if doc.accounting_entered_at else datetime.utcnow()
     db.session.commit()
-    return redirect(url_for("movement.list_documents"))
+    return jsonify(
+        {
+            "ok": True,
+            "checked": doc.accounting_entered_at is not None,
+            "at": to_moscow(doc.accounting_entered_at).strftime("%d.%m.%Y %H:%M")
+            if doc.accounting_entered_at
+            else None,
+        }
+    )
 
 
 @bp.route("/<int:doc_id>/toggle-marketplace-request", methods=["POST"])
@@ -912,13 +924,22 @@ def toggle_marketplace_request(doc_id):
     """Ручная отметка "заявка на МП создана" — так же как toggle_accounting,
     просто галочка для контроля (синяя в списке, в отличие от зеленой "1С"),
     независима и от выгрузки в 1С, и от самого статуса перемещения (см.
-    MovementDocument.marketplace_request_created_at)."""
+    MovementDocument.marketplace_request_created_at). Отвечает JSON — см.
+    комментарий в toggle_accounting."""
     doc = MovementDocument.query.get_or_404(doc_id)
     doc.marketplace_request_created_at = (
         None if doc.marketplace_request_created_at else datetime.utcnow()
     )
     db.session.commit()
-    return redirect(url_for("movement.list_documents"))
+    return jsonify(
+        {
+            "ok": True,
+            "checked": doc.marketplace_request_created_at is not None,
+            "at": to_moscow(doc.marketplace_request_created_at).strftime("%d.%m.%Y %H:%M")
+            if doc.marketplace_request_created_at
+            else None,
+        }
+    )
 
 
 @bp.route("/<int:doc_id>/marketplace-request-number", methods=["POST"])
