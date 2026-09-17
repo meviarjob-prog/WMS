@@ -36,7 +36,9 @@ def _make_item(barcode, name="Товар для 1С"):
     return item
 
 
-def _ship_box(sender, receiver, item, qty, box_number, client, accounting_entered=False, mark_received=True):
+def _ship_box(
+    sender, receiver, item, qty, box_number, client, accounting_entered=False, mark_request_created=True
+):
     box = Box(box_number=box_number, warehouse_id=sender.id, status="open")
     db.session.add(box)
     db.session.commit()
@@ -52,8 +54,11 @@ def _ship_box(sender, receiver, item, qty, box_number, client, accounting_entere
     db.session.commit()
     client.post(f"/movement/{doc.id}/complete")
     doc = MovementDocument.query.get(doc.id)
-    if mark_received:
-        doc.received_at = doc.completed_at
+    if mark_request_created:
+        # Гейт выгрузки в 1С — "Создана заявка на МП" (marketplace_request_
+        # created_at), а не "Отгружено" (см. чат) — до приемки на складе
+        # получателя ждать не нужно.
+        doc.marketplace_request_created_at = doc.completed_at
     if accounting_entered:
         from datetime import datetime
 
@@ -116,11 +121,10 @@ def test_export_excludes_movements_marked_entered_in_1c(db, client_logged_in):
     assert all(m["number"] != "PER-BOX-1C-3" for m in data["movements"])
 
 
-def test_export_excludes_movement_still_in_transit(db, client_logged_in):
-    """Перемещение выгружается в 1С только когда дошло до статуса
-    "Отгружено" (received_at заполнен кнопкой "Принято на складе", см.
-    movement.receive) — пока товар считается едущим ("в пути"), в 1С его
-    заводить рано: расхождение при приемке еще может поменять количество."""
+def test_export_excludes_movement_before_marketplace_request_created(db, client_logged_in):
+    """Перемещение выгружается в 1С только когда дошло до статуса "Создана
+    заявка" (marketplace_request_created_at заполнен, см. чат) — на "Собрано"
+    выгружать еще рано, а ждать "Отгружено" (Принято на складе) не нужно."""
     _set_token()
     sender = Warehouse(code="WH-1C-9", name="Основной склад")
     city = Warehouse(code="WH-1C-10", name="ОЗОН: Уфа", marketplace="ozon", marketplace_city="Уфа")
@@ -128,8 +132,8 @@ def test_export_excludes_movement_still_in_transit(db, client_logged_in):
     db.session.commit()
     item = _make_item("9990000007")
 
-    doc = _ship_box(sender, city, item, 4, "BOX-1C-4", client_logged_in, mark_received=False)
-    assert doc.received_at is None
+    doc = _ship_box(sender, city, item, 4, "BOX-1C-4", client_logged_in, mark_request_created=False)
+    assert doc.marketplace_request_created_at is None
 
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     data = resp.get_json()

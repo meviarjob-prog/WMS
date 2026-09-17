@@ -35,7 +35,7 @@
     {% endif %}
     {% if can_manage_document and doc.status == 'draft' %}
     <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
-      <button type="submit" class="btn btn-success">✅ Завершить перемещение</button>
+      <button type="submit" class="btn btn-success">📦 Собрано</button>
     </form>
     {% elif can_manage_document and doc.status == 'completed' and not doc.received_at %}
       {% if not doc.marketplace_request_created_at %}

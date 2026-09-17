@@ -26,7 +26,7 @@
   <div class="col-md-6">
     <div class="card p-3">
       <h5>Что ждет выгрузки</h5>
-      <p>Перемещений (отгруженных): <b>{{ pending_movements }}</b></p>
+      <p>Перемещений (создана заявка на МП): <b>{{ pending_movements }}</b></p>
       <p>Инвентаризаций (завершенных): <b>{{ pending_inventories }}</b></p>
       <p>Возвратов поставщику (из разбраковки приемок): <b>{{ pending_supplier_returns }}</b>
         — <a href="{{ url_for('receiving.returns_list') }}">список со статусом выгрузки</a></p>

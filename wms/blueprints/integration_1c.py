@@ -90,7 +90,7 @@ def settings():
     pending_movements = (
         MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
         .filter(
-            MovementDocument.received_at.isnot(None),
+            MovementDocument.marketplace_request_created_at.isnot(None),
             MovementDocument.accounting_entered_at.is_(None),
         )
         .count()
@@ -280,10 +280,10 @@ def _receiving_adjustments_export():
 @bp.route("/api/export")
 def export():
     """Отдает документы, готовые к переносу в 1С: перемещение — только когда
-    в WMS оно дошло до статуса "Отгружено" (кнопка "Принято на складе",
-    см. movement.receive, doc.received_at заполнен) — до этого момента товар
-    считается едущим и в 1С не переносится, чтобы бухгалтерия не заводила
-    документ на то, что еще может измениться (расхождение при приемке).
+    в WMS дошло до статуса "Создана заявка" (marketplace_request_created_at
+    заполнен) — на сборке/собрано еще рано, а ждать "Отгружено" (кнопка
+    "Принято на складе", doc.received_at) не нужно: как только заявка на
+    маркетплейс создана, документ уже достаточно определен для 1С.
     Инвентаризация — завершенные. Уже выгруженные (synced_to_1c_at заполнен)
     не отдаются повторно — 1С подтверждает получение через export/confirm.
     Перемещения, которые бухгалтер уже отметил галочкой "внесено в 1С"
@@ -295,7 +295,7 @@ def export():
     movements = (
         MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
         .filter(
-            MovementDocument.received_at.isnot(None),
+            MovementDocument.marketplace_request_created_at.isnot(None),
             MovementDocument.accounting_entered_at.is_(None),
         )
         .order_by(MovementDocument.id)

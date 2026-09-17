@@ -171,7 +171,7 @@ def test_movement_view_permission_shows_foreign_movements_read_only(db, client):
     assert movement.number in html
     detail = client.get(f"/movement/{movement.id}")
     assert detail.status_code == 200
-    assert "Завершить перемещение" not in detail.get_data(as_text=True)
+    assert "📦 Собрано" not in detail.get_data(as_text=True)
     assert client.post(f"/movement/{movement.id}/complete").status_code == 404
 
 
@@ -347,7 +347,7 @@ def test_movement_complete_permission_allows_completing_foreign_movement(db, cli
     _login(client, manager)
 
     detail_html = client.get(f"/movement/{movement.id}").get_data(as_text=True)
-    assert "Завершить перемещение" in detail_html
+    assert "📦 Собрано" in detail_html
 
     resp = client.post(f"/movement/{movement.id}/complete", follow_redirects=True)
     assert resp.status_code == 200
