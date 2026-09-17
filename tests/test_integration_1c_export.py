@@ -116,11 +116,11 @@ def test_export_excludes_movements_marked_entered_in_1c(db, client_logged_in):
     assert all(m["number"] != "PER-BOX-1C-3" for m in data["movements"])
 
 
-def test_export_includes_movement_still_in_transit(db, client_logged_in):
-    """Перемещение выгружается в 1С сразу по завершении в WMS, не дожидаясь
-    "Принято на складе" — в 1С документ "Перемещение товаров" как раз и
-    отражает то, что товар в пути; отдельный документ по факту приемки
-    заводится в 1С вручную бухгалтерией."""
+def test_export_excludes_movement_still_in_transit(db, client_logged_in):
+    """Перемещение выгружается в 1С только когда дошло до статуса
+    "Отгружено" (received_at заполнен кнопкой "Принято на складе", см.
+    movement.receive) — пока товар считается едущим ("в пути"), в 1С его
+    заводить рано: расхождение при приемке еще может поменять количество."""
     _set_token()
     sender = Warehouse(code="WH-1C-9", name="Основной склад")
     city = Warehouse(code="WH-1C-10", name="ОЗОН: Уфа", marketplace="ozon", marketplace_city="Уфа")
@@ -133,7 +133,7 @@ def test_export_includes_movement_still_in_transit(db, client_logged_in):
 
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     data = resp.get_json()
-    assert any(m["number"] == "PER-BOX-1C-4" for m in data["movements"])
+    assert all(m["number"] != "PER-BOX-1C-4" for m in data["movements"])
 
 
 def test_export_comment_includes_marketplace_request_number(db, client_logged_in):

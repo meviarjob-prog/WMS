@@ -7,9 +7,20 @@
 <div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
   <div>
     <h3 class="mb-1">Перемещение {{ doc.number }}
-      <span class="badge badge-status-{{ doc.status }}">{{ {'draft': 'Черновик', 'completed': 'Завершен', 'merged': 'Объединен'}.get(doc.status, doc.status) }}</span>
-      {% if doc.status == 'merged' and doc.merged_into %}
-      <a href="{{ url_for('movement.detail', doc_id=doc.merged_into.id) }}">→ {{ doc.merged_into.number }}</a>
+      {% if doc.status == 'merged' %}
+      <span class="badge badge-status-merged">Объединен</span>
+      {% if doc.merged_into %}<a href="{{ url_for('movement.detail', doc_id=doc.merged_into.id) }}">→ {{ doc.merged_into.number }}</a>{% endif %}
+      {% else %}
+      <span class="status-chips" role="group" aria-label="Статус перемещения">
+        <span class="status-chip status-chip-wide status-chip-onassembly status-chip-reached"
+              title="На сборке: {{ (doc.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Сб</span>
+        <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if doc.completed_at else '' }}"
+              title="Собрано: {{ (doc.completed_at|msk).strftime('%d.%m.%Y %H:%M') if doc.completed_at else 'еще не наступило' }}">Со</span>
+        <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at else '' }}"
+              title="Создана заявка: {{ (doc.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if doc.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
+        <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.received_at else '' }}"
+              title="Отгружено: {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') if doc.received_at else 'еще не наступило' }}">От</span>
+      </span>
       {% endif %}
     </h3>
     <div class="text-muted">{{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
@@ -27,13 +38,17 @@
       <button type="submit" class="btn btn-success">✅ Завершить перемещение</button>
     </form>
     {% elif can_manage_document and doc.status == 'completed' and not doc.received_at %}
-    <form method="post" action="{{ url_for('movement.receive', doc_id=doc.id) }}" class="d-inline">
-      <button type="submit" class="btn btn-warning" title="До этой кнопки товар считается «в пути» и не засчитывается в план отгрузок">📥 Принято на складе</button>
-    </form>
-    <a class="btn btn-outline-warning" href="{{ url_for('movement.receive_with_discrepancy', doc_id=doc.id) }}"
-       title="Если на месте приняли не столько, сколько отправили — недостача или излишек">⚠️ Принято с расхождением</a>
+      {% if not doc.marketplace_request_created_at %}
+      <form method="post" action="{{ url_for('movement.mark_marketplace_request', doc_id=doc.id) }}" class="d-inline">
+        <button type="submit" class="btn btn-primary" title="Отметить: заявка на маркетплейс создана">🔖 Отметить: заявка на МП создана</button>
+      </form>
+      <span class="text-muted small d-block mt-1">Обязательный шаг перед приемкой — после отметки появится кнопка «Принято на складе».</span>
+      {% else %}
+      <a class="btn btn-warning" href="{{ url_for('movement.receive', doc_id=doc.id) }}"
+         title="До этой кнопки товар считается «в пути» и не засчитывается в план отгрузок">📥 Принято на складе</a>
+      {% endif %}
     {% elif doc.status == 'completed' and doc.received_at %}
-    <span class="badge bg-success">Принято на складе {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
+    <span class="badge bg-success">Отгружено {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
     {% if doc.discrepancies %}<span class="badge bg-warning text-dark">С расхождением</span>{% endif %}
     {% elif doc.status == 'completed' %}
     <span class="text-warning-emphasis">В пути</span>

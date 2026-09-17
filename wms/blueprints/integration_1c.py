@@ -89,7 +89,10 @@ def settings():
 
     pending_movements = (
         MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
-        .filter(MovementDocument.accounting_entered_at.is_(None))
+        .filter(
+            MovementDocument.received_at.isnot(None),
+            MovementDocument.accounting_entered_at.is_(None),
+        )
         .count()
     )
     pending_inventories = InventoryDocument.query.filter_by(
@@ -276,22 +279,25 @@ def _receiving_adjustments_export():
 
 @bp.route("/api/export")
 def export():
-    """Отдает документы, готовые к переносу в 1С: перемещение — сразу как
-    завершено в WMS (кнопка "Завершить перемещение"), не дожидаясь "Принято
-    на складе" — в 1С документ "Перемещение товаров" как раз и отражает,
-    что товар в пути; отдельный документ по факту приемки на складе
-    назначения бухгалтерия заводит в 1С вручную. Инвентаризация —
-    завершенные. Уже выгруженные (synced_to_1c_at заполнен) не отдаются
-    повторно — 1С подтверждает получение через export/confirm. Перемещения,
-    которые бухгалтер уже отметил галочкой "внесено в 1С" вручную
-    (accounting_entered_at заполнен), тоже не отдаются — он ведет их отдельно
-    и повторный автоматический перенос задвоил бы документ."""
+    """Отдает документы, готовые к переносу в 1С: перемещение — только когда
+    в WMS оно дошло до статуса "Отгружено" (кнопка "Принято на складе",
+    см. movement.receive, doc.received_at заполнен) — до этого момента товар
+    считается едущим и в 1С не переносится, чтобы бухгалтерия не заводила
+    документ на то, что еще может измениться (расхождение при приемке).
+    Инвентаризация — завершенные. Уже выгруженные (synced_to_1c_at заполнен)
+    не отдаются повторно — 1С подтверждает получение через export/confirm.
+    Перемещения, которые бухгалтер уже отметил галочкой "внесено в 1С"
+    вручную (accounting_entered_at заполнен), тоже не отдаются — он ведет их
+    отдельно и повторный автоматический перенос задвоил бы документ."""
     if not _check_token():
         return jsonify({"ok": False, "error": "Неверный или отсутствующий токен"}), 401
 
     movements = (
         MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
-        .filter(MovementDocument.accounting_entered_at.is_(None))
+        .filter(
+            MovementDocument.received_at.isnot(None),
+            MovementDocument.accounting_entered_at.is_(None),
+        )
         .order_by(MovementDocument.id)
         .all()
     )

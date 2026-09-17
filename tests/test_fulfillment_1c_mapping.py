@@ -130,6 +130,9 @@ def test_export_uses_configured_fulfillment_1c_name(db, client_logged_in):
     )
     db.session.commit()
     client_logged_in.post(f"/movement/{doc.id}/complete")
+    doc = MovementDocument.query.get(doc.id)
+    doc.received_at = doc.completed_at
+    db.session.commit()
 
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     data = resp.get_json()

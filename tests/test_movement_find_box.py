@@ -39,7 +39,7 @@ def test_find_box_shows_document(db, client_logged_in):
     html = resp.get_data(as_text=True)
 
     assert doc.number in html
-    assert "Черновик" in html
+    assert "На сборке" in html
 
 
 def test_find_box_not_in_any_movement(db, client_logged_in):

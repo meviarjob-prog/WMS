@@ -1,19 +1,20 @@
 {% extends "base.html" %}
-{% block title %}Приемка с расхождением {{ doc.number }}{% endblock %}
+{% block title %}Принято на складе {{ doc.number }}{% endblock %}
 {% block content %}
 <p><a href="{{ url_for('movement.detail', doc_id=doc.id) }}">&larr; Перемещение {{ doc.number }}</a></p>
 
-<h3 class="mb-1">Приемка с расхождением — {{ doc.number }}</h3>
+<h3 class="mb-1">Принято на складе — {{ doc.number }}</h3>
 <div class="text-muted mb-4">{{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}</div>
 
 <div class="alert alert-warning">
   Укажите, сколько каждого товара реально приняли на складе «{{ doc.to_warehouse.name }}».
-  По умолчанию проставлено то, что было упаковано в коробах при отправке — исправьте только
-  те строки, где по факту недостача или излишек. Именно введенное здесь количество зачтется
-  в выполнение плана отгрузок, а расхождение сохранится для учета.
+  По умолчанию проставлено то, что было упаковано в коробах при отправке — если все совпадает,
+  просто подтвердите как есть; исправьте только те строки, где по факту недостача или излишек.
+  Именно введенное здесь количество зачтется в выполнение плана отгрузок, а расхождение (если
+  оно есть) сохранится для учета. После подтверждения перемещение получает статус «Отгружено».
 </div>
 
-<form method="post" action="{{ url_for('movement.receive_with_discrepancy', doc_id=doc.id) }}">
+<form method="post" action="{{ url_for('movement.receive', doc_id=doc.id) }}">
   <div class="card p-3">
     <table class="table table-sm align-middle">
       <thead><tr><th>Товар</th><th>Отправлено</th><th style="width:160px">Принято по факту</th></tr></thead>
@@ -30,7 +31,7 @@
       {% endfor %}
       </tbody>
     </table>
-    <button type="submit" class="btn btn-warning">⚠️ Подтвердить приемку с расхождением</button>
+    <button type="submit" class="btn btn-warning">📥 Подтвердить приемку</button>
   </div>
 </form>
 {% endblock %}

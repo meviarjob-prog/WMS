@@ -1,8 +1,11 @@
-"""«Принято с расхождением» — альтернатива обычной «Принято на складе»,
-когда на месте приняли не столько, сколько отправили (недостача/излишек).
-См. movement.receive_with_discrepancy: указанное на этой форме фактическое
-количество зачитывается в план отгрузок вместо количества из коробов, а
-расхождение сохраняется отдельной строкой (MovementReceiptDiscrepancy)."""
+"""«Принято на складе» — единственная кнопка приемки перемещения (см. чат:
+раньше рядом была отдельная «Принято с расхождением», ее убрали — эта форма
+покрывает оба случая: обычную приемку и приемку с недостачей/излишком).
+См. movement.receive: указанное на этой форме фактическое количество
+зачитывается в план отгрузок вместо количества из коробов, а расхождение
+(если оно есть) сохраняется отдельной строкой (MovementReceiptDiscrepancy).
+Отметка "заявка на маркетплейс создана" обязательна перед приемкой для
+ВСЕХ перемещений (см. чат) — без нее кнопка/форма приемки недоступна."""
 
 from wms.extensions import db
 from wms.models import (
@@ -18,7 +21,7 @@ from wms.models import (
 )
 
 
-def _make_completed_document(qty=10):
+def _make_completed_document(qty=10, marketplace_request_created=True):
     sender = Warehouse(code="WH-D1A", name="Склад-отправитель")
     dest = Warehouse(code="WH-D1B", name="ОЗОН: Тверь", marketplace="ozon", marketplace_city="Тверь")
     db.session.add_all([sender, dest])
@@ -46,6 +49,10 @@ def _make_completed_document(qty=10):
         number="PER-D0001", from_warehouse_id=sender.id, to_warehouse_id=dest.id,
         status="completed",
     )
+    if marketplace_request_created:
+        from datetime import datetime
+
+        doc.marketplace_request_created_at = datetime.utcnow()
     db.session.add(doc)
     db.session.commit()
     db.session.add(
@@ -55,10 +62,10 @@ def _make_completed_document(qty=10):
     return doc, item, plan_line
 
 
-def test_discrepancy_form_shows_expected_quantities(db, client_logged_in):
+def test_receive_form_shows_expected_quantities(db, client_logged_in):
     doc, item, _plan_line = _make_completed_document(qty=10)
 
-    resp = client_logged_in.get(f"/movement/{doc.id}/receive-with-discrepancy")
+    resp = client_logged_in.get(f"/movement/{doc.id}/receive")
 
     html = resp.get_data(as_text=True)
     assert resp.status_code == 200
@@ -70,7 +77,7 @@ def test_shortage_credits_actual_received_qty_and_records_discrepancy(db, client
     doc, item, plan_line = _make_completed_document(qty=10)
 
     resp = client_logged_in.post(
-        f"/movement/{doc.id}/receive-with-discrepancy",
+        f"/movement/{doc.id}/receive",
         data={f"qty_{item.id}": "7"},
         follow_redirects=True,
     )
@@ -93,7 +100,7 @@ def test_excess_credits_actual_received_qty_and_records_discrepancy(db, client_l
     doc, item, plan_line = _make_completed_document(qty=10)
 
     client_logged_in.post(
-        f"/movement/{doc.id}/receive-with-discrepancy",
+        f"/movement/{doc.id}/receive",
         data={f"qty_{item.id}": "12"},
     )
 
@@ -108,7 +115,7 @@ def test_matching_quantity_creates_no_discrepancy_row(db, client_logged_in):
     doc, item, plan_line = _make_completed_document(qty=10)
 
     client_logged_in.post(
-        f"/movement/{doc.id}/receive-with-discrepancy",
+        f"/movement/{doc.id}/receive",
         data={f"qty_{item.id}": "10"},
     )
 
@@ -117,7 +124,7 @@ def test_matching_quantity_creates_no_discrepancy_row(db, client_logged_in):
     assert MovementReceiptDiscrepancy.query.filter_by(document_id=doc.id).count() == 0
 
 
-def test_cannot_receive_with_discrepancy_before_document_completed(db, client_logged_in):
+def test_cannot_receive_before_document_completed(db, client_logged_in):
     sender = Warehouse(code="WH-D2A", name="Склад-отправитель 2")
     dest = Warehouse(code="WH-D2B", name="ОЗОН: Уфа")
     db.session.add_all([sender, dest])
@@ -126,15 +133,45 @@ def test_cannot_receive_with_discrepancy_before_document_completed(db, client_lo
     db.session.add(doc)
     db.session.commit()
 
-    resp = client_logged_in.get(f"/movement/{doc.id}/receive-with-discrepancy", follow_redirects=True)
+    resp = client_logged_in.get(f"/movement/{doc.id}/receive", follow_redirects=True)
 
     assert "Сначала завершите перемещение" in resp.get_data(as_text=True)
 
 
-def test_cannot_receive_with_discrepancy_twice(db, client_logged_in):
+def test_cannot_receive_twice(db, client_logged_in):
     doc, item, _plan_line = _make_completed_document(qty=10)
-    client_logged_in.post(f"/movement/{doc.id}/receive-with-discrepancy", data={f"qty_{item.id}": "10"})
+    client_logged_in.post(f"/movement/{doc.id}/receive", data={f"qty_{item.id}": "10"})
 
-    resp = client_logged_in.get(f"/movement/{doc.id}/receive-with-discrepancy", follow_redirects=True)
+    resp = client_logged_in.get(f"/movement/{doc.id}/receive", follow_redirects=True)
 
     assert "уже отмечено как принятое" in resp.get_data(as_text=True)
+
+
+def test_cannot_receive_without_marketplace_request_created(db, client_logged_in):
+    """Отметка "заявка на МП создана" обязательна для ВСЕХ перемещений перед
+    приемкой — без нее форма/кнопка "Принято на складе" недоступна вовсе,
+    даже POST напрямую по ссылке отклоняется."""
+    doc, item, _plan_line = _make_completed_document(qty=10, marketplace_request_created=False)
+
+    resp = client_logged_in.get(f"/movement/{doc.id}/receive", follow_redirects=True)
+    assert "Сначала отметьте, что заявка на маркетплейс создана" in resp.get_data(as_text=True)
+    assert MovementDocument.query.get(doc.id).received_at is None
+
+    resp = client_logged_in.post(
+        f"/movement/{doc.id}/receive", data={f"qty_{item.id}": "10"}, follow_redirects=True
+    )
+    assert "Сначала отметьте, что заявка на маркетплейс создана" in resp.get_data(as_text=True)
+    assert MovementDocument.query.get(doc.id).received_at is None
+
+
+def test_marking_marketplace_request_unblocks_receive(db, client_logged_in):
+    doc, item, _plan_line = _make_completed_document(qty=10, marketplace_request_created=False)
+
+    client_logged_in.post(f"/movement/{doc.id}/mark-marketplace-request")
+    assert MovementDocument.query.get(doc.id).marketplace_request_created_at is not None
+
+    resp = client_logged_in.post(
+        f"/movement/{doc.id}/receive", data={f"qty_{item.id}": "10"}, follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert MovementDocument.query.get(doc.id).received_at is not None

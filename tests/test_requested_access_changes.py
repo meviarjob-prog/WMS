@@ -353,6 +353,8 @@ def test_movement_complete_permission_allows_completing_foreign_movement(db, cli
     assert resp.status_code == 200
     assert MovementDocument.query.get(movement.id).status == "completed"
 
+    client.post(f"/movement/{movement.id}/mark-marketplace-request")
+
     resp = client.post(f"/movement/{movement.id}/receive", follow_redirects=True)
     assert resp.status_code == 200
     assert MovementDocument.query.get(movement.id).received_at is not None

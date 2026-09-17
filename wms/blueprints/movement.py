@@ -62,19 +62,19 @@ def _can_view_movement_document(doc):
 BOOKKEEPING_ENDPOINTS = {
     "movement.toggle_accounting",
     "movement.toggle_marketplace_request",
+    "movement.mark_marketplace_request",
     "movement.update_marketplace_request_number",
 }
 
-# "Завершить перемещение"/"Принято на складе"/"Принято с расхождением" —
-# настоящее изменение документа (в отличие от BOOKKEEPING_ENDPOINTS выше),
-# но право на него можно выдать отдельно от авторства/админства (см.
+# "Завершить перемещение"/"Принято на складе" — настоящее изменение
+# документа (в отличие от BOOKKEEPING_ENDPOINTS выше), но право на него
+# можно выдать отдельно от авторства/админства (см.
 # User.movement_complete_allowed, настраивается в «Настройки» → доступ к
 # разделам) — например, заведующему складом назначения, который принимает
 # чужие перемещения.
 COMPLETION_ENDPOINTS = {
     "movement.complete",
     "movement.receive",
-    "movement.receive_with_discrepancy",
 }
 
 
@@ -798,29 +798,6 @@ def complete(doc_id):
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
-@bp.route("/<int:doc_id>/receive", methods=["POST"])
-def receive(doc_id):
-    """Подтверждение фактической приемки на складе назначения — только
-    после этого выполнение зачисляется в план отгрузок (до этого товар
-    висит в статусе "в пути", см. shipment_plan.dashboard)."""
-    doc = MovementDocument.query.get_or_404(doc_id)
-    if doc.status != "completed":
-        flash("Сначала завершите перемещение", "danger")
-        return redirect(url_for("movement.detail", doc_id=doc.id))
-
-    if doc.received_at is not None:
-        flash("Перемещение уже отмечено как принятое", "danger")
-        return redirect(url_for("movement.detail", doc_id=doc.id))
-
-    for line in doc.lines:
-        _apply_shipment_fulfillment(line.box, doc.to_warehouse_id)
-
-    doc.received_at = datetime.utcnow()
-    db.session.commit()
-    flash(f"Перемещение {doc.number} принято на складе «{doc.to_warehouse.name}»", "success")
-    return redirect(url_for("movement.detail", doc_id=doc.id))
-
-
 def _expected_qty_by_nomenclature(doc):
     """Сколько какого товара по факту едет в этом перемещении — сумма по
     всем коробам документа."""
@@ -831,14 +808,19 @@ def _expected_qty_by_nomenclature(doc):
     return expected
 
 
-@bp.route("/<int:doc_id>/receive-with-discrepancy", methods=["GET", "POST"])
-def receive_with_discrepancy(doc_id):
-    """Альтернатива обычной "Принято на складе" — на месте приняли не
-    столько, сколько отправили (недостача или излишек). По каждому товару
-    указывается фактически принятое количество; именно оно, а не то, что
-    было упаковано в коробах, зачисляется в выполнение плана отгрузок, а
-    само расхождение сохраняется отдельной строкой (см.
-    MovementReceiptDiscrepancy) для учета, а не молча теряется."""
+@bp.route("/<int:doc_id>/receive", methods=["GET", "POST"])
+def receive(doc_id):
+    """Единственная кнопка "Принято на складе" (см. чат: раньше рядом была
+    отдельная "Принято с расхождением" — убрали, эта форма покрывает оба
+    случая сразу). По каждому товару показываем, сколько отправлено, по
+    умолчанию проставлено столько же — обычная приемка без расхождений это
+    просто подтверждает как есть; если по факту меньше/больше, исправляют
+    нужные строки. Именно введенное здесь количество, а не то, что было
+    упаковано в коробах, зачисляется в выполнение плана отгрузок; настоящее
+    расхождение сохраняется отдельной строкой (см. MovementReceiptDiscrepancy)
+    для учета, а не молча теряется. Только после этой кнопки документ
+    считается статусом "Отгружено" и становится доступен для выгрузки в 1С
+    (см. integration_1c.export_data)."""
     doc = MovementDocument.query.get_or_404(doc_id)
     if doc.status != "completed":
         flash("Сначала завершите перемещение", "danger")
@@ -846,6 +828,14 @@ def receive_with_discrepancy(doc_id):
 
     if doc.received_at is not None:
         flash("Перемещение уже отмечено как принятое", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if doc.marketplace_request_created_at is None:
+        flash(
+            "Сначала отметьте, что заявка на маркетплейс создана — "
+            "это обязательный шаг перед приемкой на складе",
+            "danger",
+        )
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
     expected = _expected_qty_by_nomenclature(doc)
@@ -865,8 +855,9 @@ def receive_with_discrepancy(doc_id):
             ),
             key=lambda r: r["nomenclature"].name,
         )
-        return render_template("movement/receive_discrepancy.html", doc=doc, rows=rows)
+        return render_template("movement/receive.html", doc=doc, rows=rows)
 
+    has_discrepancy = False
     for nomenclature_id, expected_qty in expected.items():
         received_qty = request.form.get(f"qty_{nomenclature_id}", type=float)
         if received_qty is None or received_qty < 0:
@@ -879,6 +870,7 @@ def receive_with_discrepancy(doc_id):
             plan_line.fulfilled_qty += received_qty
 
         if received_qty != expected_qty:
+            has_discrepancy = True
             db.session.add(
                 MovementReceiptDiscrepancy(
                     document_id=doc.id,
@@ -890,10 +882,13 @@ def receive_with_discrepancy(doc_id):
 
     doc.received_at = datetime.utcnow()
     db.session.commit()
-    flash(
-        f"Перемещение {doc.number} принято с расхождением на складе «{doc.to_warehouse.name}»",
-        "warning",
-    )
+    if has_discrepancy:
+        flash(
+            f"Перемещение {doc.number} принято с расхождением на складе «{doc.to_warehouse.name}»",
+            "warning",
+        )
+    else:
+        flash(f"Перемещение {doc.number} отгружено — принято на складе «{doc.to_warehouse.name}»", "success")
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
@@ -940,6 +935,22 @@ def toggle_marketplace_request(doc_id):
             else None,
         }
     )
+
+
+@bp.route("/<int:doc_id>/mark-marketplace-request", methods=["POST"])
+def mark_marketplace_request(doc_id):
+    """Отдельная (не-AJAX) кнопка на детальной странице — тот же флаг, что и
+    toggle_marketplace_request в списке (см. MovementDocument.
+    marketplace_request_created_at), но обычный редирект вместо JSON: этот
+    шаг здесь обязателен перед "Принято на складе" (см. movement.receive),
+    поэтому после него страница должна перерисоваться и показать саму
+    кнопку приемки, а toggle-в-обратную-сторону тут не нужен."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.marketplace_request_created_at is None:
+        doc.marketplace_request_created_at = datetime.utcnow()
+        db.session.commit()
+        flash("Отмечено: заявка на маркетплейс создана", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
 @bp.route("/<int:doc_id>/marketplace-request-number", methods=["POST"])

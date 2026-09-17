@@ -79,6 +79,20 @@ body {
 .status-chip-sorting { background-color: #ffc107; color: #000; }
 .status-chip-completed { background-color: #198754; }
 
+/* Строка текстовых фильтров под заголовками таблицы (список перемещений) —
+   компактные поля без лишней высоты строки заголовка. */
+.table-filter-row th { padding-top: 0; padding-bottom: .5rem; }
+.table-filter-row input { min-width: 70px; }
+
+/* Плашки статусов перемещения (на сборке/собрано/создана заявка/
+   отгружено) — тот же принцип, что и у приемки выше, только чуть шире
+   (двухбуквенные подписи вместо одной буквы, лучше читаются в списке). */
+.status-chip-wide { min-width: 2.4em; }
+.status-chip-onassembly { background-color: #6c757d; }
+.status-chip-assembled { background-color: #fd7e14; }
+.status-chip-requested { background-color: #ffc107; color: #000; }
+.status-chip-shipped { background-color: #198754; }
+
 /* ---- Мобильный экран ---- */
 
 /* Широкие таблицы не должны ломать верстку на телефоне — скроллим по горизонтали */
