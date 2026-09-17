@@ -174,6 +174,54 @@ def test_movement_view_permission_shows_foreign_movements_read_only(db, client):
     assert client.post(f"/movement/{movement.id}/complete").status_code == 404
 
 
+def test_non_admin_viewer_can_toggle_marketplace_bookkeeping_marks_on_foreign_movement(db, client):
+    """Баг: галочки "внесено в 1С"/"заявка на МП создана" и номер заявки —
+    это просто пометки для контроля (см. movement.toggle_accounting/
+    toggle_marketplace_request/update_marketplace_request_number), они не
+    меняют сам документ. Но общий before_request раньше требовал
+    авторства/админства для ЛЮБОГО изменяющего маршрута с doc_id, поэтому
+    пользователь с правом "видит все перемещения" (не автор, не админ)
+    получал 404 при попытке их проставить на чужом документе."""
+    viewer = _user("movement-bookkeeper")
+    author = _user("movement-bookkeeping-author")
+    viewer.movement_view_allowed = True
+    warehouse = Warehouse(code="WH-MOVE-BOOK-1", name="Основной")
+    target = Warehouse(code="WH-MOVE-BOOK-2", name="Склад №2")
+    db.session.add_all([warehouse, target])
+    db.session.commit()
+    movement = MovementDocument(
+        number="MOVE-BOOKKEEPING",
+        from_warehouse_id=warehouse.id,
+        to_warehouse_id=target.id,
+        created_by_id=author.id,
+        status="completed",
+    )
+    db.session.add(movement)
+    db.session.commit()
+
+    _login(client, viewer)
+
+    resp = client.post(f"/movement/{movement.id}/toggle-accounting", follow_redirects=True)
+    assert resp.status_code == 200
+    assert MovementDocument.query.get(movement.id).accounting_entered_at is not None
+
+    resp = client.post(f"/movement/{movement.id}/toggle-marketplace-request", follow_redirects=True)
+    assert resp.status_code == 200
+    assert MovementDocument.query.get(movement.id).marketplace_request_created_at is not None
+
+    resp = client.post(
+        f"/movement/{movement.id}/marketplace-request-number",
+        data={"marketplace_request_number": "REQ-999"},
+        follow_redirects=True,
+    )
+    assert resp.status_code == 200
+    assert MovementDocument.query.get(movement.id).marketplace_request_number == "REQ-999"
+
+    # Реальное изменение документа (не просто пометка) чужим не-админом
+    # по-прежнему запрещено.
+    assert client.post(f"/movement/{movement.id}/complete").status_code == 404
+
+
 def test_receiving_offers_only_main_and_second_warehouse(db, client_logged_in):
     main = Warehouse(code="WH-001", name="Основной")
     second = Warehouse(code="WH-002", name="Склад №2")

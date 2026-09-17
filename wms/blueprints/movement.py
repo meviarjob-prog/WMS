@@ -50,6 +50,20 @@ def _can_view_movement_document(doc):
     )
 
 
+# Отметки "внесено в 1С"/"заявка на МП создана"/номер заявки — не меняют
+# сам документ перемещения (см. toggle_accounting/toggle_marketplace_request/
+# update_marketplace_request_number), это просто пометки для контроля,
+# которые может ставить любой, кто видит документ (например, бухгалтер или
+# менеджер маркетплейса — не обязательно автор перемещения и не обязательно
+# админ). Без этого исключения не-админ, открывший чужое перемещение через
+# "Просмотр всех перемещений", получал 404 при попытке поставить галочку.
+BOOKKEEPING_ENDPOINTS = {
+    "movement.toggle_accounting",
+    "movement.toggle_marketplace_request",
+    "movement.update_marketplace_request_number",
+}
+
+
 @bp.before_request
 def _restrict_document_access():
     document_id = (request.view_args or {}).get("doc_id")
@@ -57,15 +71,15 @@ def _restrict_document_access():
         return None
     doc = MovementDocument.query.get_or_404(document_id)
     readonly_endpoints = {"movement.detail", "movement.export_document"}
-    if request.endpoint in readonly_endpoints:
+    if request.endpoint in readonly_endpoints or request.endpoint in BOOKKEEPING_ENDPOINTS:
         if not _can_view_movement_document(doc):
             abort(404)
         return None
-    # Изменяющие маршруты (добавить/убрать короб, завершить, принять,
-    # удалить и т.п.) — только автор или админ, как и раньше. "Просмотр
-    # всех перемещений" здесь не действует (он read-only), а совместный
-    # доступ к черновику дальше даем только через route_box_add (у него
-    # нет doc_id в URL, этот хук на него не срабатывает) — не через
+    # Остальные изменяющие маршруты (добавить/убрать короб, завершить,
+    # принять, удалить и т.п.) — только автор или админ, как и раньше.
+    # "Просмотр всех перемещений" здесь не действует (он read-only), а
+    # совместный доступ к черновику дальше даем только через route_box_add
+    # (у него нет doc_id в URL, этот хук на него не срабатывает) — не через
     # произвольное изменение чужого документа по прямой ссылке.
     if not (current_user.is_admin or doc.created_by_id == current_user.id):
         abort(404)
