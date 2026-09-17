@@ -202,12 +202,20 @@
   <form id="bulkQtyForm" method="post" action="{{ url_for('receiving.update_lines_bulk', doc_id=doc.id) }}">
   {% endif %}
   <table class="table table-sm d-none d-md-table">
-    <thead><tr><th>Товар</th><th>Короб</th><th>Кол-во</th><th>{% if doc.status in ('sorting', 'completed') %}Брак{% endif %}</th>{% if doc.status == 'sorting' %}<th>Статус</th>{% endif %}</tr></thead>
+    <thead><tr><th>Товар</th><th>Короб</th><th>По накладной</th><th>Кол-во</th><th>{% if doc.status in ('sorting', 'completed') %}Брак{% endif %}</th>{% if doc.status == 'sorting' %}<th>Статус</th>{% endif %}</tr></thead>
     <tbody>
     {% for line in lines %}
+      {% set eq = line.expected_qty %}
+      {% set mismatch = eq is not none and line.qty != eq %}
       <tr>
         <td>{{ line.nomenclature.name }} <span class="text-muted">({{ line.nomenclature.sku }})</span></td>
         <td>{% if line.box %}<a href="{{ url_for('boxes.detail', box_id=line.box.id) }}">{{ line.box.box_number }}</a>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+        <td class="{{ 'text-danger fw-semibold' if mismatch else 'text-muted' }}">
+          {% if eq is not none %}
+            {{ eq | int if eq == eq | int else eq | round(3) }} {{ line.nomenclature.unit }}
+            {% if mismatch %}<br><span class="small">⚠ {{ '+' if line.qty > eq else '' }}{{ ((line.qty - eq) | int) if (line.qty - eq) == (line.qty - eq) | int else (line.qty - eq) | round(3) }}</span>{% endif %}
+          {% else %}—{% endif %}
+        </td>
         {% if doc.status in ('draft', 'recounting') %}
         <td style="min-width:160px">
           <div class="d-flex gap-1">
@@ -255,23 +263,29 @@
         {% endif %}
       </tr>
     {% else %}
-      <tr><td colspan="5" class="text-muted">Позиций еще нет</td></tr>
+      <tr><td colspan="6" class="text-muted">Позиций еще нет</td></tr>
     {% endfor %}
     </tbody>
     {% if lines %}
     <tfoot>
-      <tr class="fw-bold"><td>Итого</td><td></td><td>{{ doc.total_qty() }}</td><td></td>{% if doc.status == 'sorting' %}<td></td>{% endif %}</tr>
+      <tr class="fw-bold"><td>Итого</td><td></td><td></td><td>{{ doc.total_qty() }}</td><td></td>{% if doc.status == 'sorting' %}<td></td>{% endif %}</tr>
     </tfoot>
     {% endif %}
   </table>
 
   <div class="list-group d-md-none">
     {% for line in lines %}
+      {% set eq = line.expected_qty %}
+      {% set mismatch = eq is not none and line.qty != eq %}
       <div class="list-group-item py-2 px-2">
         <div>{{ line.nomenclature.name }} <span class="text-muted small">({{ line.nomenclature.sku }})</span></div>
         <div class="d-flex justify-content-between align-items-center gap-2 mt-1">
-          <div class="small text-muted">
+          <div class="small {{ 'text-danger fw-semibold' if mismatch else 'text-muted' }}">
             {% if line.box %}<a href="{{ url_for('boxes.detail', box_id=line.box.id) }}">{{ line.box.box_number }}</a>{% else %}без короба{% endif %}
+            {% if eq is not none %}
+              · по накладной: {{ eq | int if eq == eq | int else eq | round(3) }}
+              {% if mismatch %}⚠ {{ '+' if line.qty > eq else '' }}{{ ((line.qty - eq) | int) if (line.qty - eq) == (line.qty - eq) | int else (line.qty - eq) | round(3) }}{% endif %}
+            {% endif %}
           </div>
           {% if doc.status in ('draft', 'recounting') %}
           <div class="d-flex gap-2 flex-shrink-0 align-items-center">
