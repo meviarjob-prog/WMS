@@ -45,6 +45,7 @@ def _can_view_movement_document(doc):
     return (
         current_user.is_admin
         or current_user.can_view_movements()
+        or current_user.can_complete_movements()
         or doc.created_by_id == current_user.id
         or doc.status == "draft"
     )
@@ -63,6 +64,18 @@ BOOKKEEPING_ENDPOINTS = {
     "movement.update_marketplace_request_number",
 }
 
+# "Завершить перемещение"/"Принято на складе"/"Принято с расхождением" —
+# настоящее изменение документа (в отличие от BOOKKEEPING_ENDPOINTS выше),
+# но право на него можно выдать отдельно от авторства/админства (см.
+# User.movement_complete_allowed, настраивается в «Настройки» → доступ к
+# разделам) — например, заведующему складом назначения, который принимает
+# чужие перемещения.
+COMPLETION_ENDPOINTS = {
+    "movement.complete",
+    "movement.receive",
+    "movement.receive_with_discrepancy",
+}
+
 
 @bp.before_request
 def _restrict_document_access():
@@ -75,12 +88,20 @@ def _restrict_document_access():
         if not _can_view_movement_document(doc):
             abort(404)
         return None
-    # Остальные изменяющие маршруты (добавить/убрать короб, завершить,
-    # принять, удалить и т.п.) — только автор или админ, как и раньше.
-    # "Просмотр всех перемещений" здесь не действует (он read-only), а
-    # совместный доступ к черновику дальше даем только через route_box_add
-    # (у него нет doc_id в URL, этот хук на него не срабатывает) — не через
-    # произвольное изменение чужого документа по прямой ссылке.
+    if request.endpoint in COMPLETION_ENDPOINTS:
+        if not (
+            current_user.is_admin
+            or current_user.can_complete_movements()
+            or doc.created_by_id == current_user.id
+        ):
+            abort(404)
+        return None
+    # Остальные изменяющие маршруты (добавить/убрать короб, удалить и
+    # т.п.) — только автор или админ, как и раньше. "Просмотр всех
+    # перемещений" здесь не действует (он read-only), а совместный доступ к
+    # черновику дальше даем только через route_box_add (у него нет doc_id в
+    # URL, этот хук на него не срабатывает) — не через произвольное
+    # изменение чужого документа по прямой ссылке.
     if not (current_user.is_admin or doc.created_by_id == current_user.id):
         abort(404)
     return None

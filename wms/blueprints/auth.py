@@ -112,6 +112,33 @@ def create_user():
     return redirect(url_for("auth.users"))
 
 
+@bp.route("/users/<int:user_id>/toggle-admin", methods=["POST"])
+@login_required
+def toggle_admin(user_id):
+    """Права администратора (полный доступ ко всем разделам и функциям
+    независимо от role/allowed_sections, см. User.is_admin) — раньше
+    ставились только при создании пользователя (чекбокс в форме выше),
+    поменять их существующему пользователю было нельзя вообще. Нельзя
+    менять собственные права — этим гарантируется, что администратор,
+    выполняющий действие, сам остается администратором, то есть хотя бы
+    один администратор в системе есть всегда."""
+    if not _require_admin():
+        return redirect(url_for("main.index"))
+
+    user = User.query.get_or_404(user_id)
+    if user.id == current_user.id:
+        flash("Нельзя изменить права администратора у самого себя — попросите другого администратора", "danger")
+        return redirect(url_for("auth.users"))
+
+    user.is_admin = not user.is_admin
+    db.session.commit()
+    flash(
+        f"Права администратора для «{user.username}» {'выданы' if user.is_admin else 'сняты'}",
+        "success",
+    )
+    return redirect(url_for("auth.users"))
+
+
 @bp.route("/users/<int:user_id>/shift-minutes", methods=["POST"])
 @login_required
 def update_shift_minutes(user_id):
@@ -180,6 +207,7 @@ def update_sections(user_id):
     user.warehouse_mapping_allowed = request.form.get("warehouse_mapping") == "on"
     user.invoice_receiving_view_allowed = request.form.get("invoice_receiving_view") == "on"
     user.movement_view_allowed = request.form.get("movement_view") == "on"
+    user.movement_complete_allowed = request.form.get("movement_complete") == "on"
     db.session.commit()
     flash(f"Доступ к разделам для «{user.username}» обновлен", "success")
     return redirect(url_for("auth.users"))

@@ -4,6 +4,7 @@ from wms.models import (
     BoxItem,
     InventoryDocument,
     MovementDocument,
+    MovementLine,
     Nomenclature,
     PlacementDocument,
     ReceivingDocument,
@@ -276,10 +277,88 @@ def test_admin_can_grant_warehouse_mapping_permission_in_user_settings(
             "nomenclature_edit": "on",
             "warehouse_mapping": "on",
             "movement_view": "on",
+            "movement_complete": "on",
         },
     )
     assert User.query.get(worker.id).warehouse_mapping_allowed is True
     assert User.query.get(worker.id).movement_view_allowed is True
+    assert User.query.get(worker.id).movement_complete_allowed is True
+
+    # Не отмечена — снимается (а не остается как было), как и остальные
+    # галочки этой формы.
+    client_logged_in.post(
+        f"/users/{worker.id}/sections",
+        data={"mode": "full"},
+    )
+    assert User.query.get(worker.id).movement_complete_allowed is False
+
+
+def test_admin_can_toggle_admin_rights_for_other_user(db, client_logged_in):
+    worker = _user("future-admin")
+    assert worker.is_admin is False
+
+    resp = client_logged_in.post(f"/users/{worker.id}/toggle-admin", follow_redirects=True)
+    assert resp.status_code == 200
+    assert User.query.get(worker.id).is_admin is True
+
+    resp = client_logged_in.post(f"/users/{worker.id}/toggle-admin", follow_redirects=True)
+    assert resp.status_code == 200
+    assert User.query.get(worker.id).is_admin is False
+
+
+def test_admin_cannot_toggle_own_admin_rights(db, client_logged_in, admin_user):
+    resp = client_logged_in.post(f"/users/{admin_user.id}/toggle-admin", follow_redirects=True)
+    assert resp.status_code == 200
+    assert User.query.get(admin_user.id).is_admin is True
+
+
+def test_movement_complete_permission_allows_completing_foreign_movement(db, client):
+    """Право "завершение чужих перемещений" (User.movement_complete_allowed)
+    дает те же кнопки, что автору/админу — завершить, принять на складе,
+    принять с расхождением — но не более того (удалить документ по-прежнему
+    только админ)."""
+    manager = _user("movement-completer")
+    author = _user("movement-completer-author")
+    manager.movement_complete_allowed = True
+    warehouse = Warehouse(code="WH-MOVE-COMPLETE-1", name="Основной")
+    target = Warehouse(code="WH-MOVE-COMPLETE-2", name="Склад №2")
+    db.session.add_all([warehouse, target])
+    db.session.commit()
+
+    box = Box(box_number="BOX-MOVE-COMPLETE-1", warehouse_id=warehouse.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+    item = Nomenclature(sku="SKU-MOVE-COMPLETE", barcode="77709000001", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=2))
+
+    movement = MovementDocument(
+        number="MOVE-COMPLETE-1",
+        from_warehouse_id=warehouse.id,
+        to_warehouse_id=target.id,
+        created_by_id=author.id,
+    )
+    db.session.add(movement)
+    db.session.commit()
+    db.session.add(MovementLine(document_id=movement.id, box_id=box.id, from_warehouse_id=warehouse.id))
+    db.session.commit()
+
+    _login(client, manager)
+
+    detail_html = client.get(f"/movement/{movement.id}").get_data(as_text=True)
+    assert "Завершить перемещение" in detail_html
+
+    resp = client.post(f"/movement/{movement.id}/complete", follow_redirects=True)
+    assert resp.status_code == 200
+    assert MovementDocument.query.get(movement.id).status == "completed"
+
+    resp = client.post(f"/movement/{movement.id}/receive", follow_redirects=True)
+    assert resp.status_code == 200
+    assert MovementDocument.query.get(movement.id).received_at is not None
+
+    # Удаление документа этим правом не разрешается — только админ.
+    assert client.post(f"/movement/{movement.id}/delete").status_code == 404
 
 
 def test_box_transfer_is_available_in_movements_and_shows_contents(db, client_logged_in):

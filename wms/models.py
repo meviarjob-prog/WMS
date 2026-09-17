@@ -116,6 +116,13 @@ class User(UserMixin, db.Model):
     # Право просматривать перемещения всех сотрудников. Изменение чужих
     # документов этим правом не разрешается.
     movement_view_allowed = db.Column(db.Boolean, nullable=False, default=False)
+    # Право завершать чужие перемещения и отмечать "Принято на складе"/
+    # "Принято с расхождением" (см. movement.complete/receive/
+    # receive_with_discrepancy) — в отличие от movement_view_allowed (только
+    # просмотр), это право позволяет менять документ. Дает и просмотр тоже
+    # (см. movement._can_view_movement_document) — без него не добраться до
+    # кнопок на детальной странице.
+    movement_complete_allowed = db.Column(db.Boolean, nullable=False, default=False)
     # Версия входа используется для принудительного завершения сессий.
     # Она записывается в cookie при авторизации; увеличение значения делает
     # все ранее выданные cookie пользователя недействительными.
@@ -146,6 +153,9 @@ class User(UserMixin, db.Model):
 
     def can_view_movements(self):
         return self.is_admin or self.movement_view_allowed is True
+
+    def can_complete_movements(self):
+        return self.is_admin or self.movement_complete_allowed is True
 
     def has_section_access(self, section):
         """Раздел не из SECTIONS (например, служебные api/boxes/labels) не
