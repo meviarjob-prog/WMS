@@ -599,6 +599,12 @@ class ReceivingDocument(db.Model):
     # нагрузка на БД (см. обсуждение в чате при внедрении).
     invoice_file_data = db.Column(db.LargeBinary, nullable=True)
     invoice_file_name = db.Column(db.String(255), nullable=True)
+    # Заполняется, когда 1С подтвердила, что поправила количество в уже
+    # заведенной приходной накладной под фактически принятое по итогам
+    # пересчета WMS (см. integration_1c._receiving_adjustments_export и
+    # SyncWMS.bsl СкорректироватьПриемку) — чтобы при повторной синхронизации
+    # не отправлять одну и ту же корректировку снова.
+    recount_synced_to_1c_at = db.Column(db.DateTime, nullable=True)
 
     warehouse = db.relationship("Warehouse")
     created_by = db.relationship("User")

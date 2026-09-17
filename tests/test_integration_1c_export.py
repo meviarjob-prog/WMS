@@ -16,6 +16,7 @@ from wms.models import (
     MovementLine,
     Nomenclature,
     ReceivingDocument,
+    ReceivingLine,
     SupplierReturn,
     Warehouse,
 )
@@ -224,6 +225,114 @@ def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_
     assert ret_doc["order_number"] == "Ш-00105"
     assert ret_doc["supplier"] == "ИП Тестов"
     assert {line["qty"] for line in ret_doc["lines"]} == {3, 1}
+
+
+def test_export_includes_receiving_adjustment_when_recount_mismatches_invoice(db, client_logged_in):
+    """Приемка из накладной, ушедшая в разбраковку/завершение с расхождением
+    (qty != expected_qty хотя бы по одной строке) — 1С должна поправить
+    количество в уже заведенной приходной накладной (см.
+    SyncWMS.bsl СкорректироватьПриемку)."""
+    _set_token()
+    wh = Warehouse(code="WH-1C-15", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item = _make_item("9990000010")
+    doc = ReceivingDocument(
+        number="НАКЛ-888",
+        warehouse_id=wh.id,
+        invoice_file_name="накладная.xlsx",
+        status="sorting",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=7, expected_qty=10))
+    db.session.commit()
+
+    resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    data = resp.get_json()
+
+    assert len(data["receiving_adjustments"]) == 1
+    adjustment = data["receiving_adjustments"][0]
+    assert adjustment["id"] == doc.id
+    assert adjustment["invoice_number"] == "НАКЛ-888"
+    assert adjustment["lines"][0]["qty"] == 7
+
+
+def test_export_excludes_receiving_without_discrepancy(db, client_logged_in):
+    _set_token()
+    wh = Warehouse(code="WH-1C-16", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item = _make_item("9990000011")
+    doc = ReceivingDocument(
+        number="НАКЛ-889",
+        warehouse_id=wh.id,
+        invoice_file_name="накладная.xlsx",
+        status="completed",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=10, expected_qty=10))
+    db.session.commit()
+
+    resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    data = resp.get_json()
+
+    assert data["receiving_adjustments"] == []
+
+
+def test_export_excludes_receiving_still_recounting(db, client_logged_in):
+    """Пока приемка в статусе draft/recounting, цифры могут еще измениться
+    (см. receiving.confirm_line) — рано отправлять корректировку в 1С."""
+    _set_token()
+    wh = Warehouse(code="WH-1C-17", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item = _make_item("9990000012")
+    doc = ReceivingDocument(
+        number="НАКЛ-890",
+        warehouse_id=wh.id,
+        invoice_file_name="накладная.xlsx",
+        status="recounting",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=7, expected_qty=10))
+    db.session.commit()
+
+    resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    data = resp.get_json()
+
+    assert data["receiving_adjustments"] == []
+
+
+def test_export_confirm_marks_receiving_adjustment_synced(db, client_logged_in):
+    _set_token()
+    wh = Warehouse(code="WH-1C-18", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item = _make_item("9990000013")
+    doc = ReceivingDocument(
+        number="НАКЛ-891",
+        warehouse_id=wh.id,
+        invoice_file_name="накладная.xlsx",
+        status="completed",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=5, expected_qty=8))
+    db.session.commit()
+
+    resp = client_logged_in.post(
+        "/integrations/1c/api/export/confirm",
+        data=json.dumps({"receiving_adjustment_ids": [doc.id]}),
+        headers={"X-1C-Token": TOKEN, "Content-Type": "application/json"},
+    )
+    assert resp.get_json()["confirmed"]["receiving_adjustments"] == 1
+    assert ReceivingDocument.query.get(doc.id).recount_synced_to_1c_at is not None
+
+    resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    assert resp.get_json()["receiving_adjustments"] == []
 
 
 def test_export_confirm_marks_everything_synced(db, client_logged_in):

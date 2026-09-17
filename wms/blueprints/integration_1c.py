@@ -15,7 +15,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from flask_login import current_user
 
 from ..extensions import db
-from ..models import AppSetting, InventoryDocument, MovementDocument, SupplierReturn
+from ..models import AppSetting, InventoryDocument, MovementDocument, ReceivingDocument, SupplierReturn
 
 bp = Blueprint("integration_1c", __name__)
 
@@ -99,6 +99,7 @@ def settings():
         SupplierReturn.synced_to_1c_at.is_(None),
         SupplierReturn.invoice_number.isnot(None),
     ).count()
+    pending_receiving_adjustments = len(_receiving_adjustments_export())
 
     return render_template(
         "integration_1c/settings.html",
@@ -106,6 +107,7 @@ def settings():
         pending_movements=pending_movements,
         pending_inventories=pending_inventories,
         pending_supplier_returns=pending_supplier_returns,
+        pending_receiving_adjustments=pending_receiving_adjustments,
     )
 
 
@@ -225,6 +227,53 @@ def _supplier_returns_export():
     return payloads
 
 
+def _receiving_adjustments_export():
+    """Приемки из накладной (см. is_from_invoice_import), где пересчет уже
+    завершен (пересчет меняет qty только в статусах draft/recounting — см.
+    receiving.confirm_line — значит после них цифры больше не изменятся) и
+    есть расхождение хотя бы по одной строке (qty != expected_qty) — 1С
+    должна поправить "Количество" в уже заведенной приходной накладной под
+    фактически принятое (см. SyncWMS.bsl СкорректироватьПриемку). Она НЕ
+    трогает проведение документа — если накладная уже проведена, поправить
+    количество должен бухгалтер вручную (сама 1С-обработка это пропустит и
+    напишет предупреждение в диагностику).
+
+    Еще не выгруженные — recount_synced_to_1c_at пусто; выгружаем ЦЕЛИКОМ
+    актуальные qty по всем строкам документа (не только расходящимся) —
+    проще сопоставить в 1С один раз, чем помнить, какие строки уже
+    поправлены."""
+    documents = (
+        ReceivingDocument.query.filter(
+            ReceivingDocument.invoice_file_name.isnot(None),
+            ReceivingDocument.status.in_(("sorting", "completed")),
+            ReceivingDocument.recount_synced_to_1c_at.is_(None),
+        )
+        .order_by(ReceivingDocument.id)
+        .all()
+    )
+
+    payloads = []
+    for doc in documents:
+        lines = doc.lines.all()
+        if not any(line.expected_qty is not None and line.qty != line.expected_qty for line in lines):
+            continue
+        payloads.append(
+            {
+                "id": doc.id,
+                "invoice_number": doc.number,
+                "lines": [
+                    {
+                        "barcode": line.nomenclature.barcode,
+                        "name": line.nomenclature.name,
+                        "qty": line.qty,
+                    }
+                    for line in lines
+                ],
+            }
+        )
+    return payloads
+
+
 @bp.route("/api/export")
 def export():
     """Отдает документы, готовые к переносу в 1С: перемещение — сразу как
@@ -258,6 +307,7 @@ def export():
             "movements": [_movement_payload(d) for d in movements],
             "inventories": [_inventory_payload(d) for d in inventories],
             "supplier_returns": _supplier_returns_export(),
+            "receiving_adjustments": _receiving_adjustments_export(),
         }
     )
 
@@ -275,6 +325,7 @@ def export_confirm():
     movement_ids = data.get("movement_ids") or []
     inventory_ids = data.get("inventory_ids") or []
     supplier_return_ids = data.get("supplier_return_ids") or []
+    receiving_adjustment_ids = data.get("receiving_adjustment_ids") or []
     # {str(movement_id): "текст предупреждения"} — часть строк документа не
     # сопоставилась с номенклатурой в 1С и была пропущена (см. SyncWMS.bsl
     # СоздатьПеремещениеТоваров); документ при этом всё равно создан и
@@ -313,6 +364,21 @@ def export_confirm():
     for ret in confirmed_returns:
         ret.synced_to_1c_at = now
 
+    # id здесь — id приемки (см. _receiving_adjustments_export), а не строк.
+    # 1С присылает сюда только те id, которые реально поправила — если
+    # накладная уже проведена (см. SyncWMS.bsl СкорректироватьПриемку),
+    # документ остается в ошибках 1С и НЕ попадает в этот список, поэтому
+    # WMS продолжит присылать его на каждой синхронизации, пока бухгалтер
+    # не поправит накладную вручную и корректировка не пройдет успешно.
+    confirmed_receiving_adjustments = (
+        ReceivingDocument.query.filter(
+            ReceivingDocument.id.in_(receiving_adjustment_ids),
+            ReceivingDocument.recount_synced_to_1c_at.is_(None),
+        ).all()
+    )
+    for doc in confirmed_receiving_adjustments:
+        doc.recount_synced_to_1c_at = now
+
     db.session.commit()
     return jsonify(
         {
@@ -321,6 +387,7 @@ def export_confirm():
                 "movements": len(confirmed_movements),
                 "inventories": len(confirmed_inventories),
                 "supplier_returns": len(confirmed_returns),
+                "receiving_adjustments": len(confirmed_receiving_adjustments),
             },
         }
     )
