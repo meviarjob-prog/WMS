@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Сканировать ячейку — Размещение{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('placement.list_documents') }}">&larr; Размещение</a></p>
+<h3 class="mb-1">Сканировать ячейку</h3>
+<p class="text-muted small mb-4">
+  Обратный порядок относительно «Сканировать короб»: сначала фиксируете ячейку,
+  затем сканируете в нее короба один за другим, не вводя код ячейки заново.
+</p>
+
+<div class="card p-3" style="max-width: 520px">
+  {% if not warehouse %}
+    <form method="get" class="d-flex flex-column gap-2">
+      <label class="form-label mb-0">Склад</label>
+      <select name="warehouse_id" class="form-select form-select-lg" required autofocus>
+        <option value="">Выберите склад...</option>
+        {% for wh in warehouses %}
+          <option value="{{ wh.id }}">{{ wh.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-primary">Далее</button>
+    </form>
+  {% elif not cell %}
+    <div class="mb-2 text-muted">
+      Склад: <b>{{ warehouse.name }}</b>
+      · <a href="{{ url_for('placement.scan_cell') }}">сменить склад</a>
+    </div>
+    {% if cell_not_found %}
+      <div class="alert alert-danger mb-3">Ячейка «{{ cell_code }}» не найдена на складе «{{ warehouse.name }}».</div>
+    {% endif %}
+    <form method="get" class="d-flex gap-2">
+      <input type="hidden" name="warehouse_id" value="{{ warehouse.id }}">
+      <input type="text" name="cell_code" id="cellCodeInput" class="form-control form-control-lg"
+             placeholder="Отсканируйте или введите код ячейки" required autofocus data-submit-on-enter>
+      <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#cellCodeInput" title="Сканировать камерой">📷</button>
+      <button type="submit" class="btn btn-primary">Найти</button>
+    </form>
+  {% else %}
+    <div class="mb-2 text-muted">
+      Склад: <b>{{ warehouse.name }}</b>
+      · <a href="{{ url_for('placement.scan_cell', warehouse_id=warehouse.id) }}">сменить ячейку</a>
+      · <a href="{{ url_for('placement.scan_cell') }}">сменить склад</a>
+    </div>
+    <div class="mb-3">
+      <span class="fs-4"><b>{{ cell.code }}</b></span>
+      <span class="text-muted">— свободно {{ cell.free_space() }} из {{ CELL_CAPACITY }}</span>
+    </div>
+
+    {% if cell.boxes.count() %}
+    <div class="mb-3">
+      <div class="small text-muted mb-1">Уже в этой ячейке:</div>
+      <ul class="list-unstyled mb-0 small">
+        {% for b in cell.boxes %}
+          <li>📦 <a href="{{ url_for('boxes.detail', box_id=b.id) }}">{{ b.box_number }}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('placement.scan_cell_add_box') }}" class="d-flex gap-2">
+      <input type="hidden" name="warehouse_id" value="{{ warehouse.id }}">
+      <input type="hidden" name="cell_code" value="{{ cell.code }}">
+      <input type="text" name="box_number" id="boxNumberInput" class="form-control form-control-lg"
+             placeholder="Отсканируйте или введите номер короба" required autofocus data-submit-on-enter>
+      <button type="button" class="btn btn-outline-primary" data-camera-scan-target="#boxNumberInput" title="Сканировать камерой">📷</button>
+      <button type="submit" class="btn btn-success">Разместить</button>
+    </form>
+
+    <a class="btn btn-outline-secondary mt-3" href="{{ url_for('placement.scan_cell', warehouse_id=warehouse.id) }}">✅ Завершить размещение (следующая ячейка)</a>
+  {% endif %}
+</div>
+{% endblock %}

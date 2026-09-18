@@ -6,6 +6,7 @@
 <div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
   <div>
     <h3 class="mb-1">Приемка {{ doc.number }}
+      {% if doc.is_from_invoice_import() %}
       <span class="status-chips" role="group" aria-label="Статус приемки">
         <span class="status-chip status-chip-draft status-chip-reached"
               title="Черновик: {{ (doc.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Ч</span>
@@ -16,6 +17,14 @@
         <span class="status-chip status-chip-completed{{ ' status-chip-reached' if doc.completed_at else '' }}"
               title="Завершено: {{ (doc.completed_at|msk).strftime('%d.%m.%Y %H:%M') if doc.completed_at else 'еще не наступило' }}">З</span>
       </span>
+      {% else %}
+      <span class="status-chips" role="group" aria-label="Статус приемки">
+        <span class="status-chip status-chip-wide status-chip-draft status-chip-reached"
+              title="Приемка: {{ (doc.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Пр</span>
+        <span class="status-chip status-chip-completed{{ ' status-chip-reached' if doc.completed_at else '' }}"
+              title="Завершено: {{ (doc.completed_at|msk).strftime('%d.%m.%Y %H:%M') if doc.completed_at else 'еще не наступило' }}">З</span>
+      </span>
+      {% endif %}
     </h3>
     <div class="text-muted d-flex align-items-center flex-wrap gap-1">
       Склад:

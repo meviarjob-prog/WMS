@@ -340,6 +340,76 @@ def scan_box():
     )
 
 
+@bp.route("/scan-cell")
+def scan_cell():
+    """Обратный порядок относительно scan_box (там сначала короб, потом
+    ячейка) — здесь сначала выбирают склад и сканируют/вводят ЯЧЕЙКУ, а
+    потом сканируют в нее короба один за другим без повторного ввода ячейки
+    каждый раз. Удобно, когда несколько коробов подряд едут в одно и то же
+    место. Код ячейки уникален только в пределах склада (см. Cell.
+    __table_args__), поэтому склад выбирается явно, не по одному скану."""
+    warehouse_id = request.args.get("warehouse_id", type=int)
+    cell_code = request.args.get("cell_code", "").strip()
+
+    warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
+    warehouse = None
+    cell = None
+    cell_not_found = False
+
+    if warehouse_id:
+        warehouse = Warehouse.query.get(warehouse_id)
+        if warehouse and cell_code:
+            cell = Cell.query.filter_by(warehouse_id=warehouse_id, code=cell_code).first()
+            if not cell:
+                cell_not_found = True
+
+    return render_template(
+        "placement/scan_cell.html",
+        warehouses=warehouses,
+        warehouse=warehouse,
+        warehouse_id=warehouse_id,
+        cell_code=cell_code,
+        cell=cell,
+        cell_not_found=cell_not_found,
+        CELL_CAPACITY=CELL_CAPACITY,
+    )
+
+
+@bp.route("/scan-cell/add-box", methods=["POST"])
+def scan_cell_add_box():
+    """Разместить очередной короб в уже выбранной (и зафиксированной на
+    экране) ячейке — см. scan_cell. Возвращаемся туда же с теми же
+    warehouse_id/cell_code, чтобы список коробов в ячейке обновился и можно
+    было сразу сканировать следующий короб."""
+    warehouse_id = request.form.get("warehouse_id", type=int)
+    cell_code = request.form.get("cell_code", "").strip()
+    box_number = request.form.get("box_number", "").strip()
+    back_url = url_for("placement.scan_cell", warehouse_id=warehouse_id, cell_code=cell_code)
+
+    warehouse = Warehouse.query.get(warehouse_id) if warehouse_id else None
+    if not warehouse or not cell_code:
+        flash("Сначала выберите склад и ячейку", "danger")
+        return redirect(url_for("placement.scan_cell"))
+
+    box = Box.find_by_scanned_code(box_number)
+    if not box:
+        flash(f"Короб «{box_number}» не найден", "danger")
+        return redirect(back_url)
+    if box.warehouse_id != warehouse_id:
+        flash(f"Короб {box.box_number} числится на складе «{box.warehouse.name}», а не «{warehouse.name}»", "danger")
+        return redirect(back_url)
+    if box.items.count() == 0:
+        flash(f"Короб {box.box_number} пуст — размещать пока нечего", "danger")
+        return redirect(back_url)
+
+    error = _place_box(box, cell_code, warehouse_id)
+    if error:
+        flash(error, "danger")
+    else:
+        flash(f"Короб {box.box_number} размещен в ячейке {cell_code}", "success")
+    return redirect(back_url)
+
+
 @bp.route("/new", methods=["GET", "POST"])
 def new_document():
     if request.method == "GET":

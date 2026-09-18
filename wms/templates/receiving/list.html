@@ -47,6 +47,7 @@
         <td>{{ d.order_number or '' }}</td>
         <td>{{ d.created_by.display_name() if d.created_by else '' }}</td>
         <td>
+          {% if d.is_from_invoice_import() %}
           <span class="status-chips" role="group" aria-label="Статус приемки">
             <span class="status-chip status-chip-draft status-chip-reached"
                   title="Черновик: {{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Ч</span>
@@ -57,6 +58,14 @@
             <span class="status-chip status-chip-completed{{ ' status-chip-reached' if d.completed_at else '' }}"
                   title="Завершено: {{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else 'еще не наступило' }}">З</span>
           </span>
+          {% else %}
+          <span class="status-chips" role="group" aria-label="Статус приемки">
+            <span class="status-chip status-chip-wide status-chip-draft status-chip-reached"
+                  title="Приемка: {{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Пр</span>
+            <span class="status-chip status-chip-completed{{ ' status-chip-reached' if d.completed_at else '' }}"
+                  title="Завершено: {{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else 'еще не наступило' }}">З</span>
+          </span>
+          {% endif %}
           {% if has_mismatch %}<span class="text-danger" title="Есть расхождение с накладной">⚠</span>{% endif %}
         </td>
         <td>{{ total_qty | int if total_qty == total_qty | int else total_qty | round(3) }}</td>
@@ -85,6 +94,7 @@
       <div class="list-group-item py-2 px-2 {{ 'list-group-item-danger' if returns_count else ('list-group-item-warning' if has_mismatch else '') }}">
         <div class="d-flex justify-content-between align-items-center gap-2">
           <a href="{{ url_for('receiving.detail', doc_id=d.id) }}" class="fw-bold text-decoration-none">{{ d.number }}</a>
+          {% if d.is_from_invoice_import() %}
           <span class="status-chips" role="group" aria-label="Статус приемки">
             <span class="status-chip status-chip-draft status-chip-reached"
                   title="Черновик: {{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Ч</span>
@@ -95,6 +105,14 @@
             <span class="status-chip status-chip-completed{{ ' status-chip-reached' if d.completed_at else '' }}"
                   title="Завершено: {{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else 'еще не наступило' }}">З</span>
           </span>
+          {% else %}
+          <span class="status-chips" role="group" aria-label="Статус приемки">
+            <span class="status-chip status-chip-wide status-chip-draft status-chip-reached"
+                  title="Приемка: {{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Пр</span>
+            <span class="status-chip status-chip-completed{{ ' status-chip-reached' if d.completed_at else '' }}"
+                  title="Завершено: {{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else 'еще не наступило' }}">З</span>
+          </span>
+          {% endif %}
         </div>
         <div class="small text-muted">{{ d.warehouse.name }}{% if d.supplier %} · {{ d.supplier }}{% endif %}{% if d.order_number %} · № заказа: {{ d.order_number }}{% endif %}</div>
         <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }}{% if d.created_by %} · Автор: {{ d.created_by.display_name() }}{% endif %} · Кол-во: {{ total_qty | int if total_qty == total_qty | int else total_qty | round(3) }}</div>
