@@ -130,9 +130,10 @@ def _movement_payload(doc):
     if doc.marketplace_request_number:
         # Номер заявки на приемку у маркетплейса (вносится вручную в списке
         # перемещений, см. movement.update_marketplace_request_number) —
-        # рядом с номером перемещения, чтобы можно было найти документ в 1С
-        # по любому из двух номеров.
-        comment += f" (№ заявки МП: {doc.marketplace_request_number}: {doc.number})"
+        # рядом с номером перемещения (уже есть в начале комментария), чтобы
+        # можно было найти документ в 1С по любому из двух номеров, без
+        # повторного дублирования номера перемещения в конце строки.
+        comment += f" (№ заявки МП: {doc.marketplace_request_number})"
     return {
         "id": doc.id,
         "number": doc.number,

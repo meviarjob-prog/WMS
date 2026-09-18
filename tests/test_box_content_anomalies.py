@@ -22,6 +22,15 @@ def _make_item(sku, barcode, name, category, size):
     return item
 
 
+def _table_html(html):
+    """Только видимая таблица отчета — без JSON-данных для модалки "короба
+    с этим товаром" (см. reports.box_anomalies_report), которые намеренно
+    содержат ВСЕ короба товара, включая неаномальные (см.
+    test_anomaly_row_lists_all_boxes_with_that_nomenclature) — иначе номер
+    неаномального короба того же товара ложно "находился" бы в html."""
+    return html.split('<script type="application/json" id="anomalyBoxesData">')[0]
+
+
 def _pack(warehouse, box_number, item, qty):
     box = Box(box_number=box_number, warehouse_id=warehouse.id, status="stored")
     db.session.add(box)
@@ -72,9 +81,10 @@ def test_flags_box_far_above_group_median(db, client_logged_in):
     html = client_logged_in.get("/reports/box-anomalies").get_data(as_text=True)
 
     assert anomaly_box.box_number in html
-    assert "BOX-BA-1" not in html
-    assert "BOX-BA-2" not in html
-    assert "BOX-BA-3" not in html
+    table_html = _table_html(html)
+    assert "BOX-BA-1" not in table_html
+    assert "BOX-BA-2" not in table_html
+    assert "BOX-BA-3" not in table_html
 
 
 def test_flags_box_far_below_group_median(db, client_logged_in):
@@ -92,8 +102,9 @@ def test_flags_box_far_below_group_median(db, client_logged_in):
     html = client_logged_in.get("/reports/box-anomalies").get_data(as_text=True)
 
     assert anomaly_box.box_number in html
-    assert "BOX-BA2-1" not in html
-    assert "BOX-BA2-2" not in html
+    table_html = _table_html(html)
+    assert "BOX-BA2-1" not in table_html
+    assert "BOX-BA2-2" not in table_html
 
 
 def test_ignores_items_without_category_or_size(db, client_logged_in):
@@ -136,7 +147,7 @@ def test_falls_back_to_same_sku_when_category_or_size_missing(db, client_logged_
     html = client_logged_in.get("/reports/box-anomalies").get_data(as_text=True)
 
     assert anomaly_box.box_number in html
-    assert "BOX-BA7-1" not in html
+    assert "BOX-BA7-1" not in _table_html(html)
 
 
 def test_warehouse_filter_still_uses_global_median(db, client_logged_in):
@@ -159,7 +170,7 @@ def test_warehouse_filter_still_uses_global_median(db, client_logged_in):
     html = client_logged_in.get(f"/reports/box-anomalies?warehouse_id={wh_b.id}").get_data(as_text=True)
 
     assert anomaly_box.box_number in html
-    assert "BOX-BA4-1" not in html
+    assert "BOX-BA4-1" not in _table_html(html)
 
 
 def test_threshold_query_param_adjusts_sensitivity(db, client_logged_in):
@@ -181,3 +192,29 @@ def test_threshold_query_param_adjusts_sensitivity(db, client_logged_in):
         "/reports/box-anomalies?threshold=1.5"
     ).get_data(as_text=True)
     assert borderline_box.box_number in sensitive_html
+
+
+def test_anomaly_row_lists_all_boxes_with_that_nomenclature(db, client_logged_in):
+    """Клик по товару в аномальной строке должен показать ВСЕ короба с этим
+    товаром (по всем складам, включая другой склад, вне зависимости от
+    фильтра отчета) — чтобы свериться на месте, ошибка это или норма."""
+    wh1 = _make_warehouse("WH-BA-7")
+    wh2 = _make_warehouse("WH-BA-8")
+    category = ProductCategory(name="Кардиган-BA7", keywords="кардиган-ba7")
+    db.session.add(category)
+    db.session.commit()
+    red = _make_item("SKU-BA7-RED", "9991000012", "Кардиган красный", category, "48")
+    blue = _make_item("SKU-BA7-BLUE", "9991000013", "Кардиган синий", category, "48")
+
+    _pack(wh1, "BOX-BA7-1", red, 10)
+    anomaly_box = _pack(wh1, "BOX-BA7-2", blue, 100)
+    other_box = _pack(wh2, "BOX-BA7-3", blue, 12)
+
+    html = client_logged_in.get("/reports/box-anomalies").get_data(as_text=True)
+
+    assert anomaly_box.box_number in html
+    assert 'data-nomenclature-id="{}"'.format(blue.id) in html
+    # Данные для модалки — все короба этого товара, включая с другого
+    # склада, зашиты в JSON на странице (см. anomalyBoxesData).
+    assert other_box.box_number in html
+    assert wh2.name in html

@@ -55,7 +55,13 @@
           <a href="{{ url_for('movement.box_transfer', source_box_number=row.box.box_number) }}">{{ row.box.box_number }}</a>
         </td>
         <td>{{ row.box.warehouse.name if row.box.warehouse else '—' }}</td>
-        <td>{{ n.name }} <span class="text-muted small">({{ n.sku }})</span></td>
+        <td>
+          <button type="button" class="btn btn-link p-0 text-start anomaly-nomenclature-btn"
+                  data-bs-toggle="modal" data-bs-target="#anomalyBoxesModal"
+                  data-nomenclature-id="{{ n.id }}" data-nomenclature-name="{{ n.name }} ({{ n.sku }})">
+            {{ n.name }} <span class="text-muted small">({{ n.sku }})</span>
+          </button>
+        </td>
         <td>{{ n.size }}</td>
         <td>{{ row.qty | int if row.qty == row.qty | int else row.qty | round(3) }}</td>
         <td>{{ row.median | int if row.median == row.median | int else row.median | round(3) }}
@@ -71,4 +77,58 @@
     </tbody>
   </table>
 </div>
+
+<!-- Клик по товару в аномальной строке — все короба с этим товаром (по
+     всем складам, без учета фильтра отчета — та же выборка, из которой
+     считалась медиана), чтобы на месте свериться: реально ошибка приемки
+     или так и должно быть. Данные уже посчитаны на сервере (см.
+     boxes_by_nomenclature), модалка просто достает нужный кусок по id. -->
+<div class="modal fade" id="anomalyBoxesModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="anomalyBoxesModalTitle">Короба с товаром</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Короб</th><th>Склад</th><th>Кол-во</th></tr></thead>
+          <tbody id="anomalyBoxesModalBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="anomalyBoxesData">{{ boxes_by_nomenclature | tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const anomalyBoxesData = JSON.parse(document.getElementById("anomalyBoxesData").textContent);
+  const anomalyBoxesModal = document.getElementById("anomalyBoxesModal");
+  anomalyBoxesModal.addEventListener("show.bs.modal", (event) => {
+    const btn = event.relatedTarget;
+    const nomenclatureId = btn.dataset.nomenclatureId;
+    const boxes = anomalyBoxesData[nomenclatureId] || [];
+    document.getElementById("anomalyBoxesModalTitle").textContent =
+      "Короба с товаром: " + btn.dataset.nomenclatureName;
+    const body = document.getElementById("anomalyBoxesModalBody");
+    body.innerHTML = "";
+    if (boxes.length === 0) {
+      body.innerHTML = '<tr><td colspan="3" class="text-muted">Короба не найдены</td></tr>';
+      return;
+    }
+    boxes.forEach((b) => {
+      const tr = document.createElement("tr");
+      const qty = Number.isInteger(b.qty) ? b.qty : Math.round(b.qty * 1000) / 1000;
+      [b.box_number, b.warehouse, qty].forEach((value) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+  });
+</script>
 {% endblock %}

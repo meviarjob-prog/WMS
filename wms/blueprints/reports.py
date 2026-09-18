@@ -386,6 +386,31 @@ def _box_anomaly_rows(warehouse_id=None, ratio_threshold=BOX_ANOMALY_RATIO_DEFAU
     return rows
 
 
+def _boxes_by_nomenclature(nomenclature_ids):
+    """{nomenclature_id: [{"box_number", "warehouse", "qty"}, ...]} — ВСЕ
+    короба (по всем складам, без учета фильтра отчета — как и медиана в
+    _box_anomaly_rows) с этим товаром, отсортированные по количеству. Дает
+    возможность сверить конкретную аномальную строку с остальными
+    коробами того же товара и понять, ошибка это приемки или нормальная
+    вариация (см. reports/box_anomalies.html)."""
+    if not nomenclature_ids:
+        return {}
+    result = defaultdict(list)
+    query = (
+        db.session.query(BoxItem.nomenclature_id, Box.box_number, Warehouse.name, BoxItem.qty)
+        .join(Box, BoxItem.box_id == Box.id)
+        .outerjoin(Warehouse, Box.warehouse_id == Warehouse.id)
+        .filter(BoxItem.nomenclature_id.in_(nomenclature_ids))
+    )
+    for nomenclature_id, box_number, warehouse_name, qty in query.all():
+        result[nomenclature_id].append(
+            {"box_number": box_number, "warehouse": warehouse_name or "—", "qty": qty}
+        )
+    for boxes in result.values():
+        boxes.sort(key=lambda b: b["qty"], reverse=True)
+    return result
+
+
 @bp.route("/box-anomalies")
 def box_anomalies_report():
     warehouse_id = request.args.get("warehouse_id", type=int)
@@ -394,10 +419,12 @@ def box_anomalies_report():
         threshold = BOX_ANOMALY_RATIO_DEFAULT
     rows = _box_anomaly_rows(warehouse_id=warehouse_id, ratio_threshold=threshold)
     warehouses = Warehouse.query.order_by(Warehouse.code).all()
+    boxes_by_nomenclature = _boxes_by_nomenclature({row["nomenclature"].id for row in rows})
     return render_template(
         "reports/box_anomalies.html",
         rows=rows,
         warehouses=warehouses,
         selected_warehouse_id=warehouse_id,
         threshold=threshold,
+        boxes_by_nomenclature=boxes_by_nomenclature,
     )

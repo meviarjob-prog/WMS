@@ -159,7 +159,10 @@ def test_export_comment_includes_marketplace_request_number(db, client_logged_in
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     data = resp.get_json()
     movement = next(m for m in data["movements"] if m["number"] == "PER-BOX-1C-5")
-    assert "(№ заявки МП: REQ-778: PER-BOX-1C-5)" in movement["comment"]
+    assert "(№ заявки МП: REQ-778)" in movement["comment"]
+    # Номер перемещения уже есть в начале комментария — не дублируем его
+    # еще раз в конце строки с заявкой.
+    assert "REQ-778: PER-BOX-1C-5" not in movement["comment"]
 
 
 def test_export_comment_without_marketplace_request_number_unchanged(db, client_logged_in):

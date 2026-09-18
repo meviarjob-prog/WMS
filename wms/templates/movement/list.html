@@ -146,8 +146,9 @@
         <tr><th></th><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Кол-во товара</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th class="text-center">Заявка на МП</th><th>№ заявки на МП</th><th></th></tr>
         <!-- Фильтр по каждой колонке — текстовое поле, ищет по подстроке в
              видимом тексте ячейки (см. applyColumnFilters в scripts ниже).
-             Чекбокс/иконки-галочки/колонка действий не фильтруются текстом —
-             там нечего искать подстрокой. -->
+             "Заявка на МП" — выпадающий список (Да/Нет), т.к. там всего два
+             осмысленных значения; остальные чекбоксы/иконки/колонка действий
+             текстом не фильтруются — там нечего искать подстрокой. -->
         <tr class="table-filter-row">
           <th></th>
           <th><input type="text" class="form-control form-control-sm col-filter" data-col="1" placeholder="Фильтр"></th>
@@ -160,7 +161,13 @@
           <th><input type="text" class="form-control form-control-sm col-filter" data-col="8" placeholder="Фильтр"></th>
           <th><input type="text" class="form-control form-control-sm col-filter" data-col="9" placeholder="Фильтр"></th>
           <th></th>
-          <th></th>
+          <th>
+            <select class="form-select form-select-sm col-filter" data-col="11">
+              <option value="">Все</option>
+              <option value="✔">Есть заявка</option>
+              <option value="☐">Нет заявки</option>
+            </select>
+          </th>
           <th><input type="text" class="form-control form-control-sm col-filter" data-col="12" placeholder="Фильтр"></th>
           <th></th>
         </tr>
@@ -390,6 +397,9 @@
     });
   }
 
-  colFilters.forEach((input) => input.addEventListener("input", applyColumnFilters));
+  colFilters.forEach((input) => {
+    input.addEventListener("input", applyColumnFilters);
+    input.addEventListener("change", applyColumnFilters);
+  });
 </script>
 {% endblock %}

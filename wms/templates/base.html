@@ -31,10 +31,9 @@
         {% elif current_user.is_authenticated %}
         {% if current_user.has_section_access('nomenclature') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('nomenclature.list_nomenclature') }}">Номенклатура</a></li>
-        <li class="nav-item"><a class="nav-link" href="{{ url_for('nomenclature.locate') }}">Где товар</a></li>
         {% endif %}
         {% if current_user.has_section_access('warehouses') %}
-        <li class="nav-item"><a class="nav-link" href="{{ url_for('warehouses.list_warehouses') }}">Склады и ячейки</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('warehouses.list_warehouses') }}">Склады</a></li>
         {% endif %}
         {% if current_user.has_section_access('receiving') %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('receiving.list_documents') }}">Приемка</a></li>
