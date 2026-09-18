@@ -8,6 +8,10 @@
   порядок совпадает с MovementLine.id). "Артикул товара" Ozon — не наш
   внутренний SKU, а отдельная строка, которую нужно предварительно
   сопоставить со штрихкодом через OzonArticleMapping (см. ozon_mapping).
+  Файл выгружается с ВТОРЫМ листом "Наши короба и ГМ" — не часть
+  официального шаблона Ozon, просто сопоставление нашего короба
+  (Box.box_number) и присвоенного ему грузоместа для собственного
+  контроля (см. export_ozon_package_composition).
 - Wildberries: проще во всем — "Баркод товара" не требует отдельного
   сопоставления (годится наш Nomenclature.barcode как есть), а "ШК
   короба" — это наш СОБСТВЕННЫЙ номер короба (Box.box_number), а не
@@ -157,6 +161,8 @@ def ozon_package_composition(doc_id):
                         "article": mapping.article if mapping else "",
                         "qty": item.qty,
                         "cargo_barcode": cargo_barcode,
+                        "box_number": line.box.box_number,
+                        "name": item.nomenclature.name,
                     }
                 )
 

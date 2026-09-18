@@ -521,6 +521,11 @@ OZON_PACKAGE_HEADERS = [
     "Тип ГМ (не обязательно)",
 ]
 
+# Второй лист файла "Состав ГМ поставки" (см. export_ozon_package_composition)
+# — не часть официального шаблона Ozon, просто наше собственное
+# сопоставление короба и грузоместа для контроля при сборке/сверке.
+OZON_PACKAGE_MAPPING_HEADERS = ["Наш короб", "Грузоместо Ozon", "Номенклатура", "Кол-во"]
+
 WB_PACKAGE_HEADERS = [
     "Баркод товара",
     "Кол-во товаров",
@@ -531,11 +536,15 @@ WB_PACKAGE_HEADERS = [
 
 
 def export_ozon_package_composition(rows) -> bytes:
-    """rows — [{"barcode", "article", "qty", "cargo_barcode"}], одна строка
-    на товар в одном грузовом месте (см.
+    """rows — [{"barcode", "article", "qty", "cargo_barcode", "box_number",
+    "name"}], одна строка на товар в одном грузовом месте (см.
     marketplace_export.ozon_package_composition). Срок годности и зона
     размещения WMS не отслеживает — оставляются пустыми, заполняются
-    вручную при необходимости, как и предусматривает сам шаблон Ozon."""
+    вручную при необходимости, как и предусматривает сам шаблон Ozon.
+
+    Второй лист ("Наши короба и ГМ") — не часть официального шаблона Ozon,
+    просто сопоставление нашего короба (Box.box_number) и присвоенного ему
+    грузоместа Ozon для собственного контроля при сборке/сверке поставки."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Состав ГМ поставки"
@@ -553,6 +562,11 @@ def export_ozon_package_composition(rows) -> bytes:
                 "Коробка",
             ]
         )
+
+    ws2 = wb.create_sheet("Наши короба и ГМ")
+    _style_header(ws2, OZON_PACKAGE_MAPPING_HEADERS)
+    for row in rows:
+        ws2.append([row["box_number"], row["cargo_barcode"], row["name"], row["qty"]])
 
     buffer = io.BytesIO()
     wb.save(buffer)

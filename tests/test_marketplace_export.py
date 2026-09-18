@@ -163,6 +163,32 @@ def test_ozon_export_builds_file_with_mapped_articles(db, client_logged_in):
     ]
 
 
+def test_ozon_export_adds_second_sheet_with_box_to_gm_mapping(db, client_logged_in):
+    """Второй лист файла — наше собственное сопоставление короба и
+    грузоместа Ozon (не часть официального шаблона), для контроля при
+    сборке/сверке поставки: наш короб, грузоместо Ozon, номенклатура,
+    кол-во."""
+    doc, item1, item2 = _make_ozon_movement()
+
+    resp = client_logged_in.post(
+        f"/marketplace-export/movement/{doc.id}/ozon",
+        data={"cargo_barcodes": "GM-0001\nGM-0002"},
+    )
+
+    wb = openpyxl.load_workbook(io.BytesIO(resp.data))
+    assert wb.sheetnames == ["Состав ГМ поставки", "Наши короба и ГМ"]
+
+    ws2 = wb["Наши короба и ГМ"]
+    header = [cell.value for cell in ws2[1]]
+    assert header == ["Наш короб", "Грузоместо Ozon", "Номенклатура", "Кол-во"]
+
+    rows = [row for row in ws2.iter_rows(min_row=2, values_only=True) if row[0] is not None]
+    assert rows == [
+        ("BOX-MPX-1", "GM-0001", item1.name, 5.0),
+        ("BOX-MPX-2", "GM-0002", item2.name, 7.0),
+    ]
+
+
 def test_ozon_export_leaves_article_blank_when_not_mapped(db, client_logged_in):
     doc, item1, item2 = _make_ozon_movement()
 
