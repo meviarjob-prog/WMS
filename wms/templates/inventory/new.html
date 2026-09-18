@@ -6,7 +6,6 @@
 
 <div class="col-md-5">
   <div class="card p-3">
-    <p class="text-muted small">Все короба, которые вы отсканируете в этом листе, должны быть на выбранном складе.</p>
     <form method="post">
       <div class="mb-3">
         <label class="form-label">Склад</label>
@@ -17,8 +16,42 @@
           {% endfor %}
         </select>
       </div>
+
+      <div class="mb-3">
+        <label class="form-label d-block">Что инвентаризируем</label>
+        <div class="btn-group w-100" role="group">
+          <input type="radio" class="btn-check" name="mode" id="modeGeneral" value="general" checked autocomplete="off">
+          <label class="btn btn-outline-primary" for="modeGeneral">Весь склад</label>
+          <input type="radio" class="btn-check" name="mode" id="modeCell" value="cell" autocomplete="off">
+          <label class="btn btn-outline-primary" for="modeCell">По ячейке</label>
+        </div>
+      </div>
+
+      <div class="mb-3 d-none" id="cellCodeGroup">
+        <label class="form-label">Код ячейки</label>
+        <input type="text" name="cell_code" id="cellCodeInput" class="form-control" placeholder="Отсканируйте или введите код ячейки">
+        <div class="form-text">Сравниваться будет не весь учётный остаток склада, а только то, что сейчас числится в этой ячейке. Сканирование короба в этом листе сразу же переставит его в эту ячейку.</div>
+      </div>
+
+      <p class="text-muted small">Все короба, которые вы отсканируете в этом листе, должны быть на выбранном складе.</p>
       <button type="submit" class="btn btn-primary">Создать лист и сканировать короба</button>
     </form>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var cellGroup = document.getElementById("cellCodeGroup");
+  var cellInput = document.getElementById("cellCodeInput");
+  document.querySelectorAll('input[name="mode"]').forEach(function (radio) {
+    radio.addEventListener("change", function () {
+      var isCell = document.getElementById("modeCell").checked;
+      cellGroup.classList.toggle("d-none", !isCell);
+      if (isCell) { cellInput.focus(); }
+    });
+  });
+})();
+</script>
 {% endblock %}

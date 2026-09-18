@@ -8,6 +8,7 @@ from ..extensions import db
 from ..models import (
     Box,
     BoxItem,
+    Cell,
     InventoryDocument,
     InventoryLine,
     InventoryScannedBox,
@@ -19,6 +20,7 @@ from ..utils.excel_io import export_inventory_to_excel, timestamp_for_filename
 from ..utils.document_access import ensure_view_document_access, owned_query
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
+from .placement import _place_box
 
 bp = Blueprint("inventory", __name__)
 
@@ -53,6 +55,24 @@ def _warehouse_stock_by_nomenclature(warehouse_id):
     return stock
 
 
+def _cell_stock_by_nomenclature(cell_id):
+    """{nomenclature_id: кол-во} того, что по системе СЕЙЧАС физически
+    стоит в этой конкретной ячейке — сумма по коробам с cell_id == этой
+    ячейке. В отличие от _warehouse_stock_by_nomenclature, неразмещенный
+    остаток сюда не входит — он ни к какой ячейке не привязан по
+    определению, сравнивать его с содержимым ОДНОЙ ячейки нет смысла."""
+    stock = {}
+    for nomenclature_id, qty in (
+        db.session.query(BoxItem.nomenclature_id, func.sum(BoxItem.qty))
+        .join(Box, BoxItem.box_id == Box.id)
+        .filter(Box.cell_id == cell_id)
+        .group_by(BoxItem.nomenclature_id)
+        .all()
+    ):
+        stock[nomenclature_id] = stock.get(nomenclature_id, 0) + (qty or 0)
+    return stock
+
+
 @bp.route("/")
 def list_documents():
     documents = owned_query(InventoryDocument).order_by(InventoryDocument.created_at.desc()).all()
@@ -83,10 +103,19 @@ def merge_documents():
     if len(warehouse_ids) > 1:
         flash("Выбранные листы относятся к разным складам — объединять можно только листы одного склада", "danger")
         return redirect(url_for("inventory.list_documents"))
+    cell_ids = {d.cell_id for d in docs}
+    if len(cell_ids) > 1:
+        flash(
+            "Выбранные листы относятся к разным ячейкам (или к ячейке и складу целиком) — "
+            "объединять можно только листы одного и того же участка",
+            "danger",
+        )
+        return redirect(url_for("inventory.list_documents"))
 
     merged = InventoryDocument(
         number=next_number("inventory"),
         warehouse_id=warehouse_ids.pop(),
+        cell_id=cell_ids.pop(),
         created_by_id=current_user.id,
     )
     db.session.add(merged)
@@ -142,14 +171,32 @@ def new_document():
         flash("Выберите склад", "danger")
         return redirect(url_for("inventory.new_document"))
 
+    cell = None
+    cell_code = request.form.get("cell_code", "").strip()
+    # Выборочная инвентаризация по ячейке (см. чат) — только когда явно
+    # выбран этот режим, чтобы случайно введенный текст в поле (если бы оно
+    # было видно всегда) не превращал общую инвентаризацию в ячеечную.
+    if request.form.get("mode") == "cell":
+        if not cell_code:
+            flash("Укажите код ячейки для выборочной инвентаризации", "danger")
+            return redirect(url_for("inventory.new_document"))
+        cell = Cell.query.filter_by(warehouse_id=warehouse_id, code=cell_code).first()
+        if not cell:
+            flash(f"Ячейка «{cell_code}» не найдена на выбранном складе", "danger")
+            return redirect(url_for("inventory.new_document"))
+
     doc = InventoryDocument(
         number=next_number("inventory"),
         warehouse_id=warehouse_id,
+        cell_id=cell.id if cell else None,
         created_by_id=current_user.id,
     )
     db.session.add(doc)
     db.session.commit()
-    flash(f"Лист инвентаризации {doc.number} создан — сканируйте короба", "success")
+    if cell:
+        flash(f"Лист инвентаризации {doc.number} создан для ячейки {cell.code} — сканируйте короба", "success")
+    else:
+        flash(f"Лист инвентаризации {doc.number} создан — сканируйте короба", "success")
     return redirect(url_for("inventory.detail", doc_id=doc.id))
 
 
@@ -163,7 +210,9 @@ def detail(doc_id):
     # что реально насчитали в этом документе — по объединению обоих
     # списков товаров, чтобы не пропустить ни то, что есть на складе, но не
     # попало в подсчет, ни то, что посчитали, а на складе по учету нет.
-    stock_by_item = _warehouse_stock_by_nomenclature(doc.warehouse_id)
+    stock_by_item = (
+        _cell_stock_by_nomenclature(doc.cell_id) if doc.cell_id else _warehouse_stock_by_nomenclature(doc.warehouse_id)
+    )
     counted_by_item = {line.nomenclature_id: line.qty for line in lines}
     nomenclature_ids = set(stock_by_item) | set(counted_by_item)
     nomenclatures = (
@@ -214,6 +263,17 @@ def add_box(doc_id):
         flash(f"Короб {box.box_number} уже учтен в этом листе", "danger")
         return redirect(url_for("inventory.detail", doc_id=doc.id))
 
+    moved_from = None
+    if doc.cell_id:
+        # Выборочная инвентаризация ячейки — сканирование короба сразу же и
+        # есть его фактическое размещение в эту ячейку (см. чат), без
+        # отдельного подтверждения, даже если короб был в другой ячейке.
+        moved_from = box.cell.code if box.cell_id and box.cell_id != doc.cell_id else None
+        error = _place_box(box, doc.cell.code, doc.warehouse_id)
+        if error:
+            flash(error, "danger")
+            return redirect(url_for("inventory.detail", doc_id=doc.id))
+
     items = box.items.all()
     for box_item in items:
         line = InventoryLine.query.filter_by(
@@ -231,10 +291,13 @@ def add_box(doc_id):
     box.mark_scanned(current_user)
     db.session.commit()
 
+    move_note = f" (перемещен из ячейки {moved_from})" if moved_from else (
+        f" (размещен в ячейке {doc.cell.code})" if doc.cell_id and not moved_from and box.cell_id else ""
+    )
     if items:
-        flash(f"Короб {box.box_number} учтен: {len(items)} позиция(й)", "success")
+        flash(f"Короб {box.box_number} учтен{move_note}: {len(items)} позиция(й)", "success")
     else:
-        flash(f"Короб {box.box_number} учтен: короб пуст, товар не добавлен", "warning")
+        flash(f"Короб {box.box_number} учтен{move_note}: короб пуст, товар не добавлен", "warning")
     return redirect(url_for("inventory.detail", doc_id=doc.id))
 
 

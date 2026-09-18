@@ -908,8 +908,18 @@ class InventoryDocument(db.Model):
     # inventory.merge_documents. Статус такого листа становится "merged",
     # его короба и позиции остаются на месте как история подсчета.
     merged_into_id = db.Column(db.Integer, db.ForeignKey("inventory_documents.id"), nullable=True)
+    # NULL — обычная (общая) инвентаризация по складу целиком, как раньше.
+    # Заполнено — выборочная инвентаризация ОДНОЙ ячейки (см. чат): для
+    # сравнения берется не весь учётный остаток склада, а только то, что
+    # по системе сейчас физически стоит в этой ячейке (см.
+    # inventory._cell_stock_by_nomenclature). Сканирование короба в таком
+    # листе не только учитывает его в подсчете, но и сразу переставляет в
+    # эту ячейку (см. inventory.add_box) — по сути инвентаризация ячейки
+    # одновременно и есть ее фактическое размещение.
+    cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"), nullable=True)
 
     warehouse = db.relationship("Warehouse")
+    cell = db.relationship("Cell")
     created_by = db.relationship("User")
     merged_into = db.relationship("InventoryDocument", remote_side=[id], backref="merged_from")
     lines = db.relationship(
