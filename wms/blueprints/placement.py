@@ -261,26 +261,40 @@ def suggest_cells_for_boxes(warehouse_id, boxes):
     }
 
 
+PLACEMENT_PAGE_SIZE = 50
+
+
 @bp.route("/")
 def list_documents():
+    """Неразмещенный остаток и короба без ячейки постранично (см. чат) —
+    на активном складе оба списка могут разрастись до тысяч строк, а
+    рендерить их разом на одной странице ощутимо тормозило. Два отдельных
+    номера страницы (stock_page/boxes_page), т.к. таблицы независимые —
+    перелистывание одной не должно сбрасывать страницу другой."""
     documents = owned_query(PlacementDocument).order_by(PlacementDocument.created_at.desc()).all()
 
-    stock_rows = (
+    stock_page = request.args.get("stock_page", 1, type=int)
+    stock_pagination = (
         db.session.query(UnplacedStock)
         .filter(UnplacedStock.qty > 0)
         .join(Warehouse)
         .order_by(Warehouse.code, UnplacedStock.nomenclature_id)
-        .all()
+        .paginate(page=stock_page, per_page=PLACEMENT_PAGE_SIZE, error_out=False)
     )
-    open_boxes = (
+
+    boxes_page = request.args.get("boxes_page", 1, type=int)
+    boxes_pagination = (
         Box.query.filter_by(cell_id=None)
         .join(Warehouse, Box.warehouse_id == Warehouse.id)
         .order_by(Warehouse.code, Box.box_number)
-        .all()
+        .paginate(page=boxes_page, per_page=PLACEMENT_PAGE_SIZE, error_out=False)
     )
-    # open_boxes может охватывать сразу несколько складов — контекст подбора
-    # ячейки (suggest_cells_for_boxes) считается один раз НА СКЛАД, а не на
-    # каждый короб, поэтому группируем по складу перед вызовом.
+    open_boxes = boxes_pagination.items
+
+    # open_boxes здесь — только текущая страница, поэтому и контекст подбора
+    # ячейки (suggest_cells_for_boxes, считается один раз НА СКЛАД) теперь
+    # тоже стоит дешевле, чем при подсчете сразу по всем неразмещенным
+    # коробам склада.
     boxes_by_warehouse = defaultdict(list)
     for box in open_boxes:
         boxes_by_warehouse[box.warehouse_id].append(box)
@@ -290,8 +304,10 @@ def list_documents():
     return render_template(
         "placement/list.html",
         documents=documents,
-        stock_rows=stock_rows,
+        stock_rows=stock_pagination.items,
+        stock_pagination=stock_pagination,
         open_boxes=open_boxes,
+        boxes_pagination=boxes_pagination,
         cell_suggestions=cell_suggestions,
     )
 
