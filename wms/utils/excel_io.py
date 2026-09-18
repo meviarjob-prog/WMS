@@ -589,6 +589,28 @@ def export_wb_package_composition(rows) -> bytes:
     return buffer.getvalue()
 
 
+WB_SUPPLY_REQUEST_HEADERS = ["Баркод", "Количество"]
+
+
+def export_wb_supply_request(rows) -> bytes:
+    """rows — [{"barcode", "qty"}], одна строка на баркод с суммарным
+    количеством по ВСЕМ коробам перемещения сразу (см.
+    marketplace_export.wb_supply_request) — второй, более простой файл для
+    WB, отдельно от подробного состава по коробам
+    (export_wb_package_composition)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    _style_header(ws, WB_SUPPLY_REQUEST_HEADERS)
+
+    for row in rows:
+        ws.append([row["barcode"], row["qty"]])
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 # Заголовки шаблона Ozon "заявка на поставку" (products-import-template) —
 # именно в нижнем регистре, как в самом шаблоне.
 OZON_SUPPLY_REQUEST_HEADERS = ["артикул", "имя (необязательно)", "количество"]

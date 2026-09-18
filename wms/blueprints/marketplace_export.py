@@ -23,6 +23,10 @@
   отдельно), см. ozon_supply_request. Сумма количеств в обоих файлах
   должна совпадать, иначе Ozon аннулирует состав ГМ (см. инструкцию в
   самом шаблоне "Состав ГМ").
+- WB "заявка на поставку" (см. чат): по аналогии с Ozon — второй,
+  упрощенный файл всего с двумя колонками (Баркод, Количество), тоже
+  суммарным количеством по ВСЕМ коробам перемещения сразу, см.
+  wb_supply_request.
 
 И там, и там "Срок годности" WMS не отслеживает — оставляется пустым,
 заполняется вручную при необходимости, как и предусмотрено самими
@@ -40,6 +44,7 @@ from ..utils.excel_io import (
     export_ozon_package_composition,
     export_ozon_supply_request,
     export_wb_package_composition,
+    export_wb_supply_request,
     timestamp_for_filename,
 )
 from ..utils.http import content_disposition
@@ -251,6 +256,34 @@ def wb_package_composition(doc_id):
 
     data = export_wb_package_composition(rows)
     fname = f"{doc.number}_wb_shk_{timestamp_for_filename()}.xlsx"
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": content_disposition(fname)},
+    )
+
+
+@bp.route("/movement/<int:doc_id>/wb/supply-request")
+def wb_supply_request(doc_id):
+    """Второй, более простой файл для WB (см. чат) — всего два столбца,
+    баркод и суммарное количество по ВСЕМ коробам перемещения сразу (как
+    ozon_supply_request у Ozon), а не по коробам отдельно, как в
+    wb_package_composition."""
+    doc = _get_viewable_movement(doc_id)
+    lines = doc.lines.order_by(MovementLine.id.asc()).all()
+
+    totals = {}
+    for line in lines:
+        for item in line.box.items:
+            totals[item.nomenclature.barcode] = totals.get(item.nomenclature.barcode, 0.0) + item.qty
+
+    rows = sorted(
+        ({"barcode": barcode, "qty": qty} for barcode, qty in totals.items()),
+        key=lambda r: r["barcode"],
+    )
+
+    data = export_wb_supply_request(rows)
+    fname = f"{doc.number}_wb_supply_request_{timestamp_for_filename()}.xlsx"
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

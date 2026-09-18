@@ -276,3 +276,37 @@ def test_wb_export_uses_our_own_box_numbers_as_shk_koroba(db, client_logged_in):
         (item1.barcode, 5.0, "BOX-MPX-1", None, None),
         (item2.barcode, 7.0, "BOX-MPX-2", None, None),
     ]
+
+
+def test_wb_supply_request_has_two_columns_barcode_and_qty(db, client_logged_in):
+    """Второй, упрощенный файл для WB (см. чат) — всего два столбца,
+    суммарное количество по ВСЕМ коробам перемещения сразу, без разбивки
+    по коробам (в отличие от wb_package_composition)."""
+    doc, item1, item2 = _make_ozon_movement()
+
+    resp = client_logged_in.get(f"/marketplace-export/movement/{doc.id}/wb/supply-request")
+
+    assert resp.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(resp.data))
+    ws = wb.active
+    header = [cell.value for cell in ws[1]]
+    assert header == ["Баркод", "Количество"]
+
+    rows = _read_xlsx_rows(resp.data)
+    assert rows == sorted([(item1.barcode, 5.0), (item2.barcode, 7.0)])
+
+
+def test_wb_supply_request_sums_quantity_across_boxes_of_same_barcode(db, client_logged_in):
+    doc, item1, _item2 = _make_ozon_movement()
+    box3 = Box(box_number="BOX-MPX-3", warehouse_id=doc.from_warehouse_id, status="open")
+    db.session.add(box3)
+    db.session.commit()
+    db.session.add(BoxItem(box_id=box3.id, nomenclature_id=item1.id, qty=3))
+    db.session.add(MovementLine(document_id=doc.id, box_id=box3.id, from_warehouse_id=doc.from_warehouse_id))
+    db.session.commit()
+
+    resp = client_logged_in.get(f"/marketplace-export/movement/{doc.id}/wb/supply-request")
+
+    rows = _read_xlsx_rows(resp.data)
+    total_for_item1 = next(r for r in rows if r[0] == item1.barcode)
+    assert total_for_item1[1] == 8.0

@@ -32,6 +32,7 @@
     <a class="btn btn-outline-secondary" href="{{ url_for('marketplace_export.ozon_supply_request', doc_id=doc.id) }}">🧾 Заявка на поставку (Ozon)</a>
     {% elif lines and doc.to_warehouse.marketplace == 'wb' %}
     <a class="btn btn-outline-secondary" href="{{ url_for('marketplace_export.wb_package_composition', doc_id=doc.id) }}">📦 Состав для WB</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('marketplace_export.wb_supply_request', doc_id=doc.id) }}">🧾 Заявка на поставку (WB)</a>
     {% endif %}
     {% if can_manage_document and doc.status == 'draft' %}
     <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
