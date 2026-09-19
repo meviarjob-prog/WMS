@@ -157,7 +157,7 @@ def test_top_summary_shows_total_production_since_period_start(db, client_logged
     assert ">1<" in html[idx : idx + 200]
 
 
-def test_marketplace_header_fulfilled_includes_in_transit(db, client_logged_in):
+def test_marketplace_header_does_not_count_in_transit_twice(db, client_logged_in):
     sender, city, item = _setup(planned_qty=30)
     line = ShipmentPlanLine.query.first()
     line.fulfilled_qty = 5
@@ -166,10 +166,12 @@ def test_marketplace_header_fulfilled_includes_in_transit(db, client_logged_in):
 
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
-    # Выполнено должно быть 5 (принято) + 10 (в пути) = 15, а не просто 5.
+    # Значение 5 уже пришло из колонки Google «отгружено / в пути».
+    # Текущее перемещение показывается отдельно и повторно не прибавляется.
     idx = html.find("выполнено")
     snippet = html[idx : idx + 200]
-    assert "15" in snippet
+    assert "<b>5</b>" in snippet
+    assert "<b>15</b>" not in snippet
 
 
 def test_picking_list_has_totals_row_summing_columns(db, client_logged_in):
