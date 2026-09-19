@@ -119,3 +119,16 @@ def test_google_button_setup_uses_public_https_address(client_logged_in, app):
     assert response.status_code == 200
     assert b"https://wms.wmsmeviar.ru/shipment-plan/google-trigger" in response.data
     assert b"syncWms" in response.data
+
+
+def test_dashboard_shows_google_button_setup_even_without_credentials(
+    client_logged_in, monkeypatch
+):
+    monkeypatch.setattr(
+        "wms.blueprints.shipment_plan.google_sheets_configured", lambda app: False
+    )
+
+    response = client_logged_in.get("/shipment-plan/")
+
+    assert response.status_code == 200
+    assert "/shipment-plan/google-button" in response.get_data(as_text=True)

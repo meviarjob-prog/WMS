@@ -10,8 +10,8 @@
     <form method="post" action="{{ url_for('shipment_plan.sync_google') }}" class="d-inline">
       <button class="btn btn-primary" type="submit">🔄 Синхронизировать Google Таблицу</button>
     </form>
-    <a class="btn btn-outline-primary" href="{{ url_for('shipment_plan.google_button_setup') }}">Настроить кнопку в таблице</a>
     {% endif %}
+    <a class="btn btn-outline-primary" href="{{ url_for('shipment_plan.google_button_setup') }}">Настроить кнопку в таблице</a>
     <a class="btn btn-outline-primary" href="{{ url_for('shipment_plan.upload') }}">⬆ Загрузить файл</a>
     {% endif %}
   </div>

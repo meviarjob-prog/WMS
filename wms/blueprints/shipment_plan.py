@@ -416,6 +416,7 @@ def google_button_setup():
     return render_template(
         "shipment_plan/google_button.html",
         apps_script=_google_apps_script(token),
+        google_configured=google_sheets_configured(current_app),
     )
 
 
