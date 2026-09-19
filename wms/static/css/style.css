@@ -95,11 +95,16 @@ body {
 
 /* Список перемещений: строка окрашивается по маркетплейсу склада
    назначения — визуально отличить ВБ от Озон, не открывая документ.
-   !important — мобильная карточка одновременно несет класс Bootstrap
-   "text-body" (тоже !important), который иначе перебивает цвет текста. */
-.mp-row-wb { background-color: #9F69D6; color: #fff !important; }
+   Фон нужен именно на >td (не только на самой tr) и с !important — у
+   Bootstrap 5 каждая ячейка таблицы красит СВОЙ фон через переменную
+   --bs-table-bg с более высокой специфичностью (.table>:not(caption)>*>*),
+   и он перекрывает фон, поставленный только на <tr>. !important на цвете
+   текста нужен по той же причине, плюс на мобильной карточке — там
+   элемент одновременно несет класс Bootstrap "text-body"/"text-muted"
+   (тоже !important). */
+.mp-row-wb, .mp-row-wb > td { background-color: #9F69D6 !important; color: #fff !important; }
 .mp-row-wb a, .mp-row-wb .text-muted { color: #fff !important; text-decoration: underline; }
-.mp-row-ozon { background-color: #594CD8; color: #fff !important; }
+.mp-row-ozon, .mp-row-ozon > td { background-color: #594CD8 !important; color: #fff !important; }
 .mp-row-ozon a, .mp-row-ozon .text-muted { color: #fff !important; text-decoration: underline; }
 
 /* ---- Мобильный экран ---- */
