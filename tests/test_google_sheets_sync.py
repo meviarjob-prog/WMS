@@ -1,4 +1,6 @@
 from datetime import datetime
+import io
+import json
 
 from openpyxl import Workbook
 
@@ -132,3 +134,35 @@ def test_dashboard_shows_google_button_setup_even_without_credentials(
 
     assert response.status_code == 200
     assert "/shipment-plan/google-button" in response.get_data(as_text=True)
+
+
+def test_admin_can_upload_google_credentials_from_setup_page(
+    client_logged_in, app, tmp_path
+):
+    target = tmp_path / "google-service-account.json"
+    app.config["GOOGLE_SERVICE_ACCOUNT_FILE"] = str(target)
+    credentials = {
+        "type": "service_account",
+        "project_id": "test-project",
+        "private_key": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
+        "client_email": "wms@example.iam.gserviceaccount.com",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+    response = client_logged_in.post(
+        "/shipment-plan/google-button",
+        data={
+            "action": "upload_credentials",
+            "credentials": (
+                io.BytesIO(json.dumps(credentials).encode("utf-8")),
+                "credentials.json",
+            ),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert target.exists()
+    assert json.loads(target.read_text(encoding="utf-8"))["project_id"] == "test-project"
+    assert "Ключ Google сохранен на сервере" in response.get_data(as_text=True)

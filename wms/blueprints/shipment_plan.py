@@ -1,6 +1,9 @@
 from datetime import date, datetime, timedelta
 import hmac
+import json
+import os
 import secrets
+import tempfile
 import threading
 
 from flask import (
@@ -300,6 +303,40 @@ function syncWms() {{
 '''
 
 
+def _save_google_credentials(upload):
+    data = upload.read(256 * 1024 + 1)
+    if not data:
+        raise ValueError("Выберите JSON-файл ключа")
+    if len(data) > 256 * 1024:
+        raise ValueError("Файл ключа слишком большой")
+    try:
+        payload = json.loads(data.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Выбранный файл не является корректным JSON-ключом") from exc
+    required = ("type", "project_id", "private_key", "client_email", "token_uri")
+    if payload.get("type") != "service_account" or any(not payload.get(k) for k in required):
+        raise ValueError("Это не ключ сервисного аккаунта Google")
+
+    target = current_app.config["GOOGLE_SERVICE_ACCOUNT_FILE"]
+    directory = os.path.dirname(target)
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix="google-key-", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(data)
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        os.replace(temporary, target)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
 @bp.route("/upload", methods=["GET", "POST"])
 def upload():
     if not current_user.is_admin:
@@ -410,9 +447,19 @@ def google_button_setup():
     if not current_user.is_admin:
         flash("Настраивать кнопку Google Таблицы может только администратор", "danger")
         return redirect(url_for("shipment_plan.dashboard"))
-    token = _get_or_create_google_trigger_token(rotate=request.method == "POST")
-    if request.method == "POST":
+    action = request.form.get("action") if request.method == "POST" else None
+    token = _get_or_create_google_trigger_token(rotate=action == "rotate_token")
+    if action == "rotate_token":
         flash("Код кнопки обновлен. Старый код больше не работает.", "success")
+        return redirect(url_for("shipment_plan.google_button_setup"))
+    if action == "upload_credentials":
+        try:
+            _save_google_credentials(request.files.get("credentials"))
+        except (AttributeError, OSError, ValueError) as exc:
+            flash(f"Не удалось сохранить ключ Google: {exc}", "danger")
+        else:
+            flash("Ключ Google сохранен на сервере. Можно запускать загрузку.", "success")
+        return redirect(url_for("shipment_plan.google_button_setup"))
     return render_template(
         "shipment_plan/google_button.html",
         apps_script=_google_apps_script(token),
