@@ -5,6 +5,10 @@
 складе назначения, план по нему остается открытым, ровно как и
 fulfilled_qty, который тоже засчитывается только по факту приемки."""
 
+import io
+
+from openpyxl import load_workbook
+
 from wms.extensions import db
 from wms.models import (
     Box,
@@ -172,6 +176,46 @@ def test_marketplace_header_does_not_count_in_transit_twice(db, client_logged_in
     snippet = html[idx : idx + 200]
     assert "<b>5</b>" in snippet
     assert "<b>15</b>" not in snippet
+
+
+def test_marketplace_header_uses_reported_google_total(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=50)
+    plan = ShipmentPlan.query.filter_by(marketplace="ozon").first()
+    line = ShipmentPlanLine.query.first()
+    plan.source_fulfilled_qty = 42
+    line.fulfilled_qty = 44
+    db.session.commit()
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("выполнено")
+    snippet = html[idx : idx + 200]
+    assert "<b>42</b>" in snippet
+    assert "<b>44</b>" not in snippet
+
+
+def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    line = ShipmentPlanLine.query.first()
+    line.fulfilled_qty = 5
+    db.session.commit()
+    _ship_box(sender, city, item, qty=10, box_number="BOX-XLSX-1", client=client_logged_in)
+
+    response = client_logged_in.get("/shipment-plan/export.xlsx")
+
+    assert response.status_code == 200
+    workbook = load_workbook(io.BytesIO(response.data), data_only=True)
+    sheet = workbook["План отгрузок"]
+    assert "A1:A2" in {str(cell_range) for cell_range in sheet.merged_cells.ranges}
+    assert sheet["A1"].value == "Артикул"
+    assert sheet["E1"].value == "На разбраковке"
+    assert sheet["H1"].value == "ОЗОН"
+    assert sheet["H2"].value == "Город"
+    assert sheet["A3"].value == "Итого (1 поз.)"
+    assert sheet["G3"].value == 10
+    assert sheet["H3"].value == 25
+    assert sheet["A4"].value == "ART-1"
+    assert sheet["H4"].value == "25 (10)"
 
 
 def test_picking_list_has_totals_row_summing_columns(db, client_logged_in):

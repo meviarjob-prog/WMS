@@ -1005,6 +1005,10 @@ class ShipmentPlan(db.Model):
     # см. utils.shipment_plan_import.extract_period_start. Пусто, если в
     # названии листа не нашлось даты. Период считается равным 14 дням.
     period_start = db.Column(db.Date, nullable=True)
+    # Официальный итог «Факт отгружено» из исходных листов Google. Храним
+    # отдельно от суммы строк: в таблице итоговая формула иногда намеренно
+    # охватывает не все вспомогательные строки.
+    source_fulfilled_qty = db.Column(db.Float, nullable=True)
 
     uploaded_by = db.relationship("User")
     lines = db.relationship(

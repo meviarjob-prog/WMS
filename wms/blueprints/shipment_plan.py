@@ -44,7 +44,6 @@ from ..utils.google_sheets import (
     google_sheets_configured,
     load_distribution_workbook,
     received_wms_totals,
-    write_distribution_facts,
     write_wms_movement_sheet,
 )
 from .warehouses import default_fulfillment_1c_name
@@ -126,6 +125,7 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
     plan.uploaded_by_id = uploaded_by_id
     plan.uploaded_at = datetime.utcnow()
     plan.period_start = extract_period_start(parsed.sheet_name)
+    plan.source_fulfilled_qty = parsed.reported_fact
 
     plan.lines.delete()
 
@@ -229,7 +229,12 @@ def _google_sync_status():
 
 def sync_google_plans_and_movements(uploaded_by_id=None):
     """Читает все листы с признаком «Распределение» и публикует в
-    отдельный лист агрегированный факт перемещений из WMS."""
+    отдельный лист агрегированный факт перемещений из WMS.
+
+    Исходные колонки «отгружено / в пути» не изменяем: это входной факт
+    плана. Если записать туда движения WMS, следующий запуск прочитает
+    собственную выгрузку вместо исходных данных и занизит выполнение.
+    """
     workbook, sheet_names = load_distribution_workbook(current_app)
     summary = []
     found_any = False
@@ -249,12 +254,11 @@ def sync_google_plans_and_movements(uploaded_by_id=None):
 
     db.session.commit()
     exported = write_wms_movement_sheet(current_app)
-    updated_cells = write_distribution_facts(current_app, workbook)
     _set_sync_setting(GOOGLE_SYNC_AT_KEY, datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
     _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, "")
     _set_sync_setting(GOOGLE_SYNC_SHEETS_KEY, ", ".join(sheet_names))
     db.session.commit()
-    return summary, sheet_names, exported, updated_cells
+    return summary, sheet_names, exported, 0
 
 
 def _get_or_create_google_trigger_token(rotate=False):
@@ -390,7 +394,7 @@ def sync_google():
         flash("Синхронизация уже выполняется. Дождитесь ее завершения.", "warning")
         return redirect(url_for("shipment_plan.dashboard"))
     try:
-        summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements(
+        summary, sheet_names, exported, _ = sync_google_plans_and_movements(
             uploaded_by_id=current_user.id
         )
     except Exception as exc:  # noqa: BLE001
@@ -402,8 +406,8 @@ def sync_google():
         flash(
             "Google Таблица синхронизирована: "
             + "; ".join(summary)
-            + f"; выгружено строк WMS: {exported}; "
-            + f"обновлено ячеек «отгружено»: {updated_cells}; "
+            + f"; выгружено строк на лист «WMS — перемещения»: {exported}; "
+            + "исходные колонки «отгружено / в пути» не изменялись; "
             + f"листов: {len(sheet_names)}",
             "success",
         )
@@ -424,7 +428,7 @@ def google_trigger():
     if not _google_sync_lock.acquire(False):
         return jsonify(ok=False, message="Синхронизация уже выполняется"), 409
     try:
-        summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements()
+        summary, sheet_names, exported, _ = sync_google_plans_and_movements()
     except Exception as exc:  # noqa: BLE001
         db.session.rollback()
         _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, str(exc))
@@ -436,8 +440,9 @@ def google_trigger():
 
     message = (
         "; ".join(summary)
-        + f"; выгружено строк WMS: {exported}; "
-        + f"обновлено ячеек «отгружено»: {updated_cells}; листов: {len(sheet_names)}"
+        + f"; выгружено строк на лист «WMS — перемещения»: {exported}; "
+        + "исходные колонки «отгружено / в пути» не изменялись; "
+        + f"листов: {len(sheet_names)}"
     )
     return jsonify(ok=True, message=message)
 
@@ -640,8 +645,7 @@ def _pace_analysis(plan, total_planned, total_fulfilled):
     }
 
 
-@bp.route("/")
-def dashboard():
+def _dashboard_context():
     plans = {p.marketplace: p for p in ShipmentPlan.query.all()}
     sender_ids = _sender_warehouse_ids()
     stock = _stock_by_nomenclature(sender_ids)
@@ -700,7 +704,12 @@ def dashboard():
         }
 
         total_planned = sum(line.planned_qty for line in lines)
-        total_fulfilled = sum(line.fulfilled_qty for line in lines)
+        line_fulfilled = sum(line.fulfilled_qty for line in lines)
+        total_fulfilled = (
+            plan.source_fulfilled_qty
+            if plan.source_fulfilled_qty is not None
+            else line_fulfilled
+        )
         total_in_transit = sum(row["in_transit"] for row in cities)
         pace = _pace_analysis(plan, total_planned, total_fulfilled)
 
@@ -827,22 +836,34 @@ def dashboard():
         "total_production": overall_production,
     }
 
+    return {
+        "marketplaces": marketplaces_data,
+        "picking_list": picking_list,
+        "picking_totals": picking_totals,
+        "ozon_cities": ozon_cities,
+        "wb_cities": wb_cities,
+        "summary": summary,
+    }
+
+
+@bp.route("/")
+def dashboard():
     return render_template(
         "shipment_plan/dashboard.html",
-        marketplaces=marketplaces_data,
-        picking_list=picking_list,
-        picking_totals=picking_totals,
-        ozon_cities=ozon_cities,
-        wb_cities=wb_cities,
-        summary=summary,
+        **_dashboard_context(),
         google_sync=_google_sync_status(),
     )
 
 
 @bp.route("/export.xlsx")
 def export_all():
-    lines = ShipmentPlanLine.query.join(ShipmentPlan).all()
-    data = export_shipment_plan_to_excel(lines)
+    context = _dashboard_context()
+    data = export_shipment_plan_to_excel(
+        context["picking_list"],
+        context["picking_totals"],
+        context["ozon_cities"],
+        context["wb_cities"],
+    )
     fname = f"shipment_plan_{timestamp_for_filename()}.xlsx"
     return Response(
         data,

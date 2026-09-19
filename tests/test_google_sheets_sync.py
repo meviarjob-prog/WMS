@@ -2,8 +2,6 @@ from datetime import datetime
 import io
 import json
 
-from openpyxl import Workbook
-
 from wms.extensions import db
 from wms.models import (
     AppSetting,
@@ -16,7 +14,6 @@ from wms.models import (
 )
 from wms.utils.google_sheets import (
     _ensure_output_row_capacity,
-    _fact_ranges_for_sheet,
     build_wms_movement_rows,
     distribution_sheet_titles,
 )
@@ -85,19 +82,6 @@ def test_wms_rows_separate_in_transit_and_received(db):
     assert rows[0][6:] == [5.0, 5.0, 10.0]
 
 
-def test_fact_ranges_target_only_shipment_fact_column():
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Распределение ВБ"
-    sheet.append(["Артикул", "Баркод", "Москва", "отгружено"])
-    sheet.append(["A1", "111", 10, 0])
-    sheet.append(["ИТОГО", None, 10, "=SUM(D2:D2)"])
-
-    ranges = _fact_ranges_for_sheet(sheet, "wb", {("wb", "москва", "111"): 7})
-
-    assert ranges == [{"range": "'Распределение ВБ'!D2:D3", "values": [[7], [None]]}]
-
-
 def test_output_sheet_expands_only_when_required_rows_exceed_grid():
     service = _ExecuteRecorder()
     properties = {"sheetId": 42, "gridProperties": {"rowCount": 2139}}
@@ -139,7 +123,7 @@ def test_google_trigger_runs_sync_with_valid_token(client, db, monkeypatch):
     payload = response.get_json()
     assert payload["ok"] is True
     assert "ВБ: 12 позиций" in payload["message"]
-    assert "обновлено ячеек «отгружено»: 8" in payload["message"]
+    assert "исходные колонки «отгружено / в пути» не изменялись" in payload["message"]
 
 
 def test_google_button_setup_uses_public_https_address(client_logged_in, app):

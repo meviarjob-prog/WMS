@@ -186,6 +186,38 @@ class ParsedPlan:
         self.sheet_name = sheet_name
         self.cities = []  # list[str] в порядке появления
         self.rows = []  # list[dict]: barcode, article, size, city, qty, fact
+        # Итог «Факт отгружено» из строки ВСЕГО. На листах без отдельного
+        # итога сюда попадает сумма детальных колонок факта.
+        self.reported_fact = 0.0
+
+
+def _reported_fact_total(ws, header_row, barcode_col, rows):
+    """Возвращает официальный итог факта листа, если он есть.
+
+    В обычном листе перед городскими группами есть колонка вида «Факт
+    отгружено 7 д.» и строка «ВСЕГО». Ее значение может отличаться от
+    простого суммирования всех детальных строк, поэтому для шапки WMS
+    используем именно показанный пользователю итог. В объединенных листах
+    такого общего итога нет — там честно суммируем детальные факты.
+    """
+    city_columns = _find_city_columns(ws, header_row, barcode_col + 1)
+    first_city_col = city_columns[0][0] if city_columns else ws.max_column + 1
+    fact_col = None
+    for column in range(1, first_city_col):
+        text = _norm(ws.cell(row=header_row, column=column).value).casefold()
+        if "факт" in text and "отгруж" in text:
+            fact_col = column
+            break
+    if fact_col is not None:
+        for row_number in range(header_row + 1, min(ws.max_row, header_row + 15) + 1):
+            labels = " ".join(
+                _norm(ws.cell(row=row_number, column=column).value).casefold()
+                for column in range(1, barcode_col + 1)
+            )
+            value = ws.cell(row=row_number, column=fact_col).value
+            if "всего" in labels and isinstance(value, (int, float)):
+                return float(value)
+    return sum(row["fact"] for row in rows)
 
 
 def _parse_one_sheet(ws):
@@ -365,6 +397,11 @@ def parse_plan_sheet(file_stream, marketplace):
         if cities is None:
             continue
         matched_any = True
+        header_row, barcode_col = _find_header_row(ws)
+        if header_row is not None:
+            plan.reported_fact += _reported_fact_total(ws, header_row, barcode_col, rows)
+        else:
+            plan.reported_fact += sum(row["fact"] for row in rows)
         for city in cities:
             if city not in seen_cities:
                 seen_cities.add(city)

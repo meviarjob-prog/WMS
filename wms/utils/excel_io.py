@@ -2,7 +2,7 @@ import io
 from datetime import datetime
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .categorize import classify_by_name
@@ -437,41 +437,139 @@ def export_inventory_to_excel(documents) -> bytes:
     return buffer.getvalue()
 
 
-SHIPMENT_PLAN_HEADERS = [
-    "Маркетплейс",
-    "Город (склад)",
-    "Артикул",
-    "Размер",
-    "Штрихкод",
-    "Товар в номенклатуре",
-    "План",
-    "Выполнено",
-    "Осталось",
-]
+def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_cities) -> bytes:
+    """Выгружает ту же сводную таблицу, которая показана на дашборде.
 
-
-def export_shipment_plan_to_excel(lines) -> bytes:
+    Общие показатели товара идут слева, затем отдельные цветовые блоки
+    городов ОЗОН и ВБ. Остаток плана и количество в пути не складываются:
+    при наличии отправленного товара ячейка города выглядит как «25 (10)».
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "План отгрузок"
-    _style_header(ws, SHIPMENT_PLAN_HEADERS)
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.zoomScale = 85
+    ws.freeze_panes = "H4"
+    ws.print_options.horizontalCentered = False
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
 
-    marketplace_labels = {"ozon": "ОЗОН", "wb": "ВБ"}
+    common_headers = [
+        "Артикул",
+        "Размер",
+        "Штрихкод",
+        "",
+        "На разбраковке",
+        "Готово к отгрузке",
+        "В пути",
+    ]
+    ozon_fill = PatternFill("solid", fgColor="D9EEF7")
+    wb_fill = PatternFill("solid", fgColor="FFF2CC")
+    total_fill = PatternFill("solid", fgColor="E2E3E5")
+    no_stock_fill = PatternFill("solid", fgColor="F4CCCC")
+    badge_fill = PatternFill("solid", fgColor="DC3545")
+    thin_gray = Side(style="thin", color="D9D9D9")
+    medium_gray = Side(style="medium", color="A6A6A6")
 
-    for line in lines:
-        ws.append(
-            [
-                marketplace_labels.get(line.plan.marketplace, line.plan.marketplace),
-                line.warehouse.marketplace_city if line.warehouse else "",
-                line.article,
-                line.size,
-                line.barcode,
-                line.nomenclature.name if line.nomenclature else "— нет в номенклатуре —",
-                line.planned_qty,
-                line.fulfilled_qty,
-                line.remaining_qty(),
-            ]
-        )
+    for column, title in enumerate(common_headers, start=1):
+        ws.merge_cells(start_row=1, start_column=column, end_row=2, end_column=column)
+        cell = ws.cell(1, column, title)
+        cell.font = Font(name="Arial", size=10, bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    city_columns = {}
+    next_column = len(common_headers) + 1
+    for marketplace, label, cities, fill in (
+        ("ozon", "ОЗОН", ozon_cities, ozon_fill),
+        ("wb", "ВБ", wb_cities, wb_fill),
+    ):
+        if not cities:
+            continue
+        start_column = next_column
+        end_column = start_column + len(cities) - 1
+        ws.merge_cells(start_row=1, start_column=start_column, end_row=1, end_column=end_column)
+        group_cell = ws.cell(1, start_column, label)
+        group_cell.font = Font(name="Arial", size=10, bold=True)
+        group_cell.alignment = Alignment(horizontal="center", vertical="center")
+        for offset, city in enumerate(cities):
+            column = start_column + offset
+            city_columns[(marketplace, city)] = column
+            cell = ws.cell(2, column, city)
+            cell.font = Font(name="Arial", size=9, bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            ws.column_dimensions[get_column_letter(column)].width = max(12, min(len(city) + 3, 20))
+        for row in (1, 2):
+            for column in range(start_column, end_column + 1):
+                ws.cell(row, column).fill = fill
+        next_column = end_column + 1
+
+    last_column = max(next_column - 1, len(common_headers))
+    for row in (1, 2):
+        for column in range(1, last_column + 1):
+            cell = ws.cell(row, column)
+            cell.border = Border(bottom=medium_gray)
+
+    total_row = 3
+    ws.cell(total_row, 1, f"Итого ({len(picking_list)} поз.)")
+    ws.cell(total_row, 5, picking_totals["unplaced"])
+    ws.cell(total_row, 6, picking_totals["ready_to_ship"])
+    ws.cell(total_row, 7, picking_totals["in_transit"])
+    for (marketplace, city), column in city_columns.items():
+        ws.cell(total_row, column, picking_totals[marketplace][city])
+    for column in range(1, last_column + 1):
+        cell = ws.cell(total_row, column)
+        cell.fill = total_fill
+        cell.font = Font(name="Arial", size=9, bold=True)
+        cell.alignment = Alignment(horizontal="right" if column >= 5 else "left", vertical="center")
+        cell.border = Border(bottom=medium_gray)
+        if column >= 5:
+            cell.number_format = '#,##0;-#,##0;—'
+
+    for row_number, product in enumerate(picking_list, start=4):
+        ws.cell(row_number, 1, product["article"])
+        ws.cell(row_number, 2, product["size"])
+        ws.cell(row_number, 3, product["barcode"])
+        ws.cell(row_number, 4, "нет на складе" if product["no_stock"] else "")
+        ws.cell(row_number, 5, product["unplaced"])
+        ws.cell(row_number, 6, product["ready_to_ship"])
+        ws.cell(row_number, 7, product["in_transit_total"])
+
+        for (marketplace, city), column in city_columns.items():
+            line = product[marketplace].get(city)
+            if not line:
+                value = None
+            elif line.in_transit_qty:
+                value = f"{int(line.remaining_qty())} ({int(line.in_transit_qty)})"
+            else:
+                value = line.remaining_qty()
+            ws.cell(row_number, column, value)
+
+        for column in range(1, last_column + 1):
+            cell = ws.cell(row_number, column)
+            cell.font = Font(name="Arial", size=9)
+            cell.alignment = Alignment(
+                horizontal="right" if column >= 5 else "left",
+                vertical="center",
+            )
+            cell.border = Border(bottom=thin_gray)
+            if product["no_stock"]:
+                cell.fill = no_stock_fill
+            if column >= 5 and not isinstance(cell.value, str):
+                cell.number_format = '#,##0;-#,##0;—'
+
+        if product["no_stock"]:
+            badge = ws.cell(row_number, 4)
+            badge.fill = badge_fill
+            badge.font = Font(name="Arial", size=8, bold=True, color="FFFFFF")
+            badge.alignment = Alignment(horizontal="center", vertical="center")
+
+    widths = {1: 30, 2: 12, 3: 19, 4: 16, 5: 18, 6: 22, 7: 12}
+    for column, width in widths.items():
+        ws.column_dimensions[get_column_letter(column)].width = width
+    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[2].height = 32
+    ws.row_dimensions[3].height = 21
 
     buffer = io.BytesIO()
     wb.save(buffer)
