@@ -176,7 +176,8 @@
       <tbody>
       {% for d in documents %}
         {% set can_manage_document = current_user.is_admin or d.created_by_id == current_user.id %}
-        <tr>
+        {% set mp = d.to_warehouse.marketplace if d.to_warehouse else none %}
+        <tr class="{{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}">
           <td><input type="checkbox" class="form-check-input doc-checkbox" data-status="{{ d.status }}" name="doc_ids" value="{{ d.id }}"></td>
           <td>
             <a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a>
@@ -267,7 +268,9 @@
        ходу — номер (открывается по нему же), маршрут, статус, приемка. -->
   <div class="list-group d-md-none">
     {% for d in documents %}
-      <a href="{{ url_for('movement.detail', doc_id=d.id) }}" class="list-group-item list-group-item-action py-2 px-2 text-decoration-none text-body">
+      {% set mp = d.to_warehouse.marketplace if d.to_warehouse else none %}
+      <a href="{{ url_for('movement.detail', doc_id=d.id) }}"
+         class="list-group-item list-group-item-action py-2 px-2 text-decoration-none text-body {{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}">
         <div class="d-flex justify-content-between align-items-center gap-2">
           <span class="fw-bold">{{ d.number }}</span>
           {% if d.status == 'merged' %}

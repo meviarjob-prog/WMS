@@ -1,0 +1,50 @@
+"""Список перемещений подсвечивает строку по маркетплейсу склада
+назначения (см. чат) — ВБ цветом #9F69D6 (класс mp-row-wb), Озон цветом
+#594CD8 (класс mp-row-ozon), остальные (не маркетплейс, обычный
+внутренний склад) — без подсветки."""
+
+from wms.extensions import db
+from wms.models import MovementDocument, Warehouse
+
+
+def _make_movement(number, marketplace=None, code_suffix=None):
+    suffix = code_suffix or number
+    sender = Warehouse(code=f"WH-MPH-{suffix}-A", name="Склад-отправитель")
+    dest_kwargs = {"marketplace": marketplace} if marketplace else {}
+    dest = Warehouse(
+        code=f"WH-MPH-{suffix}-B",
+        name=f"{(marketplace or 'обычный').upper()}: склад",
+        **dest_kwargs,
+    )
+    db.session.add_all([sender, dest])
+    db.session.commit()
+
+    doc = MovementDocument(number=number, from_warehouse_id=sender.id, to_warehouse_id=dest.id, status="draft")
+    db.session.add(doc)
+    db.session.commit()
+    return doc
+
+
+def test_wb_destination_gets_wb_highlight_class(db, client_logged_in):
+    doc = _make_movement("PER-MPH-1", marketplace="wb")
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    row_start = html.index(doc.number)
+    row_html = html[max(0, row_start - 400):row_start]
+    assert "mp-row-wb" in row_html
+
+
+def test_ozon_destination_gets_ozon_highlight_class(db, client_logged_in):
+    doc = _make_movement("PER-MPH-2", marketplace="ozon")
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    row_start = html.index(doc.number)
+    row_html = html[max(0, row_start - 400):row_start]
+    assert "mp-row-ozon" in row_html
+
+
+def test_non_marketplace_destination_gets_no_highlight_class(db, client_logged_in):
+    doc = _make_movement("PER-MPH-3")
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    row_start = html.index(doc.number)
+    row_html = html[max(0, row_start - 400):row_start]
+    assert "mp-row-wb" not in row_html
+    assert "mp-row-ozon" not in row_html

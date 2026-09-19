@@ -93,6 +93,15 @@ body {
 .status-chip-requested { background-color: #ffc107; color: #000; }
 .status-chip-shipped { background-color: #198754; }
 
+/* Список перемещений: строка окрашивается по маркетплейсу склада
+   назначения — визуально отличить ВБ от Озон, не открывая документ.
+   !important — мобильная карточка одновременно несет класс Bootstrap
+   "text-body" (тоже !important), который иначе перебивает цвет текста. */
+.mp-row-wb { background-color: #9F69D6; color: #fff !important; }
+.mp-row-wb a, .mp-row-wb .text-muted { color: #fff !important; text-decoration: underline; }
+.mp-row-ozon { background-color: #594CD8; color: #fff !important; }
+.mp-row-ozon a, .mp-row-ozon .text-muted { color: #fff !important; text-decoration: underline; }
+
 /* ---- Мобильный экран ---- */
 
 /* Широкие таблицы не должны ломать верстку на телефоне — скроллим по горизонтали */
