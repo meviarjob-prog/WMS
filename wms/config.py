@@ -53,6 +53,6 @@ class Config:
         "WMS_GOOGLE_CREDENTIALS_FILE",
         os.path.join(INSTANCE_DIR, "google-service-account.json"),
     )
-    GOOGLE_SHEETS_SYNC_INTERVAL_SECONDS = int(
-        os.environ.get("WMS_GOOGLE_SYNC_INTERVAL", "300")
-    )
+    # Постоянный публичный адрес нужен сценарию Google Таблицы: на него
+    # отправляется запрос только после нажатия пользователем кнопки.
+    WMS_PUBLIC_URL = os.environ.get("WMS_PUBLIC_URL", "https://wms.wmsmeviar.ru").rstrip("/")

@@ -1,8 +1,19 @@
 from datetime import date, datetime, timedelta
+import hmac
+import secrets
 import threading
-import time
 
-from flask import Blueprint, Response, current_app, flash, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 from flask_login import current_user
 from sqlalchemy import func, or_
 
@@ -43,8 +54,12 @@ PERIOD_DAYS = 14
 GOOGLE_SYNC_AT_KEY = "google_sheets_last_sync_at"
 GOOGLE_SYNC_ERROR_KEY = "google_sheets_last_error"
 GOOGLE_SYNC_SHEETS_KEY = "google_sheets_last_names"
+GOOGLE_SYNC_TOKEN_KEY = "google_sheets_trigger_token"
 _google_sync_lock = threading.Lock()
-_google_sync_started_at = 0.0
+
+# Этот endpoint вызывается серверами Google Apps Script и поэтому не имеет
+# пользовательской cookie WMS. Доступ защищен отдельным длинным токеном.
+GOOGLE_SHEETS_PUBLIC_ENDPOINTS = {"shipment_plan.google_trigger"}
 
 
 def _get_or_create_city_warehouse(marketplace, city_name):
@@ -239,41 +254,50 @@ def sync_google_plans_and_movements(uploaded_by_id=None):
     return summary, sheet_names, exported, updated_cells
 
 
-def _run_google_sync_in_background(app):
-    try:
-        with app.app_context():
-            try:
-                sync_google_plans_and_movements()
-            except Exception as exc:  # noqa: BLE001
-                db.session.rollback()
-                _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, str(exc))
-                db.session.commit()
-                app.logger.exception("Не удалось синхронизировать Google Таблицу")
-    finally:
-        _google_sync_lock.release()
+def _get_or_create_google_trigger_token(rotate=False):
+    setting = AppSetting.query.get(GOOGLE_SYNC_TOKEN_KEY)
+    if setting is None:
+        setting = AppSetting(key=GOOGLE_SYNC_TOKEN_KEY)
+        db.session.add(setting)
+    if rotate or not setting.value:
+        setting.value = secrets.token_urlsafe(32)
+        db.session.commit()
+    return setting.value
 
 
-@bp.before_app_request
-def _schedule_google_sync():
-    """При активной работе WMS запускает обмен не чаще заданного интервала.
-    Запрос пользователя не ждет Google: синхронизация идет фоном."""
-    global _google_sync_started_at
-    if current_app.testing or not current_user.is_authenticated:
-        return None
-    if request.endpoint == "static" or not google_sheets_configured(current_app):
-        return None
-    interval = current_app.config.get("GOOGLE_SHEETS_SYNC_INTERVAL_SECONDS", 300)
-    now = time.monotonic()
-    if now - _google_sync_started_at < interval or not _google_sync_lock.acquire(False):
-        return None
-    _google_sync_started_at = now
-    threading.Thread(
-        target=_run_google_sync_in_background,
-        args=(current_app._get_current_object(),),
-        daemon=True,
-        name="wms-google-sheets-sync",
-    ).start()
-    return None
+def _google_apps_script(token):
+    endpoint = current_app.config["WMS_PUBLIC_URL"] + "/shipment-plan/google-trigger"
+    return f'''const WMS_URL = {endpoint!r};
+const WMS_TOKEN = {token!r};
+
+function onOpen() {{
+  SpreadsheetApp.getUi()
+    .createMenu('WMS')
+    .addItem('Загрузить данные в WMS', 'syncWms')
+    .addToUi();
+}}
+
+function syncWms() {{
+  const ui = SpreadsheetApp.getUi();
+  const response = UrlFetchApp.fetch(WMS_URL, {{
+    method: 'post',
+    headers: {{'X-WMS-Sync-Token': WMS_TOKEN}},
+    muteHttpExceptions: true
+  }});
+  const status = response.getResponseCode();
+  let result;
+  try {{
+    result = JSON.parse(response.getContentText());
+  }} catch (error) {{
+    result = {{message: 'WMS вернула непонятный ответ'}};
+  }}
+  if (status >= 200 && status < 300 && result.ok) {{
+    ui.alert('Готово', result.message, ui.ButtonSet.OK);
+  }} else {{
+    ui.alert('Не удалось загрузить данные', result.message || ('Ошибка ' + status), ui.ButtonSet.OK);
+  }}
+}}
+'''
 
 
 @bp.route("/upload", methods=["GET", "POST"])
@@ -325,6 +349,9 @@ def sync_google():
     if not current_user.is_admin:
         flash("Синхронизировать Google Таблицу может только администратор", "danger")
         return redirect(url_for("shipment_plan.dashboard"))
+    if not _google_sync_lock.acquire(False):
+        flash("Синхронизация уже выполняется. Дождитесь ее завершения.", "warning")
+        return redirect(url_for("shipment_plan.dashboard"))
     try:
         summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements(
             uploaded_by_id=current_user.id
@@ -343,7 +370,53 @@ def sync_google():
             + f"листов: {len(sheet_names)}",
             "success",
         )
+    finally:
+        _google_sync_lock.release()
     return redirect(url_for("shipment_plan.dashboard"))
+
+
+@bp.route("/google-trigger", methods=["POST"])
+def google_trigger():
+    """Ручной запуск из привязанного к таблице Google Apps Script."""
+    expected = AppSetting.query.get(GOOGLE_SYNC_TOKEN_KEY)
+    supplied = request.headers.get("X-WMS-Sync-Token", "")
+    if not expected or not expected.value or not hmac.compare_digest(supplied, expected.value):
+        return jsonify(ok=False, message="Кнопка Google Таблицы не авторизована"), 401
+    if not google_sheets_configured(current_app):
+        return jsonify(ok=False, message="В WMS не настроен ключ Google Таблицы"), 503
+    if not _google_sync_lock.acquire(False):
+        return jsonify(ok=False, message="Синхронизация уже выполняется"), 409
+    try:
+        summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements()
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, str(exc))
+        db.session.commit()
+        current_app.logger.exception("Не удалось синхронизировать Google Таблицу по кнопке")
+        return jsonify(ok=False, message="Не удалось синхронизировать данные. Проверьте WMS."), 500
+    finally:
+        _google_sync_lock.release()
+
+    message = (
+        "; ".join(summary)
+        + f"; выгружено строк WMS: {exported}; "
+        + f"обновлено ячеек «отгружено»: {updated_cells}; листов: {len(sheet_names)}"
+    )
+    return jsonify(ok=True, message=message)
+
+
+@bp.route("/google-button", methods=["GET", "POST"])
+def google_button_setup():
+    if not current_user.is_admin:
+        flash("Настраивать кнопку Google Таблицы может только администратор", "danger")
+        return redirect(url_for("shipment_plan.dashboard"))
+    token = _get_or_create_google_trigger_token(rotate=request.method == "POST")
+    if request.method == "POST":
+        flash("Код кнопки обновлен. Старый код больше не работает.", "success")
+    return render_template(
+        "shipment_plan/google_button.html",
+        apps_script=_google_apps_script(token),
+    )
 
 
 def _sender_warehouse_ids():

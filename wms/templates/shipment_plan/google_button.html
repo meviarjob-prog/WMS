@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Кнопка Google Таблицы{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('shipment_plan.dashboard') }}">&larr; План отгрузок</a></p>
+<h3>Кнопка Google Таблицы</h3>
+<p>Эта настройка нужна один раз. После нее данные будут загружаться только по вашему нажатию.</p>
+
+<ol class="mb-4">
+  <li>Откройте Google Таблицу и выберите <b>Расширения → Apps Script</b>.</li>
+  <li>Удалите код в редакторе, вставьте код ниже и нажмите <b>Сохранить</b>.</li>
+  <li>Вернитесь в таблицу и обновите страницу. Вверху появится меню <b>WMS → Загрузить данные в WMS</b>.</li>
+  <li>Для отдельной кнопки: <b>Вставка → Рисунок</b>, создайте кнопку, нажмите на нее правой кнопкой, выберите <b>Назначить скрипт</b> и укажите <code>syncWms</code>.</li>
+</ol>
+
+<label for="apps-script" class="form-label fw-bold">Код для Apps Script</label>
+<textarea id="apps-script" class="form-control font-monospace" rows="28" readonly>{{ apps_script }}</textarea>
+<button type="button" class="btn btn-primary mt-2" onclick="navigator.clipboard.writeText(document.getElementById('apps-script').value)">Копировать код</button>
+
+<hr class="my-4">
+<form method="post" onsubmit="return confirm('Старый код кнопки перестанет работать. Продолжить?')">
+  <button class="btn btn-outline-danger" type="submit">Создать новый защищенный код</button>
+</form>
+{% endblock %}
