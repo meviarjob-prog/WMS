@@ -34,6 +34,7 @@
       <p>Возвратов поставщику (из разбраковки приемок): <b>{{ pending_supplier_returns }}</b>
         — <a href="{{ url_for('receiving.returns_list') }}">список со статусом выгрузки</a></p>
       <p>Корректировок количества в приходных накладных (расхождение по пересчету): <b>{{ pending_receiving_adjustments }}</b></p>
+      <p>Перемещений с изменившимся составом (уже выгружены, но короба/кол-во поправили после): <b>{{ pending_movement_corrections }}</b></p>
       <p class="text-muted small mb-0">
         Обновляется сразу после того, как 1С подтвердит прием документов
         (кнопка «Синхронизировать» в обработке) — повторно эти же
@@ -55,13 +56,20 @@
         позиция относится ко второй заявке — на точное разделение по
         заявкам сейчас это не рассчитано.
       </p>
+      <p class="text-muted small mb-0 mt-2">
+        Коррекцию состава перемещения 1С ищет по номеру WMS, зашитому в поле
+        «Комментарий» документа (проставляется автоматически при первой
+        выгрузке) — отдельного реквизита-номера у перемещения в 1С нет.
+        Если документ уже проведен, 1С корректировку не выполнит — как и с
+        накладными, поправить проведенный документ нужно вручную.
+      </p>
     </div>
 
     <div class="card p-3 mt-3">
       <h5>Адрес для обработки в 1С</h5>
       <p class="text-muted small mb-1">Получить документы (GET, токен — заголовком <code>X-1C-Token</code> или параметром <code>?token=</code>):</p>
       <code class="d-block mb-2">{{ request.url_root }}integrations/1c/api/export</code>
-      <p class="text-muted small mb-1">Подтвердить прием (POST, JSON <code>{"movement_ids": [...], "inventory_ids": [...], "supplier_return_ids": [...]}</code>):</p>
+      <p class="text-muted small mb-1">Подтвердить прием (POST, JSON <code>{"movement_ids": [...], "inventory_ids": [...], "supplier_return_ids": [...], "movement_correction_ids": [...]}</code>):</p>
       <code class="d-block">{{ request.url_root }}integrations/1c/api/export/confirm</code>
     </div>
   </div>

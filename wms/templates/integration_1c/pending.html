@@ -107,4 +107,34 @@
     </tbody>
   </table>
 </div>
+
+<div class="card p-3 mt-4">
+  <h5>Перемещения с изменившимся составом <span class="badge bg-secondary">{{ movement_corrections|length }}</span></h5>
+  <p class="text-muted small">
+    Уже выгружены в 1С, но после этого короба/количество в них поправили —
+    1С скорректирует документ по номеру, зашитому в «Комментарий» (см.
+    «Обмен с 1С»). Если документ в 1С уже проведен, коррекция не пройдет —
+    исправить придется вручную.
+  </p>
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Номер</th><th>Куда</th><th>Коробов сейчас</th><th></th></tr></thead>
+    <tbody>
+    {% for d in movement_corrections %}
+      <tr>
+        <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+        <td>{{ d.to_warehouse.name if d.to_warehouse else '—' }}</td>
+        <td>{{ d.lines.count() }}</td>
+        <td class="text-end">
+          <form method="post" action="{{ url_for('integration_1c.toggle_movement_correction', doc_id=d.id) }}"
+                onsubmit="return confirm('Убрать перемещение {{ d.number }} из очереди коррекции 1С?');">
+            <button type="submit" class="btn btn-sm btn-outline-danger">✕ Убрать из выгрузки</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="text-muted">Очередь пуста</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

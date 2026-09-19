@@ -4,6 +4,7 @@ from flask_login import current_user
 from ..extensions import db
 from ..models import Box, BoxItem, Nomenclature, Warehouse
 from ..utils.numbering import next_number
+from .movement import flag_movement_dirty_for_box
 
 bp = Blueprint("boxes", __name__)
 
@@ -81,6 +82,7 @@ def add_item(box_id):
     else:
         box_item = BoxItem(box_id=box.id, nomenclature_id=item.id, qty=qty)
         db.session.add(box_item)
+    flag_movement_dirty_for_box(box.id)
     db.session.commit()
     flash(f"В короб {box.box_number} добавлено: {item.name} ({qty} {item.unit})", "success")
     return redirect(url_for("boxes.detail", box_id=box_id))
@@ -99,6 +101,7 @@ def update_item(box_id, item_id):
         return redirect(url_for("boxes.detail", box_id=box_id))
 
     box_item.qty = qty
+    flag_movement_dirty_for_box(box_item.box_id)
     db.session.commit()
     flash(f"Количество обновлено: {box_item.nomenclature.name} — {qty} {box_item.nomenclature.unit}", "success")
     return redirect(url_for("boxes.detail", box_id=box_id))
@@ -151,6 +154,8 @@ def move_item(box_id, item_id):
         target_item = BoxItem(box_id=target_box.id, nomenclature_id=item.id, qty=qty)
         db.session.add(target_item)
 
+    flag_movement_dirty_for_box(box.id)
+    flag_movement_dirty_for_box(target_box.id)
     db.session.commit()
     flash(
         f"Перенесено в короб {target_box.box_number}: {item.name} ({qty:g} {item.unit})",
@@ -168,6 +173,7 @@ def delete_item(box_id, item_id):
     box_item = BoxItem.query.filter_by(id=item_id, box_id=box_id).first_or_404()
     name = box_item.nomenclature.name
     db.session.delete(box_item)
+    flag_movement_dirty_for_box(box_id)
     db.session.commit()
     flash(f"Из короба удалено: {name}", "success")
     return redirect(url_for("boxes.detail", box_id=box_id))

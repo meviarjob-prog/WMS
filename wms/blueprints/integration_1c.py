@@ -117,6 +117,7 @@ def settings():
         SupplierReturn.accounting_entered_at.is_(None),
     ).count()
     pending_receiving_adjustments = len(_receiving_adjustments_export())
+    pending_movement_corrections = len(_movement_corrections_candidates())
 
     return render_template(
         "integration_1c/settings.html",
@@ -125,6 +126,7 @@ def settings():
         pending_inventories=pending_inventories,
         pending_supplier_returns=pending_supplier_returns,
         pending_receiving_adjustments=pending_receiving_adjustments,
+        pending_movement_corrections=pending_movement_corrections,
     )
 
 
@@ -265,6 +267,52 @@ def _supplier_returns_export():
     return payloads
 
 
+def _movement_corrections_candidates():
+    """Уже выгруженные в 1С перемещения (synced_to_1c_at заполнен), состав
+    которых потом поменяли — добавили/удалили короб (movement.add_box/
+    delete_line) или поправили количество в уже уехавшем коробе (boxes.
+    add_item/update_item/move_item/delete_item), см.
+    MovementDocument.composition_changed_at. В отличие от корректировки
+    приемки, искать документ в 1С приходится не по отдельному реквизиту
+    (у перемещения такого нет), а по номеру WMS, который зашит в текст
+    "Комментарий" при создании (см. _movement_payload) — см. SyncWMS.bsl
+    НайтиПеремещениеПоНомеруWMS."""
+    return (
+        MovementDocument.query.filter(
+            MovementDocument.synced_to_1c_at.isnot(None),
+            MovementDocument.composition_changed_at.isnot(None),
+        )
+        .order_by(MovementDocument.id)
+        .all()
+    )
+
+
+def _movement_corrections_export():
+    """Полный актуальный состав документа (не дельта) — 1С проще целиком
+    пересобрать табличную часть под этот список (см. SyncWMS.bsl
+    СкорректироватьПеремещение), чем разбирать построчные диффы."""
+    payloads = []
+    for doc in _movement_corrections_candidates():
+        lines = []
+        for line in doc.lines:
+            for item in line.box.items:
+                lines.append(
+                    {
+                        "barcode": item.nomenclature.barcode,
+                        "name": item.nomenclature.name,
+                        "qty": item.qty,
+                    }
+                )
+        payloads.append(
+            {
+                "id": doc.id,
+                "number": doc.number,
+                "lines": lines,
+            }
+        )
+    return payloads
+
+
 def _receiving_adjustments_export():
     """Приемки из накладной (см. is_from_invoice_import), где пересчет уже
     завершен (пересчет меняет qty только в статусах draft/recounting — см.
@@ -351,6 +399,7 @@ def export():
             "inventories": [_inventory_payload(d) for d in inventories],
             "supplier_returns": _supplier_returns_export(),
             "receiving_adjustments": _receiving_adjustments_export(),
+            "movement_corrections": _movement_corrections_export(),
         }
     )
 
@@ -422,6 +471,23 @@ def export_confirm():
     for doc in confirmed_receiving_adjustments:
         doc.recount_synced_to_1c_at = now
 
+    # id здесь — id перемещения (см. _movement_corrections_export). Сбрасываем
+    # только composition_changed_at — само перемещение уже выгружено раньше
+    # (synced_to_1c_at не трогаем), просто состав в 1С теперь снова
+    # актуальный. Если 1С не смогла поправить документ (например, он уже
+    # проведен — см. SyncWMS.bsl СкорректироватьПеремещение), она не пришлет
+    # его id сюда, и WMS продолжит предлагать коррекцию на каждой
+    # синхронизации.
+    movement_correction_ids = data.get("movement_correction_ids") or []
+    confirmed_movement_corrections = (
+        MovementDocument.query.filter(
+            MovementDocument.id.in_(movement_correction_ids),
+            MovementDocument.composition_changed_at.isnot(None),
+        ).all()
+    )
+    for doc in confirmed_movement_corrections:
+        doc.composition_changed_at = None
+
     db.session.commit()
     return jsonify(
         {
@@ -431,6 +497,7 @@ def export_confirm():
                 "inventories": len(confirmed_inventories),
                 "supplier_returns": len(confirmed_returns),
                 "receiving_adjustments": len(confirmed_receiving_adjustments),
+                "movement_corrections": len(confirmed_movement_corrections),
             },
         }
     )
@@ -450,6 +517,7 @@ def pending():
     inventories = _pending_inventories_query().order_by(InventoryDocument.completed_at.desc()).all()
     receiving_adjustments = _receiving_adjustments_candidates()
     supplier_return_groups = _supplier_returns_export()
+    movement_corrections = _movement_corrections_candidates()
 
     return render_template(
         "integration_1c/pending.html",
@@ -457,6 +525,7 @@ def pending():
         inventories=inventories,
         receiving_adjustments=receiving_adjustments,
         supplier_return_groups=supplier_return_groups,
+        movement_corrections=movement_corrections,
     )
 
 
@@ -505,6 +574,28 @@ def toggle_receiving_adjustment(doc_id):
         flash(f"Корректировка по приемке {doc.number} убрана из очереди выгрузки в 1С", "success")
     else:
         flash(f"Корректировка по приемке {doc.number} возвращена в очередь выгрузки", "success")
+    return redirect(url_for("integration_1c.pending"))
+
+
+@bp.route("/pending/movement-correction/<int:doc_id>/toggle", methods=["POST"])
+def toggle_movement_correction(doc_id):
+    """Убрать перемещение из очереди коррекции — бухгалтер поправил документ
+    в 1С сам, минуя автовыгрузку. В отличие от остальных toggle_* здесь нет
+    "вернуть обратно": composition_changed_at либо уже отражает реальное
+    расхождение (и ставится заново само, стоит еще раз поменять состав —
+    см. movement.add_box/delete_line, boxes.*), либо расхождения нет вовсе."""
+    guard = _admin_required()
+    if guard:
+        return guard
+
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.composition_changed_at is None:
+        flash("У этого перемещения нет несинхронизированных изменений", "danger")
+        return redirect(url_for("integration_1c.pending"))
+
+    doc.composition_changed_at = None
+    db.session.commit()
+    flash(f"Перемещение {doc.number} убрано из очереди коррекции 1С", "success")
     return redirect(url_for("integration_1c.pending"))
 
 

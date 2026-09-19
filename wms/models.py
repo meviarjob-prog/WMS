@@ -792,6 +792,14 @@ class MovementDocument(db.Model):
     # когда становится известен (галочка выше могла быть отмечена раньше,
     # до того как номер стал известен). См. movement.update_marketplace_request_number.
     marketplace_request_number = db.Column(db.String(50), nullable=True)
+    # Заполняется, когда состав уже выгруженного в 1С документа меняют
+    # (добавили/удалили короб — movement.add_box/delete_line, или поправили
+    # количество в коробе, уже уехавшем этим перемещением — boxes.add_item/
+    # update_item/move_item/delete_item) — см. integration_1c.
+    # _movement_corrections_export. NULL — 1С видит актуальный состав, менять
+    # ничего не нужно. Сбрасывается обратно в NULL, когда 1С подтверждает,
+    # что скорректировала документ у себя (см. export_confirm).
+    composition_changed_at = db.Column(db.DateTime, nullable=True)
 
     from_warehouse = db.relationship("Warehouse", foreign_keys=[from_warehouse_id])
     to_warehouse = db.relationship("Warehouse", foreign_keys=[to_warehouse_id])

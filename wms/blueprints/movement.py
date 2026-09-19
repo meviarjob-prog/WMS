@@ -617,6 +617,32 @@ def _revert_line_effects(doc, line):
     box.status = "stored" if line.from_cell_id else "open"
 
 
+def _movement_doc_for_box_correction(box_id):
+    """Последний уже выгруженный в 1С документ перемещения, в котором сейчас
+    числится этот короб (по последней строке на этот box_id) — если после
+    выгрузки его состав правят (см. boxes.add_item/update_item/move_item/
+    delete_item), именно ЭТОТ документ в 1С перестал соответствовать
+    фактическому составу и должен быть скорректирован (см.
+    MovementDocument.composition_changed_at,
+    integration_1c._movement_corrections_export)."""
+    line = (
+        MovementLine.query.join(MovementDocument)
+        .filter(MovementLine.box_id == box_id, MovementDocument.synced_to_1c_at.isnot(None))
+        .order_by(MovementLine.id.desc())
+        .first()
+    )
+    return line.document if line else None
+
+
+def flag_movement_dirty_for_box(box_id):
+    """Вызывается из boxes.py при правке состава короба — помечает
+    перемещение, которым этот короб уже уехал и выгрузился в 1С (если такое
+    есть), как требующее коррекции в 1С."""
+    doc = _movement_doc_for_box_correction(box_id)
+    if doc is not None:
+        doc.composition_changed_at = datetime.utcnow()
+
+
 @bp.route("/<int:doc_id>/boxes/add", methods=["POST"])
 def add_box(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)
@@ -649,6 +675,11 @@ def add_box(doc_id):
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
     _create_movement_line(doc, box)
+
+    if doc.synced_to_1c_at is not None:
+        # Документ уже выгружен в 1С — новый короб в нем 1С еще не видела,
+        # значит документ там нужно дозаполнить (см. composition_changed_at).
+        doc.composition_changed_at = datetime.utcnow()
 
     if editing_after_completion:
         # Документ уже завершен (и, возможно, принят) — короб добавляется
@@ -685,6 +716,11 @@ def delete_line(doc_id, line_id):
 
     if editing_after_completion:
         _revert_line_effects(doc, line)
+
+    if doc.synced_to_1c_at is not None:
+        # Документ уже выгружен в 1С с этим коробом в составе — теперь его
+        # там нужно убрать (см. composition_changed_at).
+        doc.composition_changed_at = datetime.utcnow()
 
     db.session.delete(line)
     db.session.commit()
