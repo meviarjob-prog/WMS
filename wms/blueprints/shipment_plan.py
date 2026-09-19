@@ -777,9 +777,11 @@ def _dashboard_context():
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
-            product["max_remaining"] = max(
-                product["max_remaining"], line.effective_remaining_qty
-            )
+            # В таблице показываем остаток самого плана, а уже едущий товар
+            # — отдельно в скобках. Маршрутизация коробов считает свободную
+            # потребность отдельно и вычитает зарезервированные/собранные/
+            # отправленные короба (см. movement._committed_by_warehouse_and_item).
+            product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
             product["in_transit_total"] += line.in_transit_qty
 
     picking_list = sorted(
@@ -806,7 +808,7 @@ def _dashboard_context():
         "in_transit": sum(p["in_transit_total"] for p in picking_list),
         "ozon": {
             city: sum(
-                p["ozon"][city].effective_remaining_qty
+                p["ozon"][city].remaining_qty()
                 for p in picking_list
                 if city in p["ozon"]
             )
@@ -814,7 +816,7 @@ def _dashboard_context():
         },
         "wb": {
             city: sum(
-                p["wb"][city].effective_remaining_qty
+                p["wb"][city].remaining_qty()
                 for p in picking_list
                 if city in p["wb"]
             )

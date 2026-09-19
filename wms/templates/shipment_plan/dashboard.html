@@ -168,18 +168,18 @@
             {% set line = p.ozon.get(city) %}
             <td class="text-end">
               {% if not line %}<span class="text-muted">—</span>
-              {% elif line.effective_remaining_qty <= 0 %}<span class="text-muted">0</span>
-              {% else %}<b>{{ line.effective_remaining_qty | round(0) | int }}</b>{% endif %}
-              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Заявка на маркетплейс создана: товар учтен в выполнении и находится в пути">&nbsp;({{ line.in_transit_qty | round(0) | int }})</span>{% endif %}
+              {% elif line.remaining_qty() <= 0 %}<span class="text-muted">0</span>
+              {% else %}<b>{{ line.remaining_qty() | round(0) | int }}</b>{% endif %}
+              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Товар в пути уже вычитается из подсказки «Куда везти короб»">&nbsp;({{ line.in_transit_qty | round(0) | int }})</span>{% endif %}
             </td>
           {% endfor %}
           {% for city in wb_cities %}
             {% set line = p.wb.get(city) %}
             <td class="text-end{% if loop.first %} border-start border-2{% endif %}">
               {% if not line %}<span class="text-muted">—</span>
-              {% elif line.effective_remaining_qty <= 0 %}<span class="text-muted">0</span>
-              {% else %}<b>{{ line.effective_remaining_qty | round(0) | int }}</b>{% endif %}
-              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Заявка на маркетплейс создана: товар учтен в выполнении и находится в пути">&nbsp;({{ line.in_transit_qty | round(0) | int }})</span>{% endif %}
+              {% elif line.remaining_qty() <= 0 %}<span class="text-muted">0</span>
+              {% else %}<b>{{ line.remaining_qty() | round(0) | int }}</b>{% endif %}
+              {% if line and line.in_transit_qty %}<span class="text-warning-emphasis" title="Товар в пути уже вычитается из подсказки «Куда везти короб»">&nbsp;({{ line.in_transit_qty | round(0) | int }})</span>{% endif %}
             </td>
           {% endfor %}
         </tr>
