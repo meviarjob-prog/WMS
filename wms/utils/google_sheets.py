@@ -111,6 +111,15 @@ def _movement_totals():
     )
     documents = MovementDocument.query.filter_by(status="completed").all()
     for document in documents:
+        # Собранное перемещение еще не является фактом отгрузки. В факт
+        # попадает после создания заявки на маркетплейс; уже принятые
+        # документы оставляем для совместимости со старыми данными, где
+        # отдельной отметки заявки могло еще не быть.
+        if (
+            document.received_at is None
+            and document.marketplace_request_created_at is None
+        ):
+            continue
         warehouse = document.to_warehouse
         if not warehouse.marketplace:
             continue

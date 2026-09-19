@@ -540,9 +540,9 @@ def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_
             if not line:
                 value = None
             elif line.in_transit_qty:
-                value = f"{int(line.remaining_qty())} ({int(line.in_transit_qty)})"
+                value = f"{int(line.effective_remaining_qty)} ({int(line.in_transit_qty)})"
             else:
-                value = line.remaining_qty()
+                value = line.effective_remaining_qty
             ws.cell(row_number, column, value)
 
         for column in range(1, last_column + 1):

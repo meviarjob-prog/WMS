@@ -73,6 +73,7 @@ def test_wms_rows_separate_in_transit_and_received(db):
             to_warehouse_id=target.id,
             status="completed",
             received_at=datetime.utcnow() if received else None,
+            marketplace_request_created_at=datetime.utcnow(),
         )
         db.session.add_all([box, document])
         db.session.flush()

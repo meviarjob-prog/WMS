@@ -594,7 +594,11 @@ def _in_transit_by_warehouse_and_item():
         )
         .join(MovementLine, MovementLine.document_id == MovementDocument.id)
         .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
-        .filter(MovementDocument.status == "completed", MovementDocument.received_at.is_(None))
+        .filter(
+            MovementDocument.status == "completed",
+            MovementDocument.received_at.is_(None),
+            MovementDocument.marketplace_request_created_at.isnot(None),
+        )
         .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
         .all()
     )
@@ -604,9 +608,8 @@ def _in_transit_by_warehouse_and_item():
 def _pace_analysis(plan, total_planned, total_fulfilled):
     """Успеваем ли отгрузить план за 14 дней с даты из названия листа, и
     сколько дней потребуется при сегодняшнем темпе. Темп считается как
-    среднее "выполнено / дней с начала периода" — то есть за весь период,
-    включая факт, уже отгруженный на момент выгрузки файла (см.
-    ShipmentPlanLine.fulfilled_qty), а не только то, что прошло через WMS."""
+    среднее "факт WMS / дней с начала периода": принятое плюс товар, по
+    которому уже создана заявка на маркетплейс и который находится в пути."""
     if not plan.period_start:
         return None
 
@@ -669,26 +672,35 @@ def _dashboard_context():
         lines = plan.lines.all()
         lines_by_marketplace[marketplace] = lines
 
-        # Сколько по этой позиции уже едет (отправлено перемещением, но еще
-        # не подтверждено кнопкой "Принято на складе") — показывается
-        # отдельным числом рядом с потребностью, но саму потребность не
-        # уменьшает: пока товар физически не проверен на месте, план по
-        # нему остается открытым (тот же принцип, что и у fulfilled_qty,
-        # которая тоже засчитывается только по факту приемки).
+        # После создания заявки на маркетплейс товар считается отгруженным:
+        # он уменьшает остаток плана и одновременно показывается отдельно
+        # как «В пути», пока склад назначения не подтвердит приемку.
         for line in lines:
             line.in_transit_qty = in_transit_by_item.get((line.warehouse_id, line.nomenclature_id), 0)
+            line.fulfilled_with_transit_qty = line.fulfilled_qty + line.in_transit_qty
+            line.effective_remaining_qty = max(
+                line.planned_qty - line.fulfilled_with_transit_qty,
+                0,
+            )
 
         by_warehouse = {}
         for line in lines:
             row = by_warehouse.setdefault(
                 line.warehouse_id,
-                {"warehouse": line.warehouse, "planned": 0, "fulfilled": 0},
+                {
+                    "warehouse": line.warehouse,
+                    "planned": 0,
+                    "fulfilled": 0,
+                    "fulfilled_with_transit": 0,
+                },
             )
             row["planned"] += line.planned_qty
             row["fulfilled"] += line.fulfilled_qty
+            row["fulfilled_with_transit"] += line.fulfilled_with_transit_qty
         cities = sorted(by_warehouse.values(), key=lambda r: r["warehouse"].marketplace_city)
         for row in cities:
             row["in_transit"] = in_transit_by_warehouse.get(row["warehouse"].id, 0)
+            row["remaining"] = max(row["planned"] - row["fulfilled_with_transit"], 0)
 
         # Штрихкоды с невыполненным остатком, для которых нечем отгружать —
         # только для значка-счетчика на карточке; сам список товаров теперь
@@ -697,14 +709,15 @@ def _dashboard_context():
         problem_barcodes = {
             line.barcode
             for line in lines
-            if line.remaining_qty() > 0
+            if line.effective_remaining_qty > 0
             and (line.nomenclature_id is None or stock.get(line.nomenclature_id, 0) <= 0)
         }
 
         total_planned = sum(line.planned_qty for line in lines)
         total_fulfilled = sum(line.fulfilled_qty for line in lines)
         total_in_transit = sum(row["in_transit"] for row in cities)
-        pace = _pace_analysis(plan, total_planned, total_fulfilled)
+        total_fulfilled_with_transit = total_fulfilled + total_in_transit
+        pace = _pace_analysis(plan, total_planned, total_fulfilled_with_transit)
 
         marketplaces_data.append(
             {
@@ -719,7 +732,7 @@ def _dashboard_context():
                 # Факт формирует сама WMS: принятое хранится в строках
                 # плана, отправленное, но еще не принятое, добавляется один
                 # раз из текущих перемещений.
-                "total_fulfilled_with_transit": total_fulfilled + total_in_transit,
+                "total_fulfilled_with_transit": total_fulfilled_with_transit,
                 "pace": pace,
             }
         )
@@ -764,7 +777,9 @@ def _dashboard_context():
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
-            product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
+            product["max_remaining"] = max(
+                product["max_remaining"], line.effective_remaining_qty
+            )
             product["in_transit_total"] += line.in_transit_qty
 
     picking_list = sorted(
@@ -791,12 +806,18 @@ def _dashboard_context():
         "in_transit": sum(p["in_transit_total"] for p in picking_list),
         "ozon": {
             city: sum(
-                p["ozon"][city].remaining_qty() for p in picking_list if city in p["ozon"]
+                p["ozon"][city].effective_remaining_qty
+                for p in picking_list
+                if city in p["ozon"]
             )
             for city in ozon_cities
         },
         "wb": {
-            city: sum(p["wb"][city].remaining_qty() for p in picking_list if city in p["wb"])
+            city: sum(
+                p["wb"][city].effective_remaining_qty
+                for p in picking_list
+                if city in p["wb"]
+            )
             for city in wb_cities
         },
     }
