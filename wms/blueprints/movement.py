@@ -18,7 +18,7 @@ from ..models import (
     ShipmentPlanLine,
     Warehouse,
 )
-from ..utils.excel_io import export_movement_to_excel, timestamp_for_filename
+from ..utils.excel_io import export_movement_summary_to_excel, export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
 from ..utils.shipping_label_pdf import build_movement_shipping_labels_pdf
@@ -981,6 +981,21 @@ def export_all():
     documents = _visible_movement_query().order_by(MovementDocument.created_at.desc()).all()
     data = export_movement_to_excel(documents)
     fname = f"movements_{timestamp_for_filename()}.xlsx"
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": content_disposition(fname)},
+    )
+
+
+@bp.route("/export-summary.xlsx")
+def export_summary():
+    """Сводный список перемещений — одна строка на документ (кол-во
+    коробов и кол-во товара), а не на каждую позицию, как в export_all —
+    для быстрой сверки объемов без разбора по товарам."""
+    documents = _visible_movement_query().order_by(MovementDocument.created_at.desc()).all()
+    data = export_movement_summary_to_excel(documents)
+    fname = f"movements_summary_{timestamp_for_filename()}.xlsx"
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

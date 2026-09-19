@@ -6,6 +6,7 @@
   <div class="d-flex flex-wrap gap-2">
     <a class="btn btn-outline-primary" href="{{ url_for('movement.box_transfer') }}">↔ Из короба в короб</a>
     <a class="btn btn-outline-secondary d-none d-md-inline-block" href="{{ url_for('movement.export_all') }}">📤 Экспорт в Excel</a>
+    <a class="btn btn-outline-secondary d-none d-md-inline-block" href="{{ url_for('movement.export_summary') }}" title="Одна строка на документ: кол-во коробов и кол-во товара">📊 Сводный экспорт</a>
     <a class="btn btn-primary" href="{{ url_for('movement.new_document') }}">➕ Новое перемещение</a>
   </div>
 </div>

@@ -316,6 +316,49 @@ def export_movement_to_excel(documents) -> bytes:
     return buffer.getvalue()
 
 
+MOVEMENT_SUMMARY_HEADERS = [
+    "Номер документа",
+    "Дата",
+    "Статус",
+    "Склад-источник",
+    "Склад-назначение",
+    "№ заявки МП",
+    "Кол-во коробов",
+    "Кол-во товара",
+]
+
+
+def export_movement_summary_to_excel(documents) -> bytes:
+    """Одна строка на документ перемещения целиком (в отличие от
+    export_movement_to_excel, где строка на каждый товар в каждом коробе) —
+    только количество коробов и суммарное количество товара, для быстрой
+    сверки объемов без разбора по позициям."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Перемещения (сводно)"
+    _style_header(ws, MOVEMENT_SUMMARY_HEADERS)
+
+    status_map = {"draft": "Черновик", "completed": "Завершен", "merged": "Объединен"}
+
+    for doc in documents:
+        ws.append(
+            [
+                doc.number,
+                doc.created_at.strftime("%Y-%m-%d %H:%M") if doc.created_at else "",
+                status_map.get(doc.status, doc.status),
+                doc.from_warehouse.name if doc.from_warehouse else "",
+                doc.to_warehouse.name if doc.to_warehouse else "",
+                doc.marketplace_request_number or "",
+                doc.lines.count(),
+                doc.total_item_qty(),
+            ]
+        )
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
 PRODUCTION_HEADERS = [
     "Дата",
     "Сотрудник",
