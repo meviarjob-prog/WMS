@@ -5,6 +5,13 @@
 <h3>Кнопка Google Таблицы</h3>
 <p>Эта настройка нужна один раз. После нее данные будут загружаться только по вашему нажатию.</p>
 
+{% if not google_configured %}
+<div class="alert alert-warning">
+  WMS пока не видит ключ Google. На компьютере, где запущена WMS, положите файл ключа в
+  <code>instance\google-service-account.json</code>, затем перезапустите WMS.
+</div>
+{% endif %}
+
 <ol class="mb-4">
   <li>Откройте Google Таблицу и выберите <b>Расширения → Apps Script</b>.</li>
   <li>Удалите код в редакторе, вставьте код ниже и нажмите <b>Сохранить</b>.</li>
