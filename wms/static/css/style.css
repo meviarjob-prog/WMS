@@ -106,8 +106,15 @@ body {
    (тоже !important). */
 .mp-row-wb, .mp-row-wb > td { background-color: #9E77C5 !important; color: #fff !important; }
 .mp-row-wb a, .mp-row-wb .text-muted { color: #fff !important; text-decoration: underline; }
-.mp-row-ozon, .mp-row-ozon > td { background-color: #6E65BD !important; color: #fff !important; }
+.mp-row-ozon, .mp-row-ozon > td { background-color: #3396ff !important; color: #fff !important; }
 .mp-row-ozon a, .mp-row-ozon .text-muted { color: #fff !important; text-decoration: underline; }
+/* Галочка сохранения "№ заявки на МП" (btn-outline-secondary) серая по
+   умолчанию — на подсвеченной строке сливается с фоном, поэтому здесь
+   белая. */
+.mp-row-wb .btn-outline-secondary, .mp-row-ozon .btn-outline-secondary {
+  color: #fff !important;
+  border-color: #fff !important;
+}
 
 /* ---- Мобильный экран ---- */
 
