@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Очередь выгрузки в 1С{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('integration_1c.settings') }}">&larr; Обмен с 1С</a></p>
+<h3 class="mb-4">Очередь выгрузки в 1С</h3>
+<p class="text-muted small mb-4">
+  Документы ниже уйдут в 1С при следующей синхронизации. Если документ уже
+  внесен в 1С отдельно (вручную, минуя WMS) — уберите его кнопкой ниже,
+  чтобы он не выгрузился повторно. Убранный документ можно в любой момент
+  вернуть в очередь той же кнопкой.
+</p>
+
+<div class="card p-3 mb-4">
+  <h5>Перемещения <span class="badge bg-secondary">{{ movements|length }}</span></h5>
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>№ заявки МП</th><th></th></tr></thead>
+    <tbody>
+    {% for d in movements %}
+      <tr>
+        <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+        <td>{{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else '—' }}</td>
+        <td>{{ d.from_warehouse.name if d.from_warehouse else '—' }}</td>
+        <td>{{ d.to_warehouse.name if d.to_warehouse else '—' }}</td>
+        <td>{{ d.marketplace_request_number or '—' }}</td>
+        <td class="text-end">
+          <form method="post" action="{{ url_for('integration_1c.toggle_movement', doc_id=d.id) }}"
+                onsubmit="return confirm('Убрать перемещение {{ d.number }} из очереди выгрузки в 1С?');">
+            <button type="submit" class="btn btn-sm btn-outline-danger">✕ Убрать из выгрузки</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="text-muted">Очередь пуста</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card p-3 mb-4">
+  <h5>Инвентаризации <span class="badge bg-secondary">{{ inventories|length }}</span></h5>
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th></th></tr></thead>
+    <tbody>
+    {% for d in inventories %}
+      <tr>
+        <td><a href="{{ url_for('inventory.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+        <td>{{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else '—' }}</td>
+        <td>{{ d.warehouse.name if d.warehouse else '—' }}{% if d.cell %} / ячейка {{ d.cell.code }}{% endif %}</td>
+        <td class="text-end">
+          <form method="post" action="{{ url_for('integration_1c.toggle_inventory', doc_id=d.id) }}"
+                onsubmit="return confirm('Убрать инвентаризацию {{ d.number }} из очереди выгрузки в 1С?');">
+            <button type="submit" class="btn btn-sm btn-outline-danger">✕ Убрать из выгрузки</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="text-muted">Очередь пуста</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card p-3 mb-4">
+  <h5>Возвраты поставщику <span class="badge bg-secondary">{{ supplier_return_groups|length }}</span></h5>
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Приемка</th><th>№ заказа</th><th>Поставщик</th><th>Позиций</th><th></th></tr></thead>
+    <tbody>
+    {% for g in supplier_return_groups %}
+      <tr>
+        <td><a href="{{ url_for('receiving.detail', doc_id=g.id) }}">{{ g.invoice_number }}</a></td>
+        <td>{{ g.order_number or '—' }}</td>
+        <td>{{ g.supplier or '—' }}</td>
+        <td>{{ g.lines|length }}</td>
+        <td class="text-end">
+          <form method="post" action="{{ url_for('integration_1c.toggle_supplier_return', receiving_document_id=g.id) }}"
+                onsubmit="return confirm('Убрать возврат по приемке {{ g.invoice_number }} из очереди выгрузки в 1С?');">
+            <button type="submit" class="btn btn-sm btn-outline-danger">✕ Убрать из выгрузки</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">Очередь пуста</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card p-3">
+  <h5>Корректировки количества в приходных накладных <span class="badge bg-secondary">{{ receiving_adjustments|length }}</span></h5>
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Накладная</th><th>Расхождений строк</th><th></th></tr></thead>
+    <tbody>
+    {% for doc, diff_lines in receiving_adjustments %}
+      <tr>
+        <td><a href="{{ url_for('receiving.detail', doc_id=doc.id) }}">{{ doc.number }}</a></td>
+        <td>{{ diff_lines|length }}</td>
+        <td class="text-end">
+          <form method="post" action="{{ url_for('integration_1c.toggle_receiving_adjustment', doc_id=doc.id) }}"
+                onsubmit="return confirm('Убрать корректировку по накладной {{ doc.number }} из очереди выгрузки в 1С?');">
+            <button type="submit" class="btn btn-sm btn-outline-danger">✕ Убрать из выгрузки</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3" class="text-muted">Очередь пуста</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -25,8 +25,11 @@
 
   <div class="col-md-6">
     <div class="card p-3">
-      <h5>Что ждет выгрузки</h5>
-      <p>Перемещений (создана заявка на МП): <b>{{ pending_movements }}</b></p>
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <h5 class="mb-0">Что ждет выгрузки</h5>
+        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('integration_1c.pending') }}">📋 Открыть списки документов</a>
+      </div>
+      <p class="mt-2">Перемещений (создана заявка на МП): <b>{{ pending_movements }}</b></p>
       <p>Инвентаризаций (завершенных): <b>{{ pending_inventories }}</b></p>
       <p>Возвратов поставщику (из разбраковки приемок): <b>{{ pending_supplier_returns }}</b>
         — <a href="{{ url_for('receiving.returns_list') }}">список со статусом выгрузки</a></p>
@@ -34,7 +37,9 @@
       <p class="text-muted small mb-0">
         Обновляется сразу после того, как 1С подтвердит прием документов
         (кнопка «Синхронизировать» в обработке) — повторно эти же
-        документы не выгружаются.
+        документы не выгружаются. В «Списках документов» можно убрать
+        конкретный документ из очереди вручную, если он уже внесен в 1С
+        отдельно.
       </p>
       <p class="text-muted small mb-0 mt-2">
         Возврат поставщику 1С привязывает к «Заказу поставщику» по полю

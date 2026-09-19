@@ -195,9 +195,10 @@ def list_documents():
 def returns_list():
     """Возвраты поставщику (см. complete()/is_from_invoice_import) с
     видимостью, что из них уже забрала 1С (synced_to_1c_at, см.
-    integration_1c.export_confirm), а что еще ждет выгрузки — аналог
-    галочки "1С" у перемещений, но здесь только для чтения: подтверждение
-    ставит сама интеграция, вручную его на возврате не отмечают."""
+    integration_1c.export_confirm), а что еще ждет выгрузки. Само
+    подтверждение выгрузки ставит только интеграция — здесь только для
+    чтения; ручное исключение из очереди (accounting_entered_at) делается
+    отдельно, на странице integration_1c.pending."""
     unsynced_only = request.args.get("unsynced") == "on"
 
     query = SupplierReturn.query

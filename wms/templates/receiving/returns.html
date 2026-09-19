@@ -16,9 +16,11 @@
 <div class="card p-3">
   <p class="text-muted small mb-3">
     «Выгружен» ставится автоматически, когда 1С подтверждает прием документа
-    через <code>/api/export/confirm</code> — вручную здесь ничего не отмечают.
-    Возврат создается только из количества брака, указанного на этапе
-    «Разбраковка» в документе приемки.
+    через <code>/api/export/confirm</code>. «Убран из очереди» — админ вручную
+    исключил возврат из выгрузки на странице
+    <a href="{{ url_for('integration_1c.pending') }}">«Обмен с 1С» → «Очередь выгрузки»</a>
+    (например, бухгалтер уже внес его в 1С сам). Возврат создается только из
+    количества брака, указанного на этапе «Разбраковка» в документе приемки.
   </p>
   <table class="table table-sm d-none d-md-table">
     <thead>
@@ -52,6 +54,8 @@
             <span class="badge bg-secondary" title="Нет номера накладной — сопоставлять с 1С нечем, заводится вручную">— вручную</span>
           {% elif r.synced_to_1c_at %}
             <span class="badge bg-success" title="{{ (r.synced_to_1c_at|msk).strftime('%d.%m.%Y %H:%M') }}">✅ Выгружен {{ (r.synced_to_1c_at|msk).strftime('%d.%m') }}</span>
+          {% elif r.accounting_entered_at %}
+            <span class="badge bg-secondary" title="{{ (r.accounting_entered_at|msk).strftime('%d.%m.%Y %H:%M') }}">🚫 Убран из очереди</span>
           {% else %}
             <span class="badge bg-warning text-dark">⏳ Ожидает выгрузки</span>
           {% endif %}
@@ -80,6 +84,8 @@
               <span class="badge bg-secondary">— вручную</span>
             {% elif r.synced_to_1c_at %}
               <span class="badge bg-success" title="{{ (r.synced_to_1c_at|msk).strftime('%d.%m.%Y %H:%M') }}">✅ {{ (r.synced_to_1c_at|msk).strftime('%d.%m') }}</span>
+            {% elif r.accounting_entered_at %}
+              <span class="badge bg-secondary" title="Убран из очереди выгрузки">🚫</span>
             {% else %}
               <span class="badge bg-warning text-dark">⏳</span>
             {% endif %}

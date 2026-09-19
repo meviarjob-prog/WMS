@@ -71,6 +71,28 @@ def _check_token():
     return bool(expected) and token == expected
 
 
+def _pending_movements_query():
+    return MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None).filter(
+        MovementDocument.marketplace_request_created_at.isnot(None),
+        MovementDocument.accounting_entered_at.is_(None),
+    )
+
+
+def _pending_inventories_query():
+    return InventoryDocument.query.filter_by(status="completed", synced_to_1c_at=None).filter(
+        InventoryDocument.accounting_entered_at.is_(None)
+    )
+
+
+def _admin_required():
+    """Общая проверка для страниц/действий очереди выгрузки — возвращает
+    редирект, если доступ запрещен, иначе None (см. вызовы ниже)."""
+    if not current_user.is_admin:
+        flash("Доступно только администратору", "danger")
+        return redirect(url_for("main.index"))
+    return None
+
+
 @bp.route("/", methods=["GET", "POST"])
 def settings():
     if not current_user.is_admin:
@@ -87,20 +109,12 @@ def settings():
         db.session.commit()
         flash("Новый токен сгенерирован — старый перестал действовать", "success")
 
-    pending_movements = (
-        MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
-        .filter(
-            MovementDocument.marketplace_request_created_at.isnot(None),
-            MovementDocument.accounting_entered_at.is_(None),
-        )
-        .count()
-    )
-    pending_inventories = InventoryDocument.query.filter_by(
-        status="completed", synced_to_1c_at=None
-    ).count()
+    pending_movements = _pending_movements_query().count()
+    pending_inventories = _pending_inventories_query().count()
     pending_supplier_returns = SupplierReturn.query.filter(
         SupplierReturn.synced_to_1c_at.is_(None),
         SupplierReturn.invoice_number.isnot(None),
+        SupplierReturn.accounting_entered_at.is_(None),
     ).count()
     pending_receiving_adjustments = len(_receiving_adjustments_export())
 
@@ -180,6 +194,7 @@ def _supplier_returns_export():
         SupplierReturn.query.filter(
             SupplierReturn.synced_to_1c_at.is_(None),
             SupplierReturn.invoice_number.isnot(None),
+            SupplierReturn.accounting_entered_at.is_(None),
         )
         .order_by(SupplierReturn.receiving_document_id, SupplierReturn.id)
         .all()
@@ -246,21 +261,9 @@ def _receiving_adjustments_export():
     актуальные qty по всем строкам документа (не только расходящимся) —
     проще сопоставить в 1С один раз, чем помнить, какие строки уже
     поправлены."""
-    documents = (
-        ReceivingDocument.query.filter(
-            ReceivingDocument.invoice_file_name.isnot(None),
-            ReceivingDocument.status.in_(("sorting", "completed")),
-            ReceivingDocument.recount_synced_to_1c_at.is_(None),
-        )
-        .order_by(ReceivingDocument.id)
-        .all()
-    )
-
     payloads = []
-    for doc in documents:
+    for doc, _diff_lines in _receiving_adjustments_candidates():
         lines = doc.lines.all()
-        if not any(line.expected_qty is not None and line.qty != line.expected_qty for line in lines):
-            continue
         payloads.append(
             {
                 "id": doc.id,
@@ -278,6 +281,32 @@ def _receiving_adjustments_export():
     return payloads
 
 
+def _receiving_adjustments_candidates():
+    """(doc, diff_lines) для документов, которые реально попадут в
+    _receiving_adjustments_export — используется и там, и в списке очереди
+    выгрузки (pending()), чтобы список на экране совпадал с тем, что
+    отправится в 1С."""
+    documents = (
+        ReceivingDocument.query.filter(
+            ReceivingDocument.invoice_file_name.isnot(None),
+            ReceivingDocument.status.in_(("sorting", "completed")),
+            ReceivingDocument.recount_synced_to_1c_at.is_(None),
+            ReceivingDocument.accounting_entered_at.is_(None),
+        )
+        .order_by(ReceivingDocument.id)
+        .all()
+    )
+    result = []
+    for doc in documents:
+        diff_lines = [
+            line for line in doc.lines.all()
+            if line.expected_qty is not None and line.qty != line.expected_qty
+        ]
+        if diff_lines:
+            result.append((doc, diff_lines))
+    return result
+
+
 @bp.route("/api/export")
 def export():
     """Отдает документы, готовые к переносу в 1С: перемещение — только когда
@@ -293,20 +322,8 @@ def export():
     if not _check_token():
         return jsonify({"ok": False, "error": "Неверный или отсутствующий токен"}), 401
 
-    movements = (
-        MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None)
-        .filter(
-            MovementDocument.marketplace_request_created_at.isnot(None),
-            MovementDocument.accounting_entered_at.is_(None),
-        )
-        .order_by(MovementDocument.id)
-        .all()
-    )
-    inventories = (
-        InventoryDocument.query.filter_by(status="completed", synced_to_1c_at=None)
-        .order_by(InventoryDocument.id)
-        .all()
-    )
+    movements = _pending_movements_query().order_by(MovementDocument.id).all()
+    inventories = _pending_inventories_query().order_by(InventoryDocument.id).all()
 
     return jsonify(
         {
@@ -398,3 +415,107 @@ def export_confirm():
             },
         }
     )
+
+
+@bp.route("/pending")
+def pending():
+    """Полные списки того, что ждет выгрузки в 1С (см. настройки — там
+    только счетчики), с возможностью убрать конкретный документ из очереди
+    вручную (см. toggle_* ниже) — например, если бухгалтер уже внес его в
+    1С сам, минуя автоматическую синхронизацию."""
+    guard = _admin_required()
+    if guard:
+        return guard
+
+    movements = _pending_movements_query().order_by(MovementDocument.completed_at.desc()).all()
+    inventories = _pending_inventories_query().order_by(InventoryDocument.completed_at.desc()).all()
+    receiving_adjustments = _receiving_adjustments_candidates()
+    supplier_return_groups = _supplier_returns_export()
+
+    return render_template(
+        "integration_1c/pending.html",
+        movements=movements,
+        inventories=inventories,
+        receiving_adjustments=receiving_adjustments,
+        supplier_return_groups=supplier_return_groups,
+    )
+
+
+@bp.route("/pending/movement/<int:doc_id>/toggle", methods=["POST"])
+def toggle_movement(doc_id):
+    guard = _admin_required()
+    if guard:
+        return guard
+
+    doc = MovementDocument.query.get_or_404(doc_id)
+    doc.accounting_entered_at = None if doc.accounting_entered_at else datetime.utcnow()
+    db.session.commit()
+    if doc.accounting_entered_at:
+        flash(f"Перемещение {doc.number} убрано из очереди выгрузки в 1С", "success")
+    else:
+        flash(f"Перемещение {doc.number} возвращено в очередь выгрузки", "success")
+    return redirect(url_for("integration_1c.pending"))
+
+
+@bp.route("/pending/inventory/<int:doc_id>/toggle", methods=["POST"])
+def toggle_inventory(doc_id):
+    guard = _admin_required()
+    if guard:
+        return guard
+
+    doc = InventoryDocument.query.get_or_404(doc_id)
+    doc.accounting_entered_at = None if doc.accounting_entered_at else datetime.utcnow()
+    db.session.commit()
+    if doc.accounting_entered_at:
+        flash(f"Инвентаризация {doc.number} убрана из очереди выгрузки в 1С", "success")
+    else:
+        flash(f"Инвентаризация {doc.number} возвращена в очередь выгрузки", "success")
+    return redirect(url_for("integration_1c.pending"))
+
+
+@bp.route("/pending/receiving-adjustment/<int:doc_id>/toggle", methods=["POST"])
+def toggle_receiving_adjustment(doc_id):
+    guard = _admin_required()
+    if guard:
+        return guard
+
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    doc.accounting_entered_at = None if doc.accounting_entered_at else datetime.utcnow()
+    db.session.commit()
+    if doc.accounting_entered_at:
+        flash(f"Корректировка по приемке {doc.number} убрана из очереди выгрузки в 1С", "success")
+    else:
+        flash(f"Корректировка по приемке {doc.number} возвращена в очередь выгрузки", "success")
+    return redirect(url_for("integration_1c.pending"))
+
+
+@bp.route("/pending/supplier-return/<int:receiving_document_id>/toggle", methods=["POST"])
+def toggle_supplier_return(receiving_document_id):
+    """Возврат выгружается в 1С одним документом на всю приемку сразу (см.
+    _supplier_returns_export) — значит и исключать из очереди нужно все
+    строки возврата этой приемки разом, а не по одной."""
+    guard = _admin_required()
+    if guard:
+        return guard
+
+    returns = SupplierReturn.query.filter(
+        SupplierReturn.receiving_document_id == receiving_document_id,
+        SupplierReturn.invoice_number.isnot(None),
+        SupplierReturn.synced_to_1c_at.is_(None),
+    ).all()
+    if not returns:
+        flash("Возвраты по этой приемке не найдены или уже выгружены", "danger")
+        return redirect(url_for("integration_1c.pending"))
+
+    excluding = any(r.accounting_entered_at is None for r in returns)
+    now = datetime.utcnow() if excluding else None
+    for r in returns:
+        r.accounting_entered_at = now
+    db.session.commit()
+
+    invoice_number = returns[0].invoice_number
+    if excluding:
+        flash(f"Возврат по приемке {invoice_number} убран из очереди выгрузки в 1С", "success")
+    else:
+        flash(f"Возврат по приемке {invoice_number} возвращен в очередь выгрузки", "success")
+    return redirect(url_for("integration_1c.pending"))

@@ -614,6 +614,10 @@ class ReceivingDocument(db.Model):
     # SyncWMS.bsl СкорректироватьПриемку) — чтобы при повторной синхронизации
     # не отправлять одну и ту же корректировку снова.
     recount_synced_to_1c_at = db.Column(db.DateTime, nullable=True)
+    # Ручное исключение корректировки из очереди выгрузки в 1С (см.
+    # MovementDocument.accounting_entered_at) — например, бухгалтер уже
+    # поправил количество в накладной сам и повторно выгружать не нужно.
+    accounting_entered_at = db.Column(db.DateTime, nullable=True)
 
     warehouse = db.relationship("Warehouse")
     created_by = db.relationship("User")
@@ -903,6 +907,9 @@ class InventoryDocument(db.Model):
     completed_at = db.Column(db.DateTime)
     # См. MovementDocument.synced_to_1c_at.
     synced_to_1c_at = db.Column(db.DateTime, nullable=True)
+    # См. MovementDocument.accounting_entered_at — ручное исключение из
+    # очереди выгрузки в 1С.
+    accounting_entered_at = db.Column(db.DateTime, nullable=True)
     # Заполняется, когда несколько параллельных листов (по разным
     # людям/участкам склада) свели в один итоговый документ — см.
     # inventory.merge_documents. Статус такого листа становится "merged",
@@ -1050,6 +1057,10 @@ class SupplierReturn(db.Model):
     invoice_number = db.Column(db.String(30), nullable=True)
     # См. MovementDocument.synced_to_1c_at.
     synced_to_1c_at = db.Column(db.DateTime, nullable=True)
+    # См. MovementDocument.accounting_entered_at — ручное исключение из
+    # очереди выгрузки в 1С (проставляется сразу на все строки возврата по
+    # одной приемке, см. integration_1c.toggle_supplier_return).
+    accounting_entered_at = db.Column(db.DateTime, nullable=True)
 
     warehouse = db.relationship("Warehouse")
     nomenclature = db.relationship("Nomenclature")
