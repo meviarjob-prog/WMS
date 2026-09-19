@@ -234,6 +234,99 @@ def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_
     assert {line["qty"] for line in ret_doc["lines"]} == {3, 1}
 
 
+def test_export_supplier_return_order_number_uses_first_of_slash_separated_list(db, client_logged_in):
+    """Накладная закрывает сразу две заявки (см. чат — например
+    «ВБ-К11/ВБ-К10») — возврат привязывается к ПЕРВОЙ из них, даже если по
+    факту возвращаемая позиция относится ко второй."""
+    _set_token()
+    wh = Warehouse(code="WH-1C-20", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item = _make_item("9990000020")
+    doc = ReceivingDocument(
+        number="НАКЛ-900",
+        warehouse_id=wh.id,
+        invoice_file_name="накладная.xlsx",
+        order_number="ВБ-К11/ВБ-К10",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(
+        SupplierReturn(
+            warehouse_id=wh.id,
+            nomenclature_id=item.id,
+            qty=2,
+            receiving_document_id=doc.id,
+            invoice_number="НАКЛ-900",
+        )
+    )
+    db.session.commit()
+
+    resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    ret_doc = resp.get_json()["supplier_returns"][0]
+    assert ret_doc["order_number"] == "ВБ-К11"
+
+
+def test_export_supplier_return_order_number_uses_first_of_comma_separated_list(db, client_logged_in):
+    _set_token()
+    wh = Warehouse(code="WH-1C-21", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item = _make_item("9990000021")
+    doc = ReceivingDocument(
+        number="НАКЛ-901",
+        warehouse_id=wh.id,
+        invoice_file_name="накладная.xlsx",
+        order_number="ВБ-К11, ВБ-К10",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(
+        SupplierReturn(
+            warehouse_id=wh.id,
+            nomenclature_id=item.id,
+            qty=2,
+            receiving_document_id=doc.id,
+            invoice_number="НАКЛ-901",
+        )
+    )
+    db.session.commit()
+
+    resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    ret_doc = resp.get_json()["supplier_returns"][0]
+    assert ret_doc["order_number"] == "ВБ-К11"
+
+
+def test_export_supplier_return_order_number_without_separator_unchanged(db, client_logged_in):
+    _set_token()
+    wh = Warehouse(code="WH-1C-22", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item = _make_item("9990000022")
+    doc = ReceivingDocument(
+        number="НАКЛ-902",
+        warehouse_id=wh.id,
+        invoice_file_name="накладная.xlsx",
+        order_number="ШМ-005",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(
+        SupplierReturn(
+            warehouse_id=wh.id,
+            nomenclature_id=item.id,
+            qty=1,
+            receiving_document_id=doc.id,
+            invoice_number="НАКЛ-902",
+        )
+    )
+    db.session.commit()
+
+    resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    ret_doc = resp.get_json()["supplier_returns"][0]
+    assert ret_doc["order_number"] == "ШМ-005"
+
+
 def test_export_includes_receiving_adjustment_when_recount_mismatches_invoice(db, client_logged_in):
     """Приемка из накладной, ушедшая в разбраковку/завершение с расхождением
     (qty != expected_qty хотя бы по одной строке) — 1С должна поправить

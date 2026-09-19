@@ -181,6 +181,23 @@ def _inventory_payload(doc):
     }
 
 
+def _first_order_number(order_number):
+    """Если накладная закрывает сразу несколько заявок (см. чат — например
+    «ВБ-К11/ВБ-К10» или «ВБ-К11, ВБ-К10»), в 1С возврат все равно можно
+    привязать только к ОДНОМУ «Заказу поставщику» — берем первый из
+    перечисленных, даже если конкретная возвращаемая позиция по факту
+    относится к другой заявке из этого же списка. Разбирать возврат по
+    заявкам построчно WMS сейчас не умеет — эта привязка сугубо
+    приблизительная, для реального разделения нужно заводить накладную
+    отдельными документами приемки (по одному на заявку)."""
+    if not order_number:
+        return order_number
+    for sep in ("/", ","):
+        if sep in order_number:
+            return order_number.split(sep, 1)[0].strip()
+    return order_number.strip()
+
+
 def _supplier_returns_export():
     """Возвраты поставщику из разбраковки приемок (см. receiving.complete) —
     группируем по приемке в один документ на 1С с несколькими строками
@@ -207,7 +224,9 @@ def _supplier_returns_export():
     payloads = []
     for receiving_document_id, group in groups.items():
         first = group[0]
-        order_number = first.receiving_document.order_number if first.receiving_document else None
+        order_number = _first_order_number(
+            first.receiving_document.order_number if first.receiving_document else None
+        )
         # ИНН поставщика (из справочника Supplier, заполняется при загрузке
         # накладной — см. receiving._find_or_create_supplier) — надежный
         # уникальный идентификатор для поиска контрагента в 1С, в отличие
