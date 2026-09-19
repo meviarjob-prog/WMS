@@ -10,6 +10,7 @@
     <form method="post" action="{{ url_for('shipment_plan.sync_google') }}" class="d-inline">
       <button class="btn btn-primary" type="submit">🔄 Синхронизировать Google Таблицу</button>
     </form>
+    <a class="btn btn-outline-primary" href="{{ url_for('shipment_plan.google_button_setup') }}">Настроить кнопку в таблице</a>
     {% endif %}
     <a class="btn btn-outline-primary" href="{{ url_for('shipment_plan.upload') }}">⬆ Загрузить файл</a>
     {% endif %}
@@ -18,7 +19,7 @@
 
 {% if current_user.is_admin and google_sync.configured %}
 <div class="alert {{ 'alert-danger' if google_sync.last_error else 'alert-info' }} py-2">
-  <b>Google Таблица:</b> автоматическая синхронизация каждые 5 минут.
+  <b>Google Таблица:</b> данные обновляются только вручную — кнопкой в таблице или кнопкой выше.
   {% if google_sync.last_sync_at %}Последнее успешное обновление: {{ google_sync.last_sync_at }}.{% endif %}
   {% if google_sync.last_error %}<br>Ошибка: {{ google_sync.last_error }}{% endif %}
 </div>

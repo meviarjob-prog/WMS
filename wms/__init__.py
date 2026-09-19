@@ -330,6 +330,7 @@ def create_app(config_class=Config):
     @app.before_request
     def require_login():
         from .blueprints.integration_1c import API_1C_PUBLIC_ENDPOINTS
+        from .blueprints.shipment_plan import GOOGLE_SHEETS_PUBLIC_ENDPOINTS
         from .models import User
 
         if request.endpoint is None:
@@ -359,6 +360,7 @@ def create_app(config_class=Config):
             request.endpoint == "static"
             or request.endpoint.startswith("auth.")
             or request.endpoint in API_1C_PUBLIC_ENDPOINTS
+            or request.endpoint in GOOGLE_SHEETS_PUBLIC_ENDPOINTS
         ):
             return None
         if not current_user.is_authenticated:
