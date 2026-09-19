@@ -33,7 +33,7 @@
 
 <div class="card p-3">
   <table class="table d-none d-md-table">
-    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Поставщик</th><th>№ заказа</th><th>Автор</th><th>Статус</th><th>Кол-во</th><th>Возвраты</th><th></th></tr></thead>
+    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Поставщик</th><th>№ заказа</th><th>Автор</th><th>Статус</th><th>Кол-во</th><th>Возвраты</th><th class="text-center">Провер. в 1С</th><th></th></tr></thead>
     <tbody>
     {% for d in documents %}
       {% set returns_count = returns_count_by_doc.get(d.id, 0) %}
@@ -70,6 +70,19 @@
         </td>
         <td>{{ total_qty | int if total_qty == total_qty | int else total_qty | round(3) }}</td>
         <td>{% if returns_count %}<span class="badge bg-danger">{{ returns_count }}</span>{% else %}—{% endif %}</td>
+        <td class="text-center">
+          {% if d.is_from_invoice_import() %}
+          <button type="button" class="btn btn-sm btn-link p-0 toggle-flag-btn" style="font-size:1.15rem; line-height:1; text-decoration:none;"
+                data-url="{{ url_for('receiving.toggle_checked_in_1c', doc_id=d.id) }}"
+                data-on-icon="✅" data-off-icon="☐"
+                data-on-title-prefix="Проверено в 1С "
+                data-off-title="Отметить: проверено в 1С"
+                title="{{ 'Проверено в 1С ' + (d.checked_in_1c_at|msk).strftime('%d.%m.%Y %H:%M') if d.checked_in_1c_at else 'Отметить: проверено в 1С' }}"
+                >{{ '✅' if d.checked_in_1c_at else '☐' }}</button>
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
         <td>
           <a href="{{ url_for('receiving.detail', doc_id=d.id) }}">Открыть</a>
           {% if d.supplier_id %}· <a href="{{ url_for('receiving.confirm_invoice', doc_id=d.id) }}">📱 По накладной</a>{% endif %}
@@ -78,7 +91,7 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="10" class="text-muted">Документов еще нет</td></tr>
+      <tr><td colspan="11" class="text-muted">Документов еще нет</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -118,6 +131,17 @@
         <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }}{% if d.created_by %} · Автор: {{ d.created_by.display_name() }}{% endif %} · Кол-во: {{ total_qty | int if total_qty == total_qty | int else total_qty | round(3) }}</div>
         {% if returns_count %}<div class="small text-danger">↩ Возвратов: {{ returns_count }}</div>{% endif %}
         {% if has_mismatch %}<div class="small text-danger">⚠ Есть расхождение с накладной</div>{% endif %}
+        {% if d.is_from_invoice_import() %}
+        <div class="small">
+          <button type="button" class="btn btn-sm btn-link p-0 toggle-flag-btn" style="text-decoration:none;"
+                data-url="{{ url_for('receiving.toggle_checked_in_1c', doc_id=d.id) }}"
+                data-on-icon="✅ Проверено в 1С" data-off-icon="☐ Проверено в 1С"
+                data-on-title-prefix="Проверено в 1С "
+                data-off-title="Отметить: проверено в 1С"
+                title="{{ 'Проверено в 1С ' + (d.checked_in_1c_at|msk).strftime('%d.%m.%Y %H:%M') if d.checked_in_1c_at else 'Отметить: проверено в 1С' }}"
+                >{{ '✅' if d.checked_in_1c_at else '☐' }} Проверено в 1С</button>
+        </div>
+        {% endif %}
         {% if d.supplier_id %}
           <a href="{{ url_for('receiving.confirm_invoice', doc_id=d.id) }}" class="small">📱 По накладной</a>
         {% endif %}
@@ -130,4 +154,25 @@
     {% endfor %}
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Галочка "Проверено в 1С" — просто отметка для контроля, не влияет на
+  // сам документ (см. receiving.toggle_checked_in_1c), поэтому переключаем
+  // ее через fetch() без перезагрузки страницы.
+  document.querySelectorAll(".toggle-flag-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      fetch(btn.dataset.url, { method: "POST" })
+        .then((r) => r.json())
+        .then((data) => {
+          if (!data.ok) return;
+          btn.textContent = data.checked ? btn.dataset.onIcon : btn.dataset.offIcon;
+          btn.title = data.checked ? btn.dataset.onTitlePrefix + data.at : btn.dataset.offTitle;
+        })
+        .finally(() => { btn.disabled = false; });
+    });
+  });
+</script>
 {% endblock %}

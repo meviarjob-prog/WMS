@@ -35,6 +35,7 @@ from ..utils.excel_io import export_receiving_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
 from ..utils.receiving_invoice_import import InvoiceParseError, parse_invoice
+from ..utils.timezone import to_moscow
 
 bp = Blueprint("receiving", __name__)
 
@@ -188,6 +189,27 @@ def list_documents():
         returns_count_by_doc=returns_count_by_doc,
         mismatch_doc_ids=mismatch_doc_ids,
         total_qty_by_doc=total_qty_by_doc,
+    )
+
+
+@bp.route("/<int:doc_id>/toggle-checked-in-1c", methods=["POST"])
+def toggle_checked_in_1c(doc_id):
+    """Ручная отметка "проверено в 1С" — просто галочка для контроля
+    бухгалтером (см. чат), никак не влияет на сам документ и не связана с
+    выгрузкой (см. ReceivingDocument.checked_in_1c_at). Отвечает JSON, а не
+    редиректом — в списке приемок эта галочка переключается через fetch(),
+    без перезагрузки страницы."""
+    doc = ReceivingDocument.query.get_or_404(doc_id)
+    doc.checked_in_1c_at = None if doc.checked_in_1c_at else datetime.utcnow()
+    db.session.commit()
+    return jsonify(
+        {
+            "ok": True,
+            "checked": doc.checked_in_1c_at is not None,
+            "at": to_moscow(doc.checked_in_1c_at).strftime("%d.%m.%Y %H:%M")
+            if doc.checked_in_1c_at
+            else None,
+        }
     )
 
 

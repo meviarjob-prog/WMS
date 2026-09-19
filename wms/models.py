@@ -618,6 +618,11 @@ class ReceivingDocument(db.Model):
     # MovementDocument.accounting_entered_at) — например, бухгалтер уже
     # поправил количество в накладной сам и повторно выгружать не нужно.
     accounting_entered_at = db.Column(db.DateTime, nullable=True)
+    # Отметка "проверено в 1С" — просто галочка для контроля бухгалтером
+    # (см. чат), никак не влияет на сам документ и не связана с выгрузкой
+    # (в отличие от accounting_entered_at выше и recount_synced_to_1c_at) —
+    # только чтобы видеть в списке приемок, что документ уже сверили с 1С.
+    checked_in_1c_at = db.Column(db.DateTime, nullable=True)
 
     warehouse = db.relationship("Warehouse")
     created_by = db.relationship("User")
