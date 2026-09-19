@@ -95,6 +95,8 @@ body {
 
 /* Список перемещений: строка окрашивается по маркетплейсу склада
    назначения — визуально отличить ВБ от Озон, не открывая документ.
+   Приглушенные оттенки (та же светлота, но ниже насыщенность, см. чат) —
+   исходные #9F69D6/#594CD8 были слишком "ядовитыми" на целую строку.
    Фон нужен именно на >td (не только на самой tr) и с !important — у
    Bootstrap 5 каждая ячейка таблицы красит СВОЙ фон через переменную
    --bs-table-bg с более высокой специфичностью (.table>:not(caption)>*>*),
@@ -102,9 +104,9 @@ body {
    текста нужен по той же причине, плюс на мобильной карточке — там
    элемент одновременно несет класс Bootstrap "text-body"/"text-muted"
    (тоже !important). */
-.mp-row-wb, .mp-row-wb > td { background-color: #9F69D6 !important; color: #fff !important; }
+.mp-row-wb, .mp-row-wb > td { background-color: #9E77C5 !important; color: #fff !important; }
 .mp-row-wb a, .mp-row-wb .text-muted { color: #fff !important; text-decoration: underline; }
-.mp-row-ozon, .mp-row-ozon > td { background-color: #594CD8 !important; color: #fff !important; }
+.mp-row-ozon, .mp-row-ozon > td { background-color: #6E65BD !important; color: #fff !important; }
 .mp-row-ozon a, .mp-row-ozon .text-muted { color: #fff !important; text-decoration: underline; }
 
 /* ---- Мобильный экран ---- */
