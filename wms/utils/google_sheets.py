@@ -263,11 +263,11 @@ def write_distribution_facts(app, workbook_stream):
 def _ensure_output_sheet(service, spreadsheet_id):
     metadata = service.spreadsheets().get(
         spreadsheetId=spreadsheet_id,
-        fields="sheets.properties(sheetId,title)",
+        fields="sheets.properties(sheetId,title,gridProperties(rowCount))",
     ).execute()
     for sheet in metadata.get("sheets", []):
         if sheet["properties"]["title"] == OUTPUT_SHEET_TITLE:
-            return sheet["properties"]["sheetId"]
+            return sheet["properties"]
     response = service.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={
@@ -283,15 +283,41 @@ def _ensure_output_sheet(service, spreadsheet_id):
             ]
         },
     ).execute()
-    return response["replies"][0]["addSheet"]["properties"]["sheetId"]
+    return response["replies"][0]["addSheet"]["properties"]
+
+
+def _ensure_output_row_capacity(service, spreadsheet_id, properties, required_rows):
+    row_count = properties.get("gridProperties", {}).get("rowCount", 1000)
+    if required_rows <= row_count:
+        return row_count
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [
+                {
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": properties["sheetId"],
+                            "gridProperties": {"rowCount": required_rows},
+                        },
+                        "fields": "gridProperties.rowCount",
+                    }
+                }
+            ]
+        },
+    ).execute()
+    return required_rows
 
 
 def write_wms_movement_sheet(app):
     service = _service(app)
     spreadsheet_id = app.config["GOOGLE_SHEETS_SPREADSHEET_ID"]
-    _ensure_output_sheet(service, spreadsheet_id)
+    properties = _ensure_output_sheet(service, spreadsheet_id)
     rows = build_wms_movement_rows()
     values = [OUTPUT_HEADERS] + rows
+    row_count = _ensure_output_row_capacity(
+        service, spreadsheet_id, properties, len(values)
+    )
     service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
         range=f"{_a1_sheet(OUTPUT_SHEET_TITLE)}!A1:I{len(values)}",
@@ -299,9 +325,13 @@ def write_wms_movement_sheet(app):
         body={"values": values},
     ).execute()
     # Старые хвостовые строки очищаем только после успешной записи новых.
-    service.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id,
-        range=f"{_a1_sheet(OUTPUT_SHEET_TITLE)}!A{len(values) + 1}:I",
-        body={},
-    ).execute()
+    if len(values) < row_count:
+        service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=(
+                f"{_a1_sheet(OUTPUT_SHEET_TITLE)}!"
+                f"A{len(values) + 1}:I{row_count}"
+            ),
+            body={},
+        ).execute()
     return len(rows)

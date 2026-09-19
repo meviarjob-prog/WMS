@@ -15,10 +15,26 @@ from wms.models import (
     Warehouse,
 )
 from wms.utils.google_sheets import (
+    _ensure_output_row_capacity,
     _fact_ranges_for_sheet,
     build_wms_movement_rows,
     distribution_sheet_titles,
 )
+
+
+class _ExecuteRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def spreadsheets(self):
+        return self
+
+    def batchUpdate(self, **kwargs):
+        self.calls.append(kwargs)
+        return self
+
+    def execute(self):
+        return {}
 
 
 def test_distribution_sheet_titles_ignores_dates_and_non_distribution_sheets():
@@ -80,6 +96,19 @@ def test_fact_ranges_target_only_shipment_fact_column():
     ranges = _fact_ranges_for_sheet(sheet, "wb", {("wb", "москва", "111"): 7})
 
     assert ranges == [{"range": "'Распределение ВБ'!D2:D3", "values": [[7], [None]]}]
+
+
+def test_output_sheet_expands_only_when_required_rows_exceed_grid():
+    service = _ExecuteRecorder()
+    properties = {"sheetId": 42, "gridProperties": {"rowCount": 2139}}
+
+    assert _ensure_output_row_capacity(service, "sheet-id", properties, 2139) == 2139
+    assert service.calls == []
+
+    assert _ensure_output_row_capacity(service, "sheet-id", properties, 2140) == 2140
+    assert service.calls[0]["body"]["requests"][0]["updateSheetProperties"][
+        "properties"
+    ]["gridProperties"]["rowCount"] == 2140
 
 
 def test_google_trigger_is_public_but_requires_its_own_token(client):
