@@ -60,7 +60,7 @@
       <button type="submit" class="btn btn-success">🔍 Отправить на разбраковку</button>
     </form>
     {% elif doc.status == 'sorting' %}
-    <form method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}" class="d-inline">
+    <form id="sortingCompleteForm" method="post" action="{{ url_for('receiving.complete', doc_id=doc.id) }}" class="d-inline">
       <button type="submit" class="btn btn-success">✅ Завершить приемку</button>
     </form>
     {% elif doc.status == 'completed' and current_user.is_admin and doc.is_from_invoice_import() %}
@@ -209,6 +209,8 @@
     <form id="deleteLine{{ line.id }}" method="post" action="{{ url_for('receiving.delete_line', doc_id=doc.id, line_id=line.id) }}" hidden></form>
   {% endfor %}
   <form id="bulkQtyForm" method="post" action="{{ url_for('receiving.update_lines_bulk', doc_id=doc.id) }}">
+  {% elif can_edit_defect %}
+  <p class="text-muted small mb-2">Впишите брак по всем нужным строкам и нажмите «Завершить приемку» один раз — страница не перезагружается после каждой строки. Кнопка «✓ Готово» у отдельной строки тоже подхватит вписанный по ней брак.</p>
   {% endif %}
   <table class="table table-sm d-none d-md-table">
     <thead><tr><th>Товар</th><th>Короб</th><th>По накладной</th><th>Кол-во</th><th>{% if doc.status in ('sorting', 'completed') %}Брак{% endif %}</th>{% if doc.status == 'sorting' %}<th>Статус</th>{% endif %}</tr></thead>
@@ -246,10 +248,7 @@
           {% elif line.line_completed_at %}
             <span class="text-muted">{{ line.defect_qty }}</span>
           {% elif can_edit_defect %}
-            <form method="post" action="{{ url_for('receiving.update_defect', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
-              <input type="number" name="defect_qty" step="0.001" min="0" max="{{ line.qty }}" value="{{ line.defect_qty }}" class="form-control form-control-sm" style="width:90px">
-              <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
-            </form>
+            <input type="number" name="defect_qty_{{ line.id }}" form="sortingCompleteForm" step="0.001" min="0" max="{{ line.qty }}" value="{{ line.defect_qty }}" class="form-control form-control-sm" style="width:90px">
           {% else %}
             <span class="text-muted">{{ line.defect_qty }}</span>
           {% endif %}
@@ -260,10 +259,9 @@
           {% elif line.line_completed_at %}
             <span class="badge bg-success">Готово</span>
           {% elif can_edit_defect %}
-            <form method="post" action="{{ url_for('receiving.complete_line', doc_id=doc.id, line_id=line.id) }}"
-                  onsubmit="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Годное количество зачислится в остаток, брак — в возврат поставщику. Отменить нельзя.');">
-              <button type="submit" class="btn btn-sm btn-outline-success">✓ Готово</button>
-            </form>
+            <button type="submit" form="sortingCompleteForm" formaction="{{ url_for('receiving.complete_line', doc_id=doc.id, line_id=line.id) }}"
+                    class="btn btn-sm btn-outline-success"
+                    onclick="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Годное количество зачислится в остаток, брак — в возврат поставщику. Отменить нельзя.');">✓ Готово</button>
           {% endif %}
         </td>
         {% else %}
@@ -313,19 +311,17 @@
             {% elif line.line_completed_at %}
               <span class="badge bg-success">Готово</span>
             {% elif can_edit_defect %}
-              <form method="post" action="{{ url_for('receiving.update_defect', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1 align-items-center mt-1">
+              <div class="d-flex gap-1 align-items-center mt-1">
                 <span class="text-muted">брак:</span>
-                <input type="number" name="defect_qty" step="0.001" min="0" max="{{ line.qty }}" value="{{ line.defect_qty }}" class="form-control form-control-sm" style="width:4.5em">
-                <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
-              </form>
+                <input type="number" name="defect_qty_{{ line.id }}" form="sortingCompleteForm" step="0.001" min="0" max="{{ line.qty }}" value="{{ line.defect_qty }}" class="form-control form-control-sm" style="width:4.5em">
+              </div>
             {% else %}
               <span class="text-muted">брак: {{ line.defect_qty }}</span>
             {% endif %}
             {% if not line.box_id and not line.line_completed_at and can_edit_defect %}
-              <form method="post" action="{{ url_for('receiving.complete_line', doc_id=doc.id, line_id=line.id) }}" class="mt-1"
-                    onsubmit="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Годное количество зачислится в остаток, брак — в возврат поставщику. Отменить нельзя.');">
-                <button type="submit" class="btn btn-sm btn-outline-success">✓ Готово</button>
-              </form>
+              <button type="submit" form="sortingCompleteForm" formaction="{{ url_for('receiving.complete_line', doc_id=doc.id, line_id=line.id) }}"
+                      class="btn btn-sm btn-outline-success mt-1"
+                      onclick="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Годное количество зачислится в остаток, брак — в возврат поставщику. Отменить нельзя.');">✓ Готово</button>
             {% endif %}
           </div>
           {% else %}

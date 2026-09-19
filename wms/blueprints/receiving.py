@@ -1025,6 +1025,35 @@ def update_defect(doc_id, line_id):
     return _next_redirect(doc.id)
 
 
+def _apply_defect_qty_from_form(line):
+    """Кол-во брака теперь заполняется сразу по всем строкам разбраковки и
+    сохраняется одним нажатием — либо общей кнопки "Завершить приемку",
+    либо построчной "Готово" (см. receiving/detail.html: поле defect_qty_<id>
+    без своей формы, с атрибутом form=..., указывающим на нужную кнопку —
+    без перезагрузки страницы на каждое изменение брака, как было раньше
+    через update_defect). Поле в отправленной форме может отсутствовать
+    вовсе (запрос без defect_qty вообще, например от тестов или API) —
+    тогда прежнее defect_qty строки не трогаем. Возвращает текст ошибки
+    или None."""
+    raw = request.form.get(f"defect_qty_{line.id}")
+    if raw is None:
+        return None
+    raw = raw.strip()
+    try:
+        defect_qty = float(raw) if raw else 0.0
+    except ValueError:
+        return f"Некорректное количество брака для «{line.nomenclature.name}»"
+    if defect_qty < 0 or defect_qty > line.qty:
+        return (
+            f"Кол-во брака для «{line.nomenclature.name}» не может быть "
+            "отрицательным или больше принятого"
+        )
+    line.defect_qty = defect_qty
+    if line.expected_qty is not None:
+        line.confirmed = True
+    return None
+
+
 def _credit_receiving_line(doc, line):
     """Зачисляет годное количество строки в неразмещенный остаток и, если
     есть брак, заводит возврат поставщику — общая логика для завершения
@@ -1073,9 +1102,20 @@ def complete(doc_id):
             # минуя неразмещенный остаток и разбраковку. line_completed_at —
             # уже завершено отдельно через "Готово" на этой же строке.
             continue
+        # Брак по всем открытым строкам вносится прямо на этой отправке
+        # формы (см. _apply_defect_qty_from_form) — до появления этого поля
+        # для сохранения брака требовалась отдельная кнопка на каждую
+        # строку с перезагрузкой страницы.
+        error = _apply_defect_qty_from_form(line)
+        if error:
+            flash(error, "danger")
+            return _next_redirect(doc.id)
         # У строки из накладной qty до подтверждения равно заявленному
         # поставщиком количеству. Неподтвержденная позиция не является
         # фактически принятой и не должна создавать остаток на нашем складе.
+        # Внесение брака выше само по себе подтверждает строку (см.
+        # _apply_defect_qty_from_form), поэтому проверяем confirmed уже
+        # после него, а не до.
         if line.expected_qty is not None and not line.confirmed:
             continue
         _credit_receiving_line(doc, line)
@@ -1120,6 +1160,11 @@ def complete_line(doc_id, line_id):
         return _next_redirect(doc.id)
     if line.line_completed_at is not None:
         flash("Строка уже завершена", "danger")
+        return _next_redirect(doc.id)
+
+    error = _apply_defect_qty_from_form(line)
+    if error:
+        flash(error, "danger")
         return _next_redirect(doc.id)
     if line.expected_qty is not None and not line.confirmed:
         flash("Сначала подтвердите фактическое количество на пересчете", "danger")
