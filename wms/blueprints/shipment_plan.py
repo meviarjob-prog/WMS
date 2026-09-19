@@ -44,6 +44,7 @@ from ..utils.google_sheets import (
     google_sheets_configured,
     load_distribution_workbook,
     received_wms_totals,
+    write_distribution_facts,
     write_wms_movement_sheet,
 )
 from .warehouses import default_fulfillment_1c_name
@@ -125,7 +126,6 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
     plan.uploaded_by_id = uploaded_by_id
     plan.uploaded_at = datetime.utcnow()
     plan.period_start = extract_period_start(parsed.sheet_name)
-    plan.source_fulfilled_qty = parsed.reported_fact
 
     plan.lines.delete()
 
@@ -184,18 +184,15 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
                 article=row["article"],
                 size=row["size"],
                 planned_qty=row["qty"],
-                # Факт "отгружено / в пути" из самого файла плана — уже
-                # известное на момент выгрузки выполнение, а не только то,
-                # что WMS увидит через будущие перемещения. Плюс уже
-                # подтвержденная приемка перемещением в WMS (wms_received,
-                # см. выше) — иначе она терялась бы при замене строк плана.
-                fulfilled_qty=max(
-                    row.get("fact", 0.0),
+                # Из Google читаем только план. Факт принадлежит WMS и
+                # восстанавливается по принятым перемещениям; затем WMS
+                # сам записывает его в Google в колонки «отгружено / в пути».
+                fulfilled_qty=(
                     wms_received.get(
                         (city_warehouses[row["city"]].id, nomenclature.id), 0.0
                     )
                     if nomenclature
-                    else 0.0,
+                    else 0.0
                 ),
             )
         )
@@ -231,9 +228,9 @@ def sync_google_plans_and_movements(uploaded_by_id=None):
     """Читает все листы с признаком «Распределение» и публикует в
     отдельный лист агрегированный факт перемещений из WMS.
 
-    Исходные колонки «отгружено / в пути» не изменяем: это входной факт
-    плана. Если записать туда движения WMS, следующий запуск прочитает
-    собственную выгрузку вместо исходных данных и занизит выполнение.
+    Из Google читаем план, а рассчитанный в WMS факт записываем обратно в
+    колонки «отгружено / в пути». При импорте эти колонки не используются
+    как источник факта, поэтому обратной петли и задвоения нет.
     """
     workbook, sheet_names = load_distribution_workbook(current_app)
     summary = []
@@ -254,11 +251,12 @@ def sync_google_plans_and_movements(uploaded_by_id=None):
 
     db.session.commit()
     exported = write_wms_movement_sheet(current_app)
+    updated_cells = write_distribution_facts(current_app, workbook)
     _set_sync_setting(GOOGLE_SYNC_AT_KEY, datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
     _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, "")
     _set_sync_setting(GOOGLE_SYNC_SHEETS_KEY, ", ".join(sheet_names))
     db.session.commit()
-    return summary, sheet_names, exported, 0
+    return summary, sheet_names, exported, updated_cells
 
 
 def _get_or_create_google_trigger_token(rotate=False):
@@ -394,7 +392,7 @@ def sync_google():
         flash("Синхронизация уже выполняется. Дождитесь ее завершения.", "warning")
         return redirect(url_for("shipment_plan.dashboard"))
     try:
-        summary, sheet_names, exported, _ = sync_google_plans_and_movements(
+        summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements(
             uploaded_by_id=current_user.id
         )
     except Exception as exc:  # noqa: BLE001
@@ -407,7 +405,7 @@ def sync_google():
             "Google Таблица синхронизирована: "
             + "; ".join(summary)
             + f"; выгружено строк на лист «WMS — перемещения»: {exported}; "
-            + "исходные колонки «отгружено / в пути» не изменялись; "
+            + f"обновлено ячеек факта: {updated_cells}; "
             + f"листов: {len(sheet_names)}",
             "success",
         )
@@ -428,7 +426,7 @@ def google_trigger():
     if not _google_sync_lock.acquire(False):
         return jsonify(ok=False, message="Синхронизация уже выполняется"), 409
     try:
-        summary, sheet_names, exported, _ = sync_google_plans_and_movements()
+        summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements()
     except Exception as exc:  # noqa: BLE001
         db.session.rollback()
         _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, str(exc))
@@ -441,7 +439,7 @@ def google_trigger():
     message = (
         "; ".join(summary)
         + f"; выгружено строк на лист «WMS — перемещения»: {exported}; "
-        + "исходные колонки «отгружено / в пути» не изменялись; "
+        + f"обновлено ячеек факта: {updated_cells}; "
         + f"листов: {len(sheet_names)}"
     )
     return jsonify(ok=True, message=message)
@@ -704,12 +702,7 @@ def _dashboard_context():
         }
 
         total_planned = sum(line.planned_qty for line in lines)
-        line_fulfilled = sum(line.fulfilled_qty for line in lines)
-        total_fulfilled = (
-            plan.source_fulfilled_qty
-            if plan.source_fulfilled_qty is not None
-            else line_fulfilled
-        )
+        total_fulfilled = sum(line.fulfilled_qty for line in lines)
         total_in_transit = sum(row["in_transit"] for row in cities)
         pace = _pace_analysis(plan, total_planned, total_fulfilled)
 
@@ -723,11 +716,10 @@ def _dashboard_context():
                 "total_planned": total_planned,
                 "total_fulfilled": total_fulfilled,
                 "total_in_transit": total_in_transit,
-                # Факт из Google Таблицы уже берется из колонки
-                # «отгружено / в пути». Повторно прибавлять текущие
-                # перемещения нельзя: иначе один и тот же товар попадает в
-                # «выполнено» дважды. В пути оставляем отдельным показателем.
-                "total_fulfilled_with_transit": total_fulfilled,
+                # Факт формирует сама WMS: принятое хранится в строках
+                # плана, отправленное, но еще не принятое, добавляется один
+                # раз из текущих перемещений.
+                "total_fulfilled_with_transit": total_fulfilled + total_in_transit,
                 "pace": pace,
             }
         )

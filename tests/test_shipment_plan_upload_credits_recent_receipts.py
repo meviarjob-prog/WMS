@@ -1,8 +1,7 @@
 """Загрузка новой версии плана отгрузок (shipment_plan._apply_plan)
 полностью заменяет строки старой версии (plan.lines.delete()) — вместе с
 ними терялся бы и накопленный fulfilled_qty, если подтвержденная приемка
-по направлению случилась ДО этой загрузки и не попала в сам файл плана
-("факт") или в Google Таблицу. Поэтому при загрузке дополнительно
+по направлению случилась ДО этой загрузки. Поэтому при загрузке дополнительно
 учитывается уже принятое перемещением (received_at) в интервале действия
 плана: с самой "даты распределения" и до дедлайна +PERIOD_DAYS (14) — тот
 же интервал, что и в shipment_plan._pace_analysis. Приемка до начала
@@ -90,6 +89,34 @@ def test_upload_credits_receipt_within_period_window_into_fulfilled_qty(db, clie
 
     line = ShipmentPlanLine.query.filter_by(warehouse_id=city.id, nomenclature_id=item.id).first()
     assert line.fulfilled_qty == 12
+
+
+def test_upload_ignores_google_fact_and_uses_only_wms_fact(db, client_logged_in):
+    item = Nomenclature(sku="SKU-UPC-G", barcode="7770100099", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    period_start = date.today() - timedelta(days=2)
+    sheet_name = f"Распределение ОЗОН ФБС от {period_start.strftime('%d.%m')}"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = sheet_name
+    sheet.append(["Артикул", "Размер", "Баркод", "Город", "отгружено / в пути"])
+    sheet.append(["ART-1", "44", item.barcode, 30, 25])
+    stream = io.BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+
+    response = client_logged_in.post(
+        "/shipment-plan/upload",
+        data={"file": (stream, "plan.xlsx")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    line = ShipmentPlanLine.query.filter_by(nomenclature_id=item.id).first()
+    assert line.planned_qty == 30
+    assert line.fulfilled_qty == 0
 
 
 def test_upload_ignores_receipts_before_period_start(db, client_logged_in):

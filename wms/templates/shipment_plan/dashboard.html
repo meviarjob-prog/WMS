@@ -64,7 +64,7 @@
           План <b>{{ mp.total_planned | round(0) | int }}</b> —
           выполнено <b>{{ mp.total_fulfilled_with_transit | round(0) | int }}</b>
           ({{ (100 * mp.total_fulfilled_with_transit / mp.total_planned) | round(1) if mp.total_planned else 0 }}%)
-          <span class="text-muted small" title="Факт из Google Таблицы (колонка «отгружено / в пути»). Текущие перемещения показаны отдельно в колонке «В пути»">ⓘ</span>
+          <span class="text-muted small" title="Принято в WMS {{ mp.total_fulfilled | round(0) | int }} + в пути {{ mp.total_in_transit | round(0) | int }}">ⓘ</span>
           {% if mp.problems_count %}
             — <span class="badge bg-danger">{{ mp.problems_count }} без остатка на складе</span>
           {% endif %}

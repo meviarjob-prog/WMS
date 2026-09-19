@@ -161,7 +161,7 @@ def test_top_summary_shows_total_production_since_period_start(db, client_logged
     assert ">1<" in html[idx : idx + 200]
 
 
-def test_marketplace_header_does_not_count_in_transit_twice(db, client_logged_in):
+def test_marketplace_header_combines_received_and_in_transit(db, client_logged_in):
     sender, city, item = _setup(planned_qty=30)
     line = ShipmentPlanLine.query.first()
     line.fulfilled_qty = 5
@@ -170,28 +170,10 @@ def test_marketplace_header_does_not_count_in_transit_twice(db, client_logged_in
 
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
-    # Значение 5 уже пришло из колонки Google «отгружено / в пути».
-    # Текущее перемещение показывается отдельно и повторно не прибавляется.
+    # Из Google приходит только план: факт WMS равен 5 принято + 10 в пути.
     idx = html.find("выполнено")
     snippet = html[idx : idx + 200]
-    assert "<b>5</b>" in snippet
-    assert "<b>15</b>" not in snippet
-
-
-def test_marketplace_header_uses_reported_google_total(db, client_logged_in):
-    sender, city, item = _setup(planned_qty=50)
-    plan = ShipmentPlan.query.filter_by(marketplace="ozon").first()
-    line = ShipmentPlanLine.query.first()
-    plan.source_fulfilled_qty = 42
-    line.fulfilled_qty = 44
-    db.session.commit()
-
-    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
-
-    idx = html.find("выполнено")
-    snippet = html[idx : idx + 200]
-    assert "<b>42</b>" in snippet
-    assert "<b>44</b>" not in snippet
+    assert "<b>15</b>" in snippet
 
 
 def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, client_logged_in):

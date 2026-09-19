@@ -5,9 +5,18 @@ import os
 from collections import defaultdict
 from datetime import datetime
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 
 from ..models import MovementDocument, Nomenclature, ShipmentPlanLine
+from .shipment_plan_import import (
+    _find_city_columns,
+    _find_group_start_columns,
+    _find_header_row,
+    _find_marketplace_barcode_col,
+    _find_plan_sheets,
+    _to_barcode_str,
+)
 
 
 OUTPUT_SHEET_TITLE = "WMS — перемещения"
@@ -185,6 +194,87 @@ def build_wms_movement_rows():
             ]
         )
     return rows
+
+
+def _current_plan_fact_totals():
+    """Факт для исходных листов: принято по текущему плану + еще в пути.
+
+    Значения плана из Google сюда не входят. Благодаря этому WMS может
+    записывать факт в Google и не читать собственную запись обратно.
+    """
+    movement_totals = _movement_totals()
+    totals = {}
+    for line in ShipmentPlanLine.query.all():
+        city = line.warehouse.marketplace_city if line.warehouse else ""
+        in_transit = 0.0
+        if line.nomenclature_id is not None:
+            in_transit = movement_totals.get(
+                (line.warehouse_id, line.nomenclature_id), {}
+            ).get("in_transit", 0.0)
+        totals[(line.plan.marketplace, city.casefold(), line.barcode)] = (
+            line.fulfilled_qty + in_transit
+        )
+    return totals
+
+
+def _fact_ranges_for_sheet(worksheet, marketplace, totals):
+    """Готовит обновления колонок «отгружено», не трогая строки итогов."""
+    header_row, barcode_col = _find_header_row(worksheet)
+    if header_row is not None:
+        city_columns = _find_city_columns(worksheet, header_row, barcode_col + 1)
+    else:
+        header_row, barcode_col = _find_marketplace_barcode_col(worksheet, marketplace)
+        if header_row is None:
+            return []
+        group_columns = _find_group_start_columns(worksheet)
+        start_col = group_columns.get(marketplace)
+        if start_col is None:
+            return []
+        later = [
+            col for mp, col in group_columns.items() if mp != marketplace and col > start_col
+        ]
+        end_col = min(later) - 1 if later else worksheet.max_column
+        city_columns = _find_city_columns(worksheet, header_row, start_col, end_col)
+
+    ranges = []
+    for _plan_col, city, fact_col in city_columns:
+        if fact_col is None:
+            continue
+        values = []
+        for row_number in range(header_row + 1, worksheet.max_row + 1):
+            barcode = _to_barcode_str(worksheet.cell(row=row_number, column=barcode_col).value)
+            value = totals.get((marketplace, city.casefold(), barcode), 0.0) if barcode else None
+            values.append([value])
+        if values:
+            column = get_column_letter(fact_col)
+            ranges.append(
+                {
+                    "range": (
+                        f"{_a1_sheet(worksheet.title)}!{column}{header_row + 1}:"
+                        f"{column}{worksheet.max_row}"
+                    ),
+                    "values": values,
+                }
+            )
+    return ranges
+
+
+def write_distribution_facts(app, workbook_stream):
+    """Пишет рассчитанный WMS факт в колонки «отгружено / в пути»."""
+    totals = _current_plan_fact_totals()
+    workbook_stream.seek(0)
+    workbook = load_workbook(workbook_stream, data_only=True)
+    updates = []
+    for marketplace in ("ozon", "wb"):
+        for sheet_name in _find_plan_sheets(workbook, marketplace):
+            updates.extend(_fact_ranges_for_sheet(workbook[sheet_name], marketplace, totals))
+    if not updates:
+        return 0
+    response = _service(app).spreadsheets().values().batchUpdate(
+        spreadsheetId=app.config["GOOGLE_SHEETS_SPREADSHEET_ID"],
+        body={"valueInputOption": "RAW", "data": updates},
+    ).execute()
+    return response.get("totalUpdatedCells", 0)
 
 
 def _ensure_output_sheet(service, spreadsheet_id):

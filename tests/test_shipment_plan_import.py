@@ -51,24 +51,6 @@ def test_parse_single_sheet():
     assert {r["city"]: r["qty"] for r in plan.rows} == {"Москва": 5.0, "Питер": 2.0}
 
 
-def test_parse_uses_reported_total_fact_from_total_row():
-    data = _sheet_to_bytes(
-        {
-            "Распределение ОЗОН ФБО от 16.09": [
-                ["Артикул", "Размер", "Баркод", "Факт отгружено 7 д.", "Москва", "отгружено / в пути"],
-                ["ВСЕГО", None, None, 42, 30, None],
-                ["A1", "46", "1111", 25, 20, 25],
-                ["A2", "48", "2222", 19, 10, 19],
-            ]
-        }
-    )
-
-    plan = parse_plan_sheet(data, "ozon")
-
-    assert sum(row["fact"] for row in plan.rows) == 44
-    assert plan.reported_fact == 42
-
-
 def test_parse_merges_multiple_sheets_for_same_marketplace():
     """Если в файле два листа "Распределение..." под один и тот же
     маркетплейс (например, основная выгрузка + отдельная категория) —
