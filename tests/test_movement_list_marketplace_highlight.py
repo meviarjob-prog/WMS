@@ -3,6 +3,8 @@
 #594CD8 (класс mp-row-ozon), остальные (не маркетплейс, обычный
 внутренний склад) — без подсветки."""
 
+from datetime import datetime
+
 from wms.extensions import db
 from wms.models import MovementDocument, Warehouse
 
@@ -52,3 +54,24 @@ def test_non_marketplace_destination_gets_no_highlight_class(db, client_logged_i
     row_html = html[max(0, row_start - 400):row_start]
     assert "mp-row-wb" not in row_html
     assert "mp-row-ozon" not in row_html
+
+
+def test_movement_row_is_clickable_and_open_link_is_removed(db, client_logged_in):
+    doc = _make_movement("PER-MPH-4", marketplace="ozon")
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+
+    assert f'data-href="/movement/{doc.id}"' in html
+    assert "movement-clickable-row" in html
+    assert "movement-number text-decoration-none" in html
+    assert ">Открыть</a>" not in html
+
+
+def test_receive_button_has_no_underline_class(db, client_logged_in):
+    doc = _make_movement("PER-MPH-5", marketplace="wb")
+    doc.status = "completed"
+    doc.completed_at = datetime.utcnow()
+    doc.marketplace_request_created_at = datetime.utcnow()
+    db.session.commit()
+
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    assert "movement-receive-btn text-decoration-none" in html

@@ -108,6 +108,11 @@ body {
 .mp-row-wb a, .mp-row-wb .text-muted { color: #fff !important; text-decoration: underline; }
 .mp-row-ozon, .mp-row-ozon > td { background-color: #3396ff !important; color: #fff !important; }
 .mp-row-ozon a, .mp-row-ozon .text-muted { color: #fff !important; text-decoration: underline; }
+.movement-clickable-row { cursor: pointer; }
+.mp-row-wb a.movement-number,
+.mp-row-ozon a.movement-number,
+.mp-row-wb a.movement-receive-btn,
+.mp-row-ozon a.movement-receive-btn { text-decoration: none; }
 /* Галочка сохранения "№ заявки на МП" (btn-outline-secondary) серая по
    умолчанию — на подсвеченной строке сливается с фоном, поэтому здесь
    белая. */

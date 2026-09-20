@@ -180,10 +180,11 @@
       {% for d in documents %}
         {% set can_manage_document = current_user.is_admin or d.created_by_id == current_user.id %}
         {% set mp = d.to_warehouse.marketplace if d.to_warehouse else none %}
-        <tr class="{{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}">
+        <tr class="movement-clickable-row {{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}"
+            data-href="{{ url_for('movement.detail', doc_id=d.id) }}" role="link" tabindex="0">
           <td><input type="checkbox" class="form-check-input doc-checkbox" data-status="{{ d.status }}" name="doc_ids" value="{{ d.id }}"></td>
           <td>
-            <a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a>
+            <a class="movement-number text-decoration-none" href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a>
             {% if d.sync_warning %}
               <span class="text-danger" title="1С создала документ не полностью — часть строк не сопоставлена с номенклатурой и пропущена: {{ d.sync_warning }}">⚠️</span>
             {% endif %}
@@ -219,7 +220,7 @@
             {% elif d.received_at %}
               <span class="badge bg-success" title="{{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') }}">Отгружено {{ (d.received_at|msk).strftime('%d.%m') }}</span>
             {% elif can_manage_document and d.marketplace_request_created_at %}
-              <a class="btn btn-sm btn-warning" href="{{ url_for('movement.receive', doc_id=d.id) }}"
+              <a class="btn btn-sm btn-warning movement-receive-btn text-decoration-none" href="{{ url_for('movement.receive', doc_id=d.id) }}"
                  title="Товар считается «в пути», пока не нажата эта кнопка">📥 Принято на складе</a>
             {% elif can_manage_document %}
               <span class="text-muted small" title="Сначала отметьте: заявка на маркетплейс создана">Ждет заявки на МП</span>
@@ -256,8 +257,7 @@
             </div>
           </td>
           <td>
-            <a href="{{ url_for('movement.detail', doc_id=d.id) }}">Открыть</a>
-            · <a href="{{ url_for('movement.export_document', doc_id=d.id) }}">Excel</a>
+            <a href="{{ url_for('movement.export_document', doc_id=d.id) }}">Excel</a>
           </td>
         </tr>
       {% else %}
@@ -407,6 +407,23 @@
   colFilters.forEach((input) => {
     input.addEventListener("input", applyColumnFilters);
     input.addEventListener("change", applyColumnFilters);
+  });
+
+  // Строка открывает перемещение целиком. Элементы управления внутри нее
+  // сохраняют собственное действие и не запускают переход по строке.
+  document.querySelectorAll(".movement-clickable-row").forEach((row) => {
+    const openRow = (event) => {
+      if (event.target.closest("a, button, input, select, textarea, label, form")) return;
+      if (window.getSelection && window.getSelection().toString()) return;
+      window.location.href = row.dataset.href;
+    };
+    row.addEventListener("click", openRow);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openRow(event);
+      }
+    });
   });
 </script>
 {% endblock %}
