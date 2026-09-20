@@ -115,7 +115,7 @@
   {% endif %}
 </div>
 
-<div class="card p-3">
+<div class="card p-3 movement-list-card">
   <!-- Массовый выбор/печать и полная таблица со всеми колонками — только
        на широком экране; на телефоне вместо этого компактный список ниже
        без 1С/Открыть/Excel и кнопок приемки (это делается на детальной
@@ -271,7 +271,7 @@
     {% for d in documents %}
       {% set mp = d.to_warehouse.marketplace if d.to_warehouse else none %}
       <a href="{{ url_for('movement.detail', doc_id=d.id) }}"
-         class="list-group-item list-group-item-action py-2 px-2 text-decoration-none text-body {{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}">
+         class="list-group-item list-group-item-action py-2 px-2 movement-list-item text-decoration-none text-body {{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}">
         <div class="d-flex justify-content-between align-items-center gap-2">
           <span class="fw-bold">{{ d.number }}</span>
           {% if d.status == 'merged' %}

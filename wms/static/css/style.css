@@ -124,6 +124,27 @@ body {
 
 /* Широкие таблицы не должны ломать верстку на телефоне — скроллим по горизонтали */
 @media (max-width: 767.98px) {
+  /* На телефоне оставляем экрану больше полезной ширины: стандартные
+     боковые поля Bootstrap здесь визуально слишком велики. */
+  .app-content {
+    padding-left: .5rem !important;
+    padding-right: .5rem !important;
+  }
+
+  /* Компактнее отступы вокруг списков перемещений и приемок, а также
+     внутри каждой строки. */
+  .movement-list-card,
+  .receiving-list-card {
+    padding-left: .5rem !important;
+    padding-right: .5rem !important;
+  }
+
+  .movement-list-item,
+  .receiving-list-item {
+    padding-left: .375rem !important;
+    padding-right: .375rem !important;
+  }
+
   .card .table {
     display: block;
     overflow-x: auto;
