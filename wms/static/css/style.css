@@ -124,6 +124,17 @@ body {
 
 /* Широкие таблицы не должны ломать верстку на телефоне — скроллим по горизонтали */
 @media (max-width: 767.98px) {
+  /* Меньше пустого пространства от верхнего меню до содержимого и между
+     основными блоками мобильных списков. */
+  .navbar.mb-4 {
+    margin-bottom: .75rem !important;
+  }
+
+  .mobile-compact-list-page > .mb-4,
+  .mobile-compact-list-page > .mb-3 {
+    margin-bottom: .75rem !important;
+  }
+
   /* На телефоне оставляем экрану больше полезной ширины: стандартные
      боковые поля Bootstrap здесь визуально слишком велики. */
   .app-content {
@@ -135,14 +146,18 @@ body {
      внутри каждой строки. */
   .movement-list-card,
   .receiving-list-card {
+    padding-top: .5rem !important;
     padding-left: .5rem !important;
     padding-right: .5rem !important;
+    padding-bottom: .5rem !important;
   }
 
   .movement-list-item,
   .receiving-list-item {
+    padding-top: .375rem !important;
     padding-left: .375rem !important;
     padding-right: .375rem !important;
+    padding-bottom: .375rem !important;
   }
 
   .card .table {

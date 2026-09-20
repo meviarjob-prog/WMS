@@ -50,5 +50,6 @@ def test_movement_pagination_is_hidden_for_one_page(db, client_logged_in):
     html = client_logged_in.get("/movement/").get_data(as_text=True)
     assert "Страница 1 из" not in html
     assert 'class="container-fluid px-4 app-content"' in html
+    assert "mobile-compact-list-page" in html
     assert "movement-list-card" in html
     assert "movement-list-item" in html

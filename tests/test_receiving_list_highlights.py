@@ -43,6 +43,7 @@ def test_document_with_return_is_highlighted_and_shows_return_count(db, client_l
 
     assert "table-danger" in html
     assert "RLH-0001" in html
+    assert "mobile-compact-list-page" in html
     assert "receiving-list-card" in html
     assert "receiving-list-item" in html
 
