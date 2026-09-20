@@ -324,8 +324,12 @@ MOVEMENT_SUMMARY_HEADERS = [
     "Маркетплейс",
     "Склад-назначение",
     "№ заявки МП",
+    "Заявка на МП создана",
+    "Дата отправки",
+    "Принято на складе",
     "Кол-во коробов",
-    "Кол-во товара",
+    "Кол-во в коробах",
+    "Кол-во отгружено",
 ]
 
 
@@ -351,8 +355,12 @@ def export_movement_summary_to_excel(documents) -> bytes:
                 doc.to_warehouse.marketplace_label() if doc.to_warehouse else "",
                 doc.to_warehouse.name if doc.to_warehouse else "",
                 doc.marketplace_request_number or "",
+                "Да" if doc.marketplace_request_created_at else "Нет",
+                doc.completed_at.strftime("%Y-%m-%d %H:%M") if doc.completed_at else "",
+                doc.received_at.strftime("%Y-%m-%d %H:%M") if doc.received_at else "",
                 doc.lines.count(),
                 doc.total_item_qty(),
+                doc.total_plan_fact_qty(),
             ]
         )
 

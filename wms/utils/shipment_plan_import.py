@@ -9,6 +9,7 @@
 """
 
 import re
+import unicodedata
 from datetime import date
 
 from openpyxl import load_workbook
@@ -51,6 +52,33 @@ _SHEET_ALIASES = {
     "ozon": ("озон",),
     "wb": ("вб", "wb"),
 }
+
+_CITY_ALIASES = {
+    "екб": "Екатеринбург",
+    "екатеринбург": "Екатеринбург",
+    "спб": "Санкт-Петербург",
+    "питер": "Санкт-Петербург",
+    "санкт петербург": "Санкт-Петербург",
+    "санкт-петербург": "Санкт-Петербург",
+    "москва": "Москва",
+}
+_MARKETPLACE_PREFIX_RE = re.compile(
+    r"^(?:озон|ozon|вб|wb)\s*(?::|[-–—])?\s*", re.IGNORECASE
+)
+
+
+def canonical_marketplace_city(value):
+    """Единый ключ города для импорта плана и обратной записи факта."""
+    text = unicodedata.normalize("NFKC", str(value or "")).replace("ё", "е")
+    text = _MARKETPLACE_PREFIX_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip(" \t,;:")
+    key = re.sub(r"\s*[-–—]\s*", "-", text.casefold())
+    if key in _CITY_ALIASES:
+        return _CITY_ALIASES[key]
+    moscow = re.fullmatch(r"москва\s*([12])", key)
+    if moscow:
+        return f"Москва {moscow.group(1)}"
+    return "-".join(part.capitalize() for part in key.split("-"))
 
 
 def _norm(value):

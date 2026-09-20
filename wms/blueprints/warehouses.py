@@ -1,12 +1,10 @@
-import re
-import unicodedata
-
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user
 
 from ..extensions import db
 from ..models import Box, Cell, ShipmentPlanLine, UnplacedStock, Warehouse, Zone
 from ..utils.numbering import next_number
+from ..utils.shipment_plan_import import canonical_marketplace_city
 
 bp = Blueprint("warehouses", __name__)
 
@@ -37,39 +35,6 @@ FULFILLMENT_1C_DEFAULTS = {
     "черкесск": "Товары в пути ФФ ЧЕРКЕССК (Лейла)",
     "пятигорск": "Товары в пути ФФ ЧЕРКЕССК (Лейла)",
 }
-
-_CITY_ALIASES = {
-    "екб": "Екатеринбург",
-    "екатеринбург": "Екатеринбург",
-    "спб": "Санкт-Петербург",
-    "питер": "Санкт-Петербург",
-    "санкт петербург": "Санкт-Петербург",
-    "санкт-петербург": "Санкт-Петербург",
-    "москва": "Москва",
-}
-_MARKETPLACE_PREFIX_RE = re.compile(
-    r"^(?:озон|ozon|вб|wb)\s*(?::|[-–—])?\s*", re.IGNORECASE
-)
-
-
-def canonical_marketplace_city(value):
-    """Каноническое название направления из заголовка плана.
-
-    Маркетплейс не является частью города и хранится в Warehouse.marketplace.
-    Москва, Москва 1 и Москва 2 намеренно остаются тремя разными ключами.
-    """
-    text = unicodedata.normalize("NFKC", str(value or "")).replace("ё", "е")
-    text = _MARKETPLACE_PREFIX_RE.sub("", text)
-    text = re.sub(r"\s+", " ", text).strip(" \t,;:")
-    key = text.casefold()
-    key = re.sub(r"\s*[-–—]\s*", "-", key)
-    if key in _CITY_ALIASES:
-        return _CITY_ALIASES[key]
-    moscow = re.fullmatch(r"москва\s*([12])", key)
-    if moscow:
-        return f"Москва {moscow.group(1)}"
-    return "-".join(part.capitalize() for part in key.split("-"))
-
 
 def _replace_foreign_keys(target_table_name, old_id, new_id):
     """Переносит все ссылки на запись справочника через метаданные моделей."""

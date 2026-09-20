@@ -39,16 +39,20 @@ from ..models import (
 from ..utils.excel_io import export_shipment_plan_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
-from ..utils.shipment_plan_import import extract_period_start, parse_plan_sheet
+from ..utils.shipment_plan_import import (
+    canonical_marketplace_city,
+    extract_period_start,
+    parse_plan_sheet,
+)
 from ..utils.google_sheets import (
     google_sheets_configured,
     load_distribution_workbook,
+    movement_wms_totals,
     received_wms_totals,
     write_distribution_facts,
     write_wms_movement_sheet,
 )
 from .warehouses import (
-    canonical_marketplace_city,
     consolidate_marketplace_warehouses,
     default_fulfillment_1c_name,
 )
@@ -600,40 +604,6 @@ def _production_by_nomenclature(nomenclature_ids, period_start):
     return {nomenclature_id: qty for nomenclature_id, qty in rows}
 
 
-def _in_transit_by_warehouse_and_item(period_start=None):
-    """{(warehouse_id, nomenclature_id): кол-во} товара, уже отправленного
-    перемещением на этот склад-город (документ завершен), но еще не
-    подтвержденного кнопкой "Принято на складе" — висит как "в пути".
-    fulfilled_qty у строки плана дописывается только при приемке (см.
-    movement.receive), поэтому без этой раскладки по товарам "Что нужно
-    отправить" ниже продолжал бы требовать полное количество по плану, как
-    будто ничего еще не выехало — раньше это было видно только в сводке по
-    городу целиком, а не по конкретной позиции."""
-    query = (
-        db.session.query(
-            MovementDocument.to_warehouse_id,
-            BoxItem.nomenclature_id,
-            func.sum(BoxItem.qty),
-        )
-        .join(MovementLine, MovementLine.document_id == MovementDocument.id)
-        .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
-        .filter(
-            MovementDocument.status == "completed",
-            MovementDocument.received_at.is_(None),
-            MovementDocument.marketplace_request_created_at.isnot(None),
-        )
-    )
-    if period_start:
-        query = query.filter(
-            func.coalesce(MovementDocument.completed_at, MovementDocument.created_at)
-            >= datetime.combine(period_start, datetime.min.time())
-        )
-    rows = query.group_by(
-        MovementDocument.to_warehouse_id, BoxItem.nomenclature_id
-    ).all()
-    return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
-
-
 def _pace_analysis(plan, total_planned, total_fulfilled):
     """Успеваем ли отгрузить план за 14 дней с даты из названия листа, и
     сколько дней потребуется при сегодняшнем темпе. Темп считается как
@@ -683,7 +653,7 @@ def _dashboard_context():
     for nomenclature_id, qty in _pending_sorting_by_nomenclature(sender_ids).items():
         stock[nomenclature_id] = stock.get(nomenclature_id, 0) + qty
         unplaced_stock[nomenclature_id] = unplaced_stock.get(nomenclature_id, 0) + qty
-    in_transit_by_period = {}
+    movement_totals_by_period = {}
 
     marketplaces_data = []
     lines_by_marketplace = {}
@@ -698,16 +668,28 @@ def _dashboard_context():
         lines = plan.lines.all()
         lines_by_marketplace[marketplace] = lines
 
-        # После создания заявки на маркетплейс товар считается отгруженным:
-        # он уменьшает остаток плана и одновременно показывается отдельно
-        # как «В пути», пока склад назначения не подтвердит приемку.
+        # Факт каждый раз восстанавливается непосредственно из перемещений
+        # WMS. После создания заявки товар считается «в пути», после
+        # подтверждения склада назначения — принятым.
         for line in lines:
             period_start = line.period_start or plan.period_start
-            if period_start not in in_transit_by_period:
-                in_transit_by_period[period_start] = _in_transit_by_warehouse_and_item(period_start)
-            in_transit_by_item = in_transit_by_period[period_start]
-            line.in_transit_qty = in_transit_by_item.get((line.warehouse_id, line.nomenclature_id), 0)
-            line.fulfilled_with_transit_qty = line.fulfilled_qty + line.in_transit_qty
+            if period_start not in movement_totals_by_period:
+                movement_totals_by_period[period_start] = movement_wms_totals(period_start)
+            quantities = movement_totals_by_period[period_start].get(
+                (line.warehouse_id, line.nomenclature_id), {}
+            )
+            # Пересчитываем факт непосредственно из перемещений. Сохраненное
+            # значение оставляем как резерв для старых данных, у которых
+            # документ перемещения мог еще не содержать новых отметок.
+            line.current_fulfilled_qty = (
+                quantities.get("received", 0.0)
+                if quantities.get("received_seen")
+                else line.fulfilled_qty
+            )
+            line.in_transit_qty = quantities.get("in_transit", 0.0)
+            line.fulfilled_with_transit_qty = (
+                line.current_fulfilled_qty + line.in_transit_qty
+            )
             line.effective_remaining_qty = max(
                 line.planned_qty - line.fulfilled_with_transit_qty,
                 0,
@@ -726,7 +708,7 @@ def _dashboard_context():
                 },
             )
             row["planned"] += line.planned_qty
-            row["fulfilled"] += line.fulfilled_qty
+            row["fulfilled"] += line.current_fulfilled_qty
             row["fulfilled_with_transit"] += line.fulfilled_with_transit_qty
             row["in_transit"] += line.in_transit_qty
         cities = sorted(by_warehouse.values(), key=lambda r: r["warehouse"].marketplace_city)
@@ -745,7 +727,7 @@ def _dashboard_context():
         }
 
         total_planned = sum(line.planned_qty for line in lines)
-        total_fulfilled = sum(line.fulfilled_qty for line in lines)
+        total_fulfilled = sum(line.current_fulfilled_qty for line in lines)
         total_in_transit = sum(row["in_transit"] for row in cities)
         total_fulfilled_with_transit = total_fulfilled + total_in_transit
         pace = _pace_analysis(plan, total_planned, total_fulfilled_with_transit)

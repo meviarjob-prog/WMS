@@ -824,6 +824,29 @@ class MovementDocument(db.Model):
             .scalar()
         ) or 0
 
+    def total_received_qty(self):
+        """Фактически принято на складе назначения с учетом расхождений."""
+        if self.received_at is None:
+            return None
+        return self.total_item_qty() + sum(
+            discrepancy.received_qty - discrepancy.expected_qty
+            for discrepancy in self.discrepancies
+        )
+
+    def total_plan_fact_qty(self):
+        """Количество документа, которое может входить в факт плана.
+
+        До создания заявки завершенный документ не считается отгрузкой.
+        В пути учитываем состав коробов, после приемки — фактически принятое.
+        """
+        if self.status != "completed":
+            return 0
+        if self.received_at is not None:
+            return self.total_received_qty()
+        if self.marketplace_request_created_at is not None:
+            return self.total_item_qty()
+        return 0
+
 
 class MovementReceiptDiscrepancy(db.Model):
     """Расхождение между тем, что отправлено (по коробам документа), и тем,
@@ -1045,7 +1068,8 @@ class ShipmentPlanLine(db.Model):
     )
 
     def remaining_qty(self):
-        return max(self.planned_qty - self.fulfilled_qty, 0)
+        fulfilled_qty = getattr(self, "current_fulfilled_qty", self.fulfilled_qty)
+        return max(self.planned_qty - fulfilled_qty, 0)
 
 
 class SupplierReturn(db.Model):

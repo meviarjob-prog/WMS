@@ -99,7 +99,9 @@ def test_wms_rows_separate_in_transit_and_received(db):
             nomenclature_id=item.id,
             barcode=item.barcode,
             planned_qty=20,
-            fulfilled_qty=5,
+            # Даже если сохраненный счетчик строки плана устарел, факт
+            # восстанавливается непосредственно из перемещений WMS.
+            fulfilled_qty=0,
         )
     )
     db.session.commit()
@@ -118,6 +120,22 @@ def test_fact_ranges_target_only_shipment_fact_column():
     ranges = _fact_ranges_for_sheet(sheet, "wb", {("wb", "москва", "111"): 7})
 
     assert ranges == [{"range": "'Распределение ВБ'!D2:D3", "values": [[7], [None]]}]
+
+
+def test_fact_ranges_match_city_aliases_when_writing_back_to_google():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Распределение ВБ"
+    sheet.append(["Артикул", "Баркод", "СПБ", "отгружено"])
+    sheet.append(["A1", "111", 10, 0])
+
+    ranges = _fact_ranges_for_sheet(
+        sheet,
+        "wb",
+        {("wb", "санкт-петербург", "111"): 9},
+    )
+
+    assert ranges == [{"range": "'Распределение ВБ'!D2:D2", "values": [[9]]}]
 
 
 def test_output_sheet_expands_only_when_required_rows_exceed_grid():

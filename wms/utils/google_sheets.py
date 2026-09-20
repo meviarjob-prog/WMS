@@ -16,6 +16,7 @@ from .shipment_plan_import import (
     _find_marketplace_barcode_col,
     _find_plan_sheets,
     _to_barcode_str,
+    canonical_marketplace_city,
 )
 
 
@@ -100,11 +101,12 @@ def load_distribution_workbook(app):
     return stream, titles
 
 
-def _movement_totals(period_start=None):
+def movement_wms_totals(period_start=None):
     totals = defaultdict(
         lambda: {
             "in_transit": 0.0,
             "received": 0.0,
+            "received_seen": False,
             "warehouse": None,
             "nomenclature": None,
         }
@@ -151,19 +153,20 @@ def _movement_totals(period_start=None):
             if document.received_at is None:
                 totals[key]["in_transit"] += expected_qty
             else:
+                totals[key]["received_seen"] = True
                 totals[key]["received"] += actual.get(nomenclature_id, expected_qty)
     return totals
 
 
 def received_wms_totals():
     """Фактически принятые количества по складу и товару."""
-    return {key: value["received"] for key, value in _movement_totals().items()}
+    return {key: value["received"] for key, value in movement_wms_totals().items()}
 
 
 def build_wms_movement_rows():
     """Агрегирует только факт WMS. Повторный экспорт всегда дает тот же
     результат, поэтому сетевой повтор не способен задвоить количество."""
-    totals = _movement_totals()
+    totals = movement_wms_totals()
 
     # Если в плане есть более подходящий артикул, используем его вместо
     # внутреннего SKU номенклатуры.
@@ -219,16 +222,20 @@ def _current_plan_fact_totals():
     for line in ShipmentPlanLine.query.all():
         period_start = line.period_start or (line.plan.period_start if line.plan else None)
         if period_start not in movement_totals_by_period:
-            movement_totals_by_period[period_start] = _movement_totals(period_start)
+            movement_totals_by_period[period_start] = movement_wms_totals(period_start)
         movement_totals = movement_totals_by_period[period_start]
         city = line.warehouse.marketplace_city if line.warehouse else ""
+        received = line.fulfilled_qty
         in_transit = 0.0
         if line.nomenclature_id is not None:
-            in_transit = movement_totals.get(
+            quantities = movement_totals.get(
                 (line.warehouse_id, line.nomenclature_id), {}
-            ).get("in_transit", 0.0)
+            )
+            if quantities.get("received_seen"):
+                received = quantities.get("received", 0.0)
+            in_transit = quantities.get("in_transit", 0.0)
         totals[(line.plan.marketplace, city.casefold(), line.barcode)] = (
-            line.fulfilled_qty + in_transit
+            received + in_transit
         )
     return totals
 
@@ -259,7 +266,8 @@ def _fact_ranges_for_sheet(worksheet, marketplace, totals):
         values = []
         for row_number in range(header_row + 1, worksheet.max_row + 1):
             barcode = _to_barcode_str(worksheet.cell(row=row_number, column=barcode_col).value)
-            value = totals.get((marketplace, city.casefold(), barcode), 0.0) if barcode else None
+            city_key = canonical_marketplace_city(city).casefold()
+            value = totals.get((marketplace, city_key, barcode), 0.0) if barcode else None
             values.append([value])
         if values:
             column = get_column_letter(fact_col)

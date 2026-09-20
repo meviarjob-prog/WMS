@@ -206,6 +206,32 @@ def test_marketplace_header_combines_received_and_in_transit(db, client_logged_i
     assert "50%" in city_snippet
 
 
+def test_dashboard_restores_received_fact_from_movements_when_plan_counter_is_stale(
+    db, client_logged_in
+):
+    sender, city, item = _setup(planned_qty=30)
+    doc = _ship_box(
+        sender,
+        city,
+        item,
+        qty=6,
+        box_number="BOX-RECEIVED-FACT",
+        client=client_logged_in,
+    )
+    client_logged_in.post(
+        f"/movement/{doc.id}/receive",
+        data={f"qty_{item.id}": "4"},
+    )
+    line = ShipmentPlanLine.query.first()
+    line.fulfilled_qty = 0
+    db.session.commit()
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("выполнено")
+    assert "<b>4</b>" in html[idx : idx + 200]
+
+
 def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, client_logged_in):
     sender, city, item = _setup(planned_qty=30)
     line = ShipmentPlanLine.query.first()

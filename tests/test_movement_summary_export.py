@@ -4,11 +4,20 @@
 коробе)."""
 
 import io
+from datetime import datetime
 
 import openpyxl
 
 from wms.extensions import db
-from wms.models import Box, BoxItem, MovementDocument, MovementLine, Nomenclature, Warehouse
+from wms.models import (
+    Box,
+    BoxItem,
+    MovementDocument,
+    MovementLine,
+    MovementReceiptDiscrepancy,
+    Nomenclature,
+    Warehouse,
+)
 
 
 def _make_item(barcode, name="Товар для сводки"):
@@ -66,8 +75,9 @@ def test_summary_export_has_one_row_per_document_with_box_and_item_counts(db, cl
     rows = _read_xlsx_rows(resp.data)
 
     row = next(r for r in rows if r[0] == doc.number)
-    assert row[7] == 3  # кол-во коробов
-    assert row[8] == 10  # суммарное кол-во товара (3+5+2)
+    assert row[10] == 3  # кол-во коробов
+    assert row[11] == 10  # суммарное кол-во товара в коробах (3+5+2)
+    assert row[12] == 0  # без заявки документ еще не входит в факт плана
 
 
 def test_summary_export_headers(db, client_logged_in):
@@ -84,8 +94,12 @@ def test_summary_export_headers(db, client_logged_in):
         "Маркетплейс",
         "Склад-назначение",
         "№ заявки МП",
+        "Заявка на МП создана",
+        "Дата отправки",
+        "Принято на складе",
         "Кол-во коробов",
-        "Кол-во товара",
+        "Кол-во в коробах",
+        "Кол-во отгружено",
     ]
 
 
@@ -112,6 +126,38 @@ def test_summary_export_marks_ozon_destination(db, client_logged_in):
     row = next(r for r in rows if r[0] == doc.number)
 
     assert row[4] == "ОЗОН"
+
+
+def test_summary_export_separates_boxed_and_actually_received_qty(db, client_logged_in):
+    now = datetime.utcnow()
+    doc = _make_movement_with_boxes(
+        "MSUM-5",
+        [10],
+        receiver_code="WH-MSUM-ACTUAL",
+        receiver_marketplace="wb",
+        completed_at=now,
+        marketplace_request_created_at=now,
+        received_at=now,
+    )
+    box_item = doc.lines.first().box.items.first()
+    db.session.add(
+        MovementReceiptDiscrepancy(
+            document_id=doc.id,
+            nomenclature_id=box_item.nomenclature_id,
+            expected_qty=10,
+            received_qty=7,
+        )
+    )
+    db.session.commit()
+
+    resp = client_logged_in.get("/movement/export-summary.xlsx")
+    row = next(r for r in _read_xlsx_rows(resp.data) if r[0] == doc.number)
+
+    assert row[7] == "Да"
+    assert row[8]
+    assert row[9]
+    assert row[11] == 10
+    assert row[12] == 7
 
 
 def test_summary_export_excludes_no_documents_and_response_is_xlsx(db, client_logged_in):
