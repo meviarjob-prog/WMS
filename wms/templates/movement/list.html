@@ -180,8 +180,7 @@
       {% for d in documents %}
         {% set can_manage_document = current_user.is_admin or d.created_by_id == current_user.id %}
         {% set mp = d.to_warehouse.marketplace if d.to_warehouse else none %}
-        <tr class="movement-clickable-row {{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}"
-            data-href="{{ url_for('movement.detail', doc_id=d.id) }}" role="link" tabindex="0">
+        <tr class="{{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}">
           <td><input type="checkbox" class="form-check-input doc-checkbox" data-status="{{ d.status }}" name="doc_ids" value="{{ d.id }}"></td>
           <td>
             <a class="movement-number text-decoration-none" href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a>
@@ -409,21 +408,5 @@
     input.addEventListener("change", applyColumnFilters);
   });
 
-  // Строка открывает перемещение целиком. Элементы управления внутри нее
-  // сохраняют собственное действие и не запускают переход по строке.
-  document.querySelectorAll(".movement-clickable-row").forEach((row) => {
-    const openRow = (event) => {
-      if (event.target.closest("a, button, input, select, textarea, label, form")) return;
-      if (window.getSelection && window.getSelection().toString()) return;
-      window.location.href = row.dataset.href;
-    };
-    row.addEventListener("click", openRow);
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openRow(event);
-      }
-    });
-  });
 </script>
 {% endblock %}

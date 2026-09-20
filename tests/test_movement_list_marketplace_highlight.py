@@ -56,13 +56,13 @@ def test_non_marketplace_destination_gets_no_highlight_class(db, client_logged_i
     assert "mp-row-ozon" not in row_html
 
 
-def test_movement_row_is_clickable_and_open_link_is_removed(db, client_logged_in):
+def test_movement_opens_only_by_number_and_open_link_is_removed(db, client_logged_in):
     doc = _make_movement("PER-MPH-4", marketplace="ozon")
     html = client_logged_in.get("/movement/").get_data(as_text=True)
 
-    assert f'data-href="/movement/{doc.id}"' in html
-    assert "movement-clickable-row" in html
-    assert "movement-number text-decoration-none" in html
+    assert f'class="movement-number text-decoration-none" href="/movement/{doc.id}"' in html
+    assert "movement-clickable-row" not in html
+    assert "data-href=" not in html
     assert ">Открыть</a>" not in html
 
 
