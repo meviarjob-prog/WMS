@@ -123,6 +123,7 @@ def movement_wms_totals(period_start=None):
         if (
             document.received_at is None
             and document.marketplace_request_created_at is None
+            and not (document.marketplace_request_number or "").strip()
         ):
             continue
         warehouse = document.to_warehouse

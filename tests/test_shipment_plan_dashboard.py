@@ -202,6 +202,7 @@ def test_marketplace_header_combines_received_and_in_transit(db, client_logged_i
 
     city_idx = html.find("<td>Город</td>")
     city_snippet = html[city_idx : city_idx + 500]
+    assert "Принято на складе получателя и находится в пути" in html
     assert ">15<" in city_snippet
     assert "50%" in city_snippet
 

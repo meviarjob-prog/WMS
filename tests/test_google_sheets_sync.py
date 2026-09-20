@@ -109,6 +109,44 @@ def test_wms_rows_separate_in_transit_and_received(db):
     assert _current_plan_fact_totals()[("ozon", "москва", item.barcode)] == 10
 
 
+def test_wms_rows_count_request_number_without_request_checkbox(db):
+    """Старые документы могли получить номер заявки без даты галочки.
+
+    Номер заявки сам по себе подтверждает, что заявка на МП существует,
+    поэтому весь завершенный документ должен оставаться «в пути».
+    """
+    sender = Warehouse(code="SYNC-NUM-FROM", name="Основной")
+    target = Warehouse(
+        code="SYNC-NUM-TO",
+        name="ВБ: Казань",
+        marketplace="wb",
+        marketplace_city="Казань",
+    )
+    item = Nomenclature(sku="ART-NUM", barcode="4600000000099", name="Товар", unit="шт")
+    box = Box(box_number="BOX-REQUEST-NUMBER", warehouse=sender, status="shipped")
+    document = MovementDocument(
+        number="MOVE-REQUEST-NUMBER",
+        from_warehouse=sender,
+        to_warehouse=target,
+        status="completed",
+        marketplace_request_number="41376379",
+    )
+    db.session.add_all([sender, target, item, box, document])
+    db.session.flush()
+    db.session.add_all(
+        [
+            BoxItem(box_id=box.id, nomenclature_id=item.id, qty=7669),
+            MovementLine(document_id=document.id, box_id=box.id, from_warehouse_id=sender.id),
+        ]
+    )
+    db.session.commit()
+
+    rows = build_wms_movement_rows()
+
+    assert len(rows) == 1
+    assert rows[0][6:] == [7669.0, 0.0, 7669.0]
+
+
 def test_fact_ranges_target_only_shipment_fact_column():
     workbook = Workbook()
     sheet = workbook.active

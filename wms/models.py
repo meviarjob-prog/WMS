@@ -843,7 +843,9 @@ class MovementDocument(db.Model):
             return 0
         if self.received_at is not None:
             return self.total_received_qty()
-        if self.marketplace_request_created_at is not None:
+        if self.marketplace_request_created_at is not None or (
+            self.marketplace_request_number or ""
+        ).strip():
             return self.total_item_qty()
         return 0
 
