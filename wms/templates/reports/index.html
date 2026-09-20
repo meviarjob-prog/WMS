@@ -105,5 +105,13 @@
       </form>
     </div>
   </div>
+
+  <div class="col-md-6">
+    <div class="card p-3 border-warning">
+      <h5>Недовозы по перемещениям</h5>
+      <p class="text-muted small">Товар, который был отправлен в коробах, но не принят маркетплейсом. По номеру перемещения открывается список позиций, которые нужно найти.</p>
+      <a class="btn btn-warning" href="{{ url_for('reports.movement_shortages_report') }}">Открыть недовозы</a>
+    </div>
+  </div>
 </div>
 {% endblock %}

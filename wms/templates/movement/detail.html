@@ -39,7 +39,7 @@
       <button type="submit" class="btn btn-success">📦 Собрано</button>
     </form>
     {% elif can_manage_document and doc.status == 'completed' and not doc.received_at %}
-      {% if not doc.marketplace_request_created_at %}
+      {% if not doc.marketplace_request_created_at and not doc.marketplace_request_number %}
       <form method="post" action="{{ url_for('movement.mark_marketplace_request', doc_id=doc.id) }}" class="d-inline">
         <button type="submit" class="btn btn-primary" title="Отметить: заявка на маркетплейс создана">🔖 Отметить: заявка на МП создана</button>
       </form>
@@ -50,7 +50,7 @@
       {% endif %}
     {% elif doc.status == 'completed' and doc.received_at %}
     <span class="badge bg-success">Отгружено {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
-    {% if doc.discrepancies %}<span class="badge bg-warning text-dark">С расхождением</span>{% endif %}
+    {% if doc.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ doc.total_shortage_qty() | round(3) }}</span>{% elif doc.discrepancies %}<span class="badge bg-info text-dark">Излишек при приемке</span>{% endif %}
     {% elif doc.status == 'completed' %}
     <span class="text-warning-emphasis">В пути</span>
     {% endif %}
@@ -77,23 +77,30 @@
 </div>
 {% endif %}
 
-{% if doc.discrepancies %}
+{% if doc.total_shortage_qty() %}
 <div class="card p-3 mb-4 border-warning">
-  <h5>⚠️ Расхождения при приемке</h5>
+  <h5>⚠️ Недовоз — товар нужно найти</h5>
   <table class="table table-sm mb-0">
-    <thead><tr><th>Товар</th><th>Отправлено</th><th>Принято</th><th>Расхождение</th></tr></thead>
+    <thead><tr><th>Штрихкод</th><th>Наименование</th><th>Отправлено</th><th>Принято на МП</th><th>Нужно найти</th></tr></thead>
     <tbody>
     {% for d in doc.discrepancies %}
+      {% if d.shortage_qty() %}
       <tr>
-        <td>{{ d.nomenclature.name }} <span class="text-muted">({{ d.nomenclature.sku }})</span></td>
+        <td>{{ d.nomenclature.barcode or '—' }}</td>
+        <td>{{ d.nomenclature.name }}</td>
         <td>{{ d.expected_qty | round(3) }}</td>
         <td>{{ d.received_qty | round(3) }}</td>
-        <td class="{{ 'text-danger' if d.diff() < 0 else 'text-success' }}">{{ '%+g' % d.diff() }}</td>
+        <td class="text-danger fw-bold">{{ d.shortage_qty() | round(3) }}</td>
       </tr>
+      {% endif %}
     {% endfor %}
     </tbody>
   </table>
 </div>
+{% endif %}
+
+{% if doc.discrepancies and not doc.total_shortage_qty() %}
+<div class="alert alert-info">При приемке зафиксирован излишек товара.</div>
 {% endif %}
 
 {% if can_edit %}

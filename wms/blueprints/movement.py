@@ -911,7 +911,9 @@ def receive(doc_id):
         flash("Перемещение уже отмечено как принятое", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
-    if doc.marketplace_request_created_at is None:
+    if doc.marketplace_request_created_at is None and not (
+        doc.marketplace_request_number or ""
+    ).strip():
         flash(
             "Сначала отметьте, что заявка на маркетплейс создана — "
             "это обязательный шаг перед приемкой на складе",
@@ -939,6 +941,7 @@ def receive(doc_id):
         return render_template("movement/receive.html", doc=doc, rows=rows)
 
     has_discrepancy = False
+    shortage_qty = 0
     for nomenclature_id, expected_qty in expected.items():
         received_qty = request.form.get(f"qty_{nomenclature_id}", type=float)
         if received_qty is None or received_qty < 0:
@@ -952,6 +955,7 @@ def receive(doc_id):
 
         if received_qty != expected_qty:
             has_discrepancy = True
+            shortage_qty += max(expected_qty - received_qty, 0)
             db.session.add(
                 MovementReceiptDiscrepancy(
                     document_id=doc.id,
@@ -963,7 +967,13 @@ def receive(doc_id):
 
     doc.received_at = datetime.utcnow()
     db.session.commit()
-    if has_discrepancy:
+    if shortage_qty:
+        flash(
+            f"Перемещение {doc.number} принято с недовозом {shortage_qty:g} шт. "
+            f"на складе «{doc.to_warehouse.name}»",
+            "warning",
+        )
+    elif has_discrepancy:
         flash(
             f"Перемещение {doc.number} принято с расхождением на складе «{doc.to_warehouse.name}»",
             "warning",

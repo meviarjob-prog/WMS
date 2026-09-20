@@ -10,6 +10,7 @@ from ..models import (
     BoxItem,
     MovementDocument,
     MovementLine,
+    MovementReceiptDiscrepancy,
     Nomenclature,
     PlacementDocument,
     ProductCategory,
@@ -229,6 +230,47 @@ def movement_report():
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": content_disposition(fname)},
+    )
+
+
+@bp.route("/movement-shortages")
+def movement_shortages_report():
+    """Документы перемещения, по которым маркетплейс принял меньше товара.
+
+    Детализация уже хранится в MovementReceiptDiscrepancy после действия
+    «Принято на складе», поэтому отчет не копирует данные в отдельный реестр.
+    """
+    warehouse_id = request.args.get("warehouse_id", type=int)
+    date_from = _parse_date(request.args.get("date_from"))
+    date_to = _parse_date(request.args.get("date_to"))
+
+    query = (
+        MovementDocument.query
+        .join(
+            MovementReceiptDiscrepancy,
+            MovementReceiptDiscrepancy.document_id == MovementDocument.id,
+        )
+        .filter(
+            MovementReceiptDiscrepancy.received_qty
+            < MovementReceiptDiscrepancy.expected_qty
+        )
+    )
+    if warehouse_id:
+        query = query.filter(MovementDocument.to_warehouse_id == warehouse_id)
+    if date_from:
+        query = query.filter(MovementDocument.received_at >= date_from)
+    if date_to:
+        query = query.filter(MovementDocument.received_at < date_to)
+
+    documents = query.order_by(MovementDocument.received_at.desc()).all()
+    warehouses = Warehouse.query.order_by(Warehouse.code).all()
+    return render_template(
+        "reports/movement_shortages.html",
+        documents=documents,
+        warehouses=warehouses,
+        selected_warehouse_id=warehouse_id,
+        date_from=request.args.get("date_from", ""),
+        date_to=request.args.get("date_to", ""),
     )
 
 

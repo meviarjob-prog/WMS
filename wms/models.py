@@ -833,6 +833,10 @@ class MovementDocument(db.Model):
             for discrepancy in self.discrepancies
         )
 
+    def total_shortage_qty(self):
+        """Сколько товара не принято на складе назначения и нужно найти."""
+        return sum(discrepancy.shortage_qty() for discrepancy in self.discrepancies)
+
     def total_plan_fact_qty(self):
         """Количество документа, которое может входить в факт плана.
 
@@ -876,6 +880,12 @@ class MovementReceiptDiscrepancy(db.Model):
 
     def diff(self):
         return self.received_qty - self.expected_qty
+
+    def shortage_qty(self):
+        return max(self.expected_qty - self.received_qty, 0)
+
+    def excess_qty(self):
+        return max(self.received_qty - self.expected_qty, 0)
 
 
 class MovementLine(db.Model):

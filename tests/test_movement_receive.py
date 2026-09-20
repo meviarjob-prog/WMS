@@ -94,6 +94,26 @@ def test_shortage_credits_actual_received_qty_and_records_discrepancy(db, client
     assert discrepancy.expected_qty == 10
     assert discrepancy.received_qty == 7
     assert discrepancy.diff() == -3
+    assert discrepancy.shortage_qty() == 3
+    assert doc.total_received_qty() == 7
+    assert doc.total_shortage_qty() == 3
+
+    movement_list = client_logged_in.get("/movement/").get_data(as_text=True)
+    assert 'title="Фактически принято на маркетплейсе">(7)</span>' in movement_list
+    assert "Недовоз 3" in movement_list
+
+    shortage_report = client_logged_in.get("/reports/movement-shortages")
+    shortage_html = shortage_report.get_data(as_text=True)
+    assert shortage_report.status_code == 200
+    assert doc.number in shortage_html
+    assert f'href="/movement/{doc.id}"' in shortage_html
+    assert "Товар для расхождения" not in shortage_html
+
+    detail_html = client_logged_in.get(f"/movement/{doc.id}").get_data(as_text=True)
+    assert "Недовоз — товар нужно найти" in detail_html
+    assert item.barcode in detail_html
+    assert item.name in detail_html
+    assert "Нужно найти" in detail_html
 
 
 def test_excess_credits_actual_received_qty_and_records_discrepancy(db, client_logged_in):
@@ -109,6 +129,27 @@ def test_excess_credits_actual_received_qty_and_records_discrepancy(db, client_l
 
     discrepancy = MovementReceiptDiscrepancy.query.filter_by(document_id=doc.id).first()
     assert discrepancy.diff() == 2
+    assert discrepancy.shortage_qty() == 0
+    shortage_html = client_logged_in.get(
+        "/reports/movement-shortages"
+    ).get_data(as_text=True)
+    assert f'href="/movement/{doc.id}" class="fw-bold">{doc.number}</a>' not in shortage_html
+
+
+def test_request_number_allows_receiving_without_legacy_checkbox(db, client_logged_in):
+    doc, item, _plan_line = _make_completed_document(
+        qty=10, marketplace_request_created=False
+    )
+    doc.marketplace_request_number = "REQ-ONLY-123"
+    db.session.commit()
+
+    response = client_logged_in.post(
+        f"/movement/{doc.id}/receive",
+        data={f"qty_{item.id}": "10"},
+    )
+
+    assert response.status_code == 302
+    assert MovementDocument.query.get(doc.id).received_at is not None
 
 
 def test_matching_quantity_creates_no_discrepancy_row(db, client_logged_in):
