@@ -33,6 +33,10 @@ def test_extract_period_start_none_when_no_date():
     assert extract_period_start("Распределение ОЗОН ФБС") is None
 
 
+def test_extract_period_start_parses_date_without_word_ot():
+    assert extract_period_start("Распределение Свитеры-27.08").strftime("%d.%m") == "27.08"
+
+
 def test_parse_single_sheet():
     data = _sheet_to_bytes(
         {
@@ -49,6 +53,7 @@ def test_parse_single_sheet():
     assert plan.cities == ["Москва", "Питер"]
     assert len(plan.rows) == 2
     assert {r["city"]: r["qty"] for r in plan.rows} == {"Москва": 5.0, "Питер": 2.0}
+    assert all(r["period_start"].strftime("%d.%m") == "01.09" for r in plan.rows)
 
 
 def test_parse_merges_multiple_sheets_for_same_marketplace():

@@ -84,10 +84,9 @@ def _get_or_create_city_warehouse(marketplace, city_name):
     return wh
 
 
-def _received_since_by_warehouse_and_item(window_start, window_end):
+def _received_since_by_warehouse_and_item(window_start):
     """{(to_warehouse_id, nomenclature_id): кол-во} — уже ПОДТВЕРЖДЕННАЯ
-    приемка перемещением (received_at) в интервале действия плана
-    [window_start, window_end] — "дата распределения" .. +PERIOD_DAYS.
+    приемка перемещением по отгрузкам, сделанным начиная с даты плана.
     Нужно при загрузке НОВОГО плана: _apply_plan полностью заменяет строки
     старой версии плана (plan.lines.delete()), а вместе с ними и
     накопленный fulfilled_qty — без этой подстраховки уже подтвержденное
@@ -106,8 +105,11 @@ def _received_since_by_warehouse_and_item(window_start, window_end):
         .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
         .filter(
             MovementDocument.received_at.isnot(None),
-            MovementDocument.received_at >= window_start,
-            MovementDocument.received_at <= window_end,
+            func.coalesce(
+                MovementDocument.completed_at,
+                MovementDocument.received_at,
+                MovementDocument.created_at,
+            ) >= window_start,
         )
         .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
         .all()
@@ -125,7 +127,10 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
     plan.sheet_name = parsed.sheet_name
     plan.uploaded_by_id = uploaded_by_id
     plan.uploaded_at = datetime.utcnow()
-    plan.period_start = extract_period_start(parsed.sheet_name)
+    row_periods = [row.get("period_start") for row in parsed.rows if row.get("period_start")]
+    # Для общей карточки показываем начало самого раннего листа. При этом
+    # маршрутизация использует дату каждой строки отдельно.
+    plan.period_start = min(row_periods) if row_periods else extract_period_start(parsed.sheet_name)
 
     plan.lines.delete()
 
@@ -140,21 +145,13 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
     }
     # Уже подтвержденное приемкой перемещением в WMS — подстраховка от
     # потери fulfilled_qty при замене строк плана (plan.lines.delete() ниже).
-    # Если у плана известна "дата распределения" — считаем только движения
-    # с датой приемки в интервале действия плана: с самой даты распределения
-    # и до дедлайна +PERIOD_DAYS (см. _received_since_by_warehouse_and_item и
-    # _pace_analysis, где используется тот же дедлайн). Приемка до начала
-    # периода или после дедлайна к текущему плану отношения не имеет. Если
-    # дату из названия листа извлечь не удалось — берем весь накопленный
-    # факт без ограничения по периоду, как было до этого разделения.
-    if plan.period_start:
-        window_start = datetime.combine(plan.period_start, datetime.min.time())
-        window_end = datetime.combine(
-            plan.period_start + timedelta(days=PERIOD_DAYS), datetime.max.time()
+    # Факт пересчитывается отдельно для каждой даты листа. Верхней границы
+    # нет: все отгрузки начиная с даты листа закрывают его потребность.
+    received_by_period = {None: received_wms_totals()}
+    for period_start in set(row_periods):
+        received_by_period[period_start] = _received_since_by_warehouse_and_item(
+            datetime.combine(period_start, datetime.min.time())
         )
-        wms_received = _received_since_by_warehouse_and_item(window_start, window_end)
-    else:
-        wms_received = received_wms_totals()
 
     # Один и тот же штрихкод изредка встречается в файле больше одного раза
     # для одного и того же города (дубль строки при ручном ведении таблицы) —
@@ -166,6 +163,10 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
         if key in merged:
             merged[key]["qty"] += row["qty"]
             merged[key]["fact"] += row["fact"]
+            dates = [d for d in (merged[key].get("period_start"), row.get("period_start")) if d]
+            # Если один SKU-город случайно повторяется в листах разных
+            # периодов, считаем его частью более нового плана.
+            merged[key]["period_start"] = max(dates) if dates else None
         else:
             merged[key] = dict(row)
 
@@ -188,12 +189,13 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
                 # восстанавливается по принятым перемещениям; затем WMS
                 # сам записывает его в Google в колонки «отгружено / в пути».
                 fulfilled_qty=(
-                    wms_received.get(
+                    received_by_period[row.get("period_start")].get(
                         (city_warehouses[row["city"]].id, nomenclature.id), 0.0
                     )
                     if nomenclature
                     else 0.0
                 ),
+                period_start=row.get("period_start"),
             )
         )
         created += 1
@@ -577,7 +579,7 @@ def _production_by_nomenclature(nomenclature_ids, period_start):
     return {nomenclature_id: qty for nomenclature_id, qty in rows}
 
 
-def _in_transit_by_warehouse_and_item():
+def _in_transit_by_warehouse_and_item(period_start=None):
     """{(warehouse_id, nomenclature_id): кол-во} товара, уже отправленного
     перемещением на этот склад-город (документ завершен), но еще не
     подтвержденного кнопкой "Принято на складе" — висит как "в пути".
@@ -586,7 +588,7 @@ def _in_transit_by_warehouse_and_item():
     отправить" ниже продолжал бы требовать полное количество по плану, как
     будто ничего еще не выехало — раньше это было видно только в сводке по
     городу целиком, а не по конкретной позиции."""
-    rows = (
+    query = (
         db.session.query(
             MovementDocument.to_warehouse_id,
             BoxItem.nomenclature_id,
@@ -599,9 +601,15 @@ def _in_transit_by_warehouse_and_item():
             MovementDocument.received_at.is_(None),
             MovementDocument.marketplace_request_created_at.isnot(None),
         )
-        .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
-        .all()
     )
+    if period_start:
+        query = query.filter(
+            func.coalesce(MovementDocument.completed_at, MovementDocument.created_at)
+            >= datetime.combine(period_start, datetime.min.time())
+        )
+    rows = query.group_by(
+        MovementDocument.to_warehouse_id, BoxItem.nomenclature_id
+    ).all()
     return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
 
 
@@ -654,10 +662,7 @@ def _dashboard_context():
     for nomenclature_id, qty in _pending_sorting_by_nomenclature(sender_ids).items():
         stock[nomenclature_id] = stock.get(nomenclature_id, 0) + qty
         unplaced_stock[nomenclature_id] = unplaced_stock.get(nomenclature_id, 0) + qty
-    in_transit_by_item = _in_transit_by_warehouse_and_item()
-    in_transit_by_warehouse = {}
-    for (wh_id, _nom_id), qty in in_transit_by_item.items():
-        in_transit_by_warehouse[wh_id] = in_transit_by_warehouse.get(wh_id, 0) + qty
+    in_transit_by_period = {}
 
     marketplaces_data = []
     lines_by_marketplace = {}
@@ -676,6 +681,10 @@ def _dashboard_context():
         # он уменьшает остаток плана и одновременно показывается отдельно
         # как «В пути», пока склад назначения не подтвердит приемку.
         for line in lines:
+            period_start = line.period_start or plan.period_start
+            if period_start not in in_transit_by_period:
+                in_transit_by_period[period_start] = _in_transit_by_warehouse_and_item(period_start)
+            in_transit_by_item = in_transit_by_period[period_start]
             line.in_transit_qty = in_transit_by_item.get((line.warehouse_id, line.nomenclature_id), 0)
             line.fulfilled_with_transit_qty = line.fulfilled_qty + line.in_transit_qty
             line.effective_remaining_qty = max(
@@ -692,14 +701,15 @@ def _dashboard_context():
                     "planned": 0,
                     "fulfilled": 0,
                     "fulfilled_with_transit": 0,
+                    "in_transit": 0,
                 },
             )
             row["planned"] += line.planned_qty
             row["fulfilled"] += line.fulfilled_qty
             row["fulfilled_with_transit"] += line.fulfilled_with_transit_qty
+            row["in_transit"] += line.in_transit_qty
         cities = sorted(by_warehouse.values(), key=lambda r: r["warehouse"].marketplace_city)
         for row in cities:
-            row["in_transit"] = in_transit_by_warehouse.get(row["warehouse"].id, 0)
             row["remaining"] = max(row["planned"] - row["fulfilled_with_transit"], 0)
 
         # Штрихкоды с невыполненным остатком, для которых нечем отгружать —

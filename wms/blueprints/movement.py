@@ -126,7 +126,16 @@ def get_shipping_label_sender_override():
     return setting.value if setting and setting.value else None
 
 
-def _apply_shipment_fulfillment(box, warehouse_id):
+def _plan_line_start(line):
+    return line.period_start or (line.plan.period_start if line.plan else None)
+
+
+def _shipment_is_in_plan(line, shipped_at):
+    period_start = _plan_line_start(line)
+    return not period_start or not shipped_at or shipped_at.date() >= period_start
+
+
+def _apply_shipment_fulfillment(box, warehouse_id, shipped_at=None):
     """Если короб приехал на склад-город из плана отгрузок (см.
     shipment_plan) — дописывает выполнение плана по товарам в этом коробе.
     Для обычных складов (не из плана) не находит ни одной строки — no-op."""
@@ -134,11 +143,11 @@ def _apply_shipment_fulfillment(box, warehouse_id):
         plan_line = ShipmentPlanLine.query.filter_by(
             warehouse_id=warehouse_id, nomenclature_id=item.nomenclature_id
         ).first()
-        if plan_line:
+        if plan_line and _shipment_is_in_plan(plan_line, shipped_at):
             plan_line.fulfilled_qty += item.qty
 
 
-def _committed_by_warehouse_and_item():
+def _committed_by_warehouse_and_item(period_start=None):
     """{(warehouse_id, nomenclature_id): кол-во}, уже "закрытое" другими
     коробами, которые едут на этот склад, но еще не отмечены "Принято на
     складе" — черновики перемещения (короб отсканирован, но еще не уехал)
@@ -148,7 +157,7 @@ def _committed_by_warehouse_and_item():
     remaining_qty продолжал бы показывать полную потребность склада, даже
     если она уже полностью закрыта едущими туда коробами, и подсказка
     маршрутизации короба слала бы туда больше, чем реально нужно."""
-    rows = (
+    query = (
         db.session.query(
             MovementDocument.to_warehouse_id,
             BoxItem.nomenclature_id,
@@ -162,9 +171,27 @@ def _committed_by_warehouse_and_item():
                 and_(MovementDocument.status == "completed", MovementDocument.received_at.is_(None)),
             )
         )
-        .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
-        .all()
     )
+    if period_start:
+        window_start = datetime.combine(period_start, datetime.min.time())
+        query = query.filter(
+            or_(
+                and_(
+                    MovementDocument.status == "draft",
+                    MovementLine.scanned_at >= window_start,
+                ),
+                and_(
+                    MovementDocument.status == "completed",
+                    func.coalesce(
+                        MovementDocument.completed_at,
+                        MovementLine.scanned_at,
+                    ) >= window_start,
+                ),
+            )
+        )
+    rows = query.group_by(
+        MovementDocument.to_warehouse_id, BoxItem.nomenclature_id
+    ).all()
     return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
 
 
@@ -187,10 +214,14 @@ def _compute_routing(box):
     lines = ShipmentPlanLine.query.filter(
         ShipmentPlanLine.nomenclature_id.in_(qty_by_item.keys())
     ).all()
-    committed = _committed_by_warehouse_and_item()
+    committed_by_period = {}
 
     by_warehouse = {}
     for line in lines:
+        period_start = _plan_line_start(line)
+        if period_start not in committed_by_period:
+            committed_by_period[period_start] = _committed_by_warehouse_and_item(period_start)
+        committed = committed_by_period[period_start]
         already_committed = committed.get((line.warehouse_id, line.nomenclature_id), 0)
         remaining = max(line.remaining_qty() - already_committed, 0)
         box_qty = qty_by_item.get(line.nomenclature_id, 0)
@@ -591,7 +622,7 @@ def detail(doc_id):
     return render_template("movement/detail.html", doc=doc, lines=lines)
 
 
-def _revert_shipment_fulfillment(box, warehouse_id):
+def _revert_shipment_fulfillment(box, warehouse_id, shipped_at=None):
     """Обратное действие к _apply_shipment_fulfillment — используется, когда
     администратор убирает короб из уже принятого (received_at заполнен)
     перемещения, чтобы не оставить задвоенное выполнение плана отгрузок."""
@@ -599,7 +630,7 @@ def _revert_shipment_fulfillment(box, warehouse_id):
         plan_line = ShipmentPlanLine.query.filter_by(
             warehouse_id=warehouse_id, nomenclature_id=item.nomenclature_id
         ).first()
-        if plan_line:
+        if plan_line and _shipment_is_in_plan(plan_line, shipped_at):
             plan_line.fulfilled_qty = max(plan_line.fulfilled_qty - item.qty, 0)
 
 
@@ -611,7 +642,7 @@ def _revert_line_effects(doc, line):
     (см. delete_line, delete_document)."""
     box = line.box
     if doc.received_at is not None:
-        _revert_shipment_fulfillment(box, doc.to_warehouse_id)
+        _revert_shipment_fulfillment(box, doc.to_warehouse_id, doc.completed_at)
     box.warehouse_id = line.from_warehouse_id
     box.cell_id = line.from_cell_id
     box.status = "stored" if line.from_cell_id else "open"
@@ -690,7 +721,7 @@ def add_box(doc_id):
         box.cell_id = None
         box.status = "open"
         if doc.received_at is not None:
-            _apply_shipment_fulfillment(box, doc.to_warehouse_id)
+            _apply_shipment_fulfillment(box, doc.to_warehouse_id, doc.completed_at)
 
     db.session.commit()
     if box.items.count() == 0:
@@ -902,7 +933,7 @@ def receive(doc_id):
         plan_line = ShipmentPlanLine.query.filter_by(
             warehouse_id=doc.to_warehouse_id, nomenclature_id=nomenclature_id
         ).first()
-        if plan_line:
+        if plan_line and _shipment_is_in_plan(plan_line, doc.completed_at):
             plan_line.fulfilled_qty += received_qty
 
         if received_qty != expected_qty:

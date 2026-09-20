@@ -100,7 +100,7 @@ def load_distribution_workbook(app):
     return stream, titles
 
 
-def _movement_totals():
+def _movement_totals(period_start=None):
     totals = defaultdict(
         lambda: {
             "in_transit": 0.0,
@@ -111,6 +111,9 @@ def _movement_totals():
     )
     documents = MovementDocument.query.filter_by(status="completed").all()
     for document in documents:
+        shipped_at = document.completed_at or document.received_at or document.created_at
+        if period_start and shipped_at and shipped_at.date() < period_start:
+            continue
         # Собранное перемещение еще не является фактом отгрузки. В факт
         # попадает после создания заявки на маркетплейс; уже принятые
         # документы оставляем для совместимости со старыми данными, где
@@ -211,9 +214,13 @@ def _current_plan_fact_totals():
     Значения плана из Google сюда не входят. Благодаря этому WMS может
     записывать факт в Google и не читать собственную запись обратно.
     """
-    movement_totals = _movement_totals()
+    movement_totals_by_period = {}
     totals = {}
     for line in ShipmentPlanLine.query.all():
+        period_start = line.period_start or (line.plan.period_start if line.plan else None)
+        if period_start not in movement_totals_by_period:
+            movement_totals_by_period[period_start] = _movement_totals(period_start)
+        movement_totals = movement_totals_by_period[period_start]
         city = line.warehouse.marketplace_city if line.warehouse else ""
         in_transit = 0.0
         if line.nomenclature_id is not None:

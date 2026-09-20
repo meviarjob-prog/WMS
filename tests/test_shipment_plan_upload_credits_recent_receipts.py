@@ -144,7 +144,7 @@ def test_upload_ignores_receipts_before_period_start(db, client_logged_in):
     assert line.fulfilled_qty == 0
 
 
-def test_upload_ignores_receipts_after_period_deadline(db, client_logged_in):
+def test_upload_counts_shipments_after_fourteen_day_deadline(db, client_logged_in):
     sender = Warehouse(code="WH-UPC3", name="Склад-отправитель")
     db.session.add(sender)
     db.session.commit()
@@ -152,19 +152,19 @@ def test_upload_ignores_receipts_after_period_deadline(db, client_logged_in):
     db.session.add(item)
     db.session.commit()
 
-    # Период уже давно закрыт (дедлайн = дата распределения + 14 дней).
+    # У даты плана нет верхней границы: все более поздние отгрузки закрывают
+    # потребность до появления листа с новой датой.
     period_start = date.today() - timedelta(days=20)
     sheet_name = f"Распределение ОЗОН ФБС от {period_start.strftime('%d.%m')}"
 
     _upload(client_logged_in, sheet_name, "Город3", item.barcode, 30)
     city = Warehouse.query.filter_by(marketplace="ozon", marketplace_city="Город3").first()
 
-    # Принято уже после дедлайна этого периода (условно — по другому,
-    # более позднему поводу) — к этому плану отношения не имеет.
+    # Принято спустя 20 дней после даты плана — все равно относится к нему.
     late_received_at = datetime.combine(period_start, datetime.min.time()) + timedelta(days=20)
     _make_received_movement(sender, city, item, qty=77, box_number="BOX-UPC301", received_at=late_received_at)
 
     _upload(client_logged_in, sheet_name, "Город3", item.barcode, 30)
 
     line = ShipmentPlanLine.query.filter_by(warehouse_id=city.id, nomenclature_id=item.id).first()
-    assert line.fulfilled_qty == 0
+    assert line.fulfilled_qty == 77

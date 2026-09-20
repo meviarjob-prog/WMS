@@ -13,12 +13,12 @@ from datetime import date
 
 from openpyxl import load_workbook
 
-_PERIOD_START_RE = re.compile(r"от\s+(\d{1,2})\.(\d{1,2})")
+_PERIOD_START_RE = re.compile(r"(?<!\d)(\d{1,2})\.(\d{1,2})(?!\d)")
 
 
 def extract_period_start(sheet_name, today=None):
-    """Дата начала периода плана из названия листа ("...от 27.08" -> 27
-    августа). Год не указан в файле — берем текущий, а если получившаяся
+    """Дата начала периода плана из названия листа ("...от 27.08" или
+    "...-27.08" -> 27 августа). Год не указан в файле — берем текущий, а если получившаяся
     дата вышла в будущем больше чем на месяц (переход через Новый год,
     например план от 28.12 гружен уже в январе) — откатываем на год назад."""
     match = _PERIOD_START_RE.search(sheet_name or "")
@@ -354,6 +354,7 @@ def parse_plan_sheet(file_stream, marketplace):
     matched_any = False
     for sheet_name in sheet_names:
         ws = wb[sheet_name]
+        period_start = extract_period_start(sheet_name)
         cities, rows = _parse_one_sheet(ws)
         if cities is None:
             # Не обычный формат (нет общей колонки "Баркод") — пробуем формат
@@ -364,6 +365,11 @@ def parse_plan_sheet(file_stream, marketplace):
             cities, rows = _parse_combined_marketplace_sheet(ws, marketplace)
         if cities is None:
             continue
+        for row in rows:
+            # Дата относится именно к листу-источнику. Это важно, когда в
+            # одной Google Таблице одновременно есть несколько листов
+            # «Распределение» с разными датами.
+            row["period_start"] = period_start
         matched_any = True
         for city in cities:
             if city not in seen_cities:

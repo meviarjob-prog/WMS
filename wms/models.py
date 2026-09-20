@@ -1029,6 +1029,10 @@ class ShipmentPlanLine(db.Model):
     size = db.Column(db.String(50))
     planned_qty = db.Column(db.Float, nullable=False, default=0)
     fulfilled_qty = db.Column(db.Float, nullable=False, default=0)
+    # Дата берется из названия конкретного листа «Распределение». Поэтому
+    # строки одного объединенного плана могут начинаться в разные даты.
+    # Только перемещения с этой даты закрывают потребность строки.
+    period_start = db.Column(db.Date, nullable=True)
 
     warehouse = db.relationship("Warehouse")
     nomenclature = db.relationship("Nomenclature")
