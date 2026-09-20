@@ -26,6 +26,7 @@ from ..utils.timezone import to_moscow
 from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
+MOVEMENTS_PAGE_SIZE = 50
 
 
 def _can_view_movement_document(doc):
@@ -113,6 +114,16 @@ def _visible_movement_query():
         return MovementDocument.query
     return MovementDocument.query.filter(
         or_(MovementDocument.created_by_id == current_user.id, MovementDocument.status == "draft")
+    )
+
+
+def _movement_pagination():
+    """Последние перемещения постранично, по 50 документов."""
+    page = max(request.args.get("page", 1, type=int), 1)
+    return (
+        _visible_movement_query()
+        .order_by(MovementDocument.created_at.desc(), MovementDocument.id.desc())
+        .paginate(page=page, per_page=MOVEMENTS_PAGE_SIZE, error_out=False)
     )
 
 SHIPPING_LABEL_SENDER_KEY = "movement_shipping_label_sender"
@@ -240,10 +251,11 @@ def _compute_routing(box):
 
 @bp.route("/")
 def list_documents():
-    documents = _visible_movement_query().order_by(MovementDocument.created_at.desc()).all()
+    pagination = _movement_pagination()
     return render_template(
         "movement/list.html",
-        documents=documents,
+        documents=pagination.items,
+        pagination=pagination,
         route_box_number="",
         route_box=None,
         route_not_found=False,
@@ -332,7 +344,7 @@ def route_box():
     ни у кого, и короб можно пропустить). Только просмотр — сам короб
     добавляется в конкретное перемещение отдельным действием ниже."""
     box_number = request.args.get("box_number", "").strip()
-    documents = _visible_movement_query().order_by(MovementDocument.created_at.desc()).all()
+    pagination = _movement_pagination()
 
     box = None
     routing = []
@@ -346,7 +358,8 @@ def route_box():
 
     return render_template(
         "movement/list.html",
-        documents=documents,
+        documents=pagination.items,
+        pagination=pagination,
         route_box_number=box_number,
         route_box=box,
         route_not_found=not_found,
@@ -361,7 +374,7 @@ def find_box():
     новое перемещение не дает блокировка "уже в другом перемещении" (см.
     _find_conflicting_movement_line) — здесь видно, в каком именно."""
     box_number = request.args.get("box_number", "").strip()
-    documents = _visible_movement_query().order_by(MovementDocument.created_at.desc()).all()
+    pagination = _movement_pagination()
 
     box = None
     not_found = False
@@ -386,7 +399,8 @@ def find_box():
 
     return render_template(
         "movement/list.html",
-        documents=documents,
+        documents=pagination.items,
+        pagination=pagination,
         route_box_number="",
         route_box=None,
         route_not_found=False,
