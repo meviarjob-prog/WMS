@@ -8,6 +8,23 @@ from ..utils.shipment_plan_import import canonical_marketplace_city
 
 bp = Blueprint("warehouses", __name__)
 
+# Связи склада, которые означают, что по нему уже началась реальная работа.
+# Строки плана сюда намеренно не входят: ошибочная загрузка как раз должна
+# удаляться вместе с созданным ею складом-направлением.
+WAREHOUSE_USAGE_LABELS = {
+    "zones": "ряды",
+    "cells": "ячейки",
+    "unplaced_stock": "остатки",
+    "unplaced_stock_lots": "партии товара",
+    "boxes": "короба",
+    "receiving_documents": "приёмки",
+    "placement_documents": "размещения",
+    "movement_documents": "перемещения",
+    "movement_lines": "строки перемещений",
+    "inventory_documents": "инвентаризации",
+    "supplier_returns": "возвраты поставщику",
+}
+
 # Ширина числовой части кода ячейки: код ряда "A" -> ячейки "A0001", "A0002", ...
 # Ряд остается моделью Zone в БД (менять таблицу/класс ради переименования
 # в интерфейсе избыточно) — но по смыслу и в тексте для пользователя это
@@ -47,6 +64,34 @@ def _replace_foreign_keys(target_table_name, old_id, new_id):
                 db.session.execute(
                     table.update().where(column == old_id).values({column.name: new_id})
                 )
+
+
+def _warehouse_blocking_usage(warehouse_id):
+    """Возвращает реальные данные, из-за которых склад нельзя удалить.
+
+    Проверка строится по внешним ключам метаданных, поэтому новая модель со
+    ссылкой на склад автоматически станет защитой от случайного удаления.
+    ShipmentPlanLine исключён: строки ошибочного импорта удаляются штатно.
+    """
+    usage = {}
+    for table in db.metadata.sorted_tables:
+        if table.name == ShipmentPlanLine.__tablename__:
+            continue
+        for column in table.columns:
+            references_warehouse = any(
+                fk.column.table.name == Warehouse.__tablename__
+                and fk.column.name == "id"
+                for fk in column.foreign_keys
+            )
+            if not references_warehouse:
+                continue
+            count = db.session.execute(
+                db.select(db.func.count()).select_from(table).where(column == warehouse_id)
+            ).scalar_one()
+            if count:
+                label = WAREHOUSE_USAGE_LABELS.get(table.name, table.name)
+                usage[label] = usage.get(label, 0) + count
+    return usage
 
 
 def _merge_marketplace_warehouse(primary, duplicate):
@@ -211,6 +256,47 @@ def toggle_warehouse(warehouse_id):
     wh = Warehouse.query.get_or_404(warehouse_id)
     wh.is_active = not wh.is_active
     db.session.commit()
+    return redirect(url_for("warehouses.list_warehouses"))
+
+
+@bp.route("/<int:warehouse_id>/delete", methods=["POST"])
+def delete_warehouse(warehouse_id):
+    """Удаляет лишнее направление, созданное ошибочным импортом плана.
+
+    Обычные физические склады и склады с любыми операционными данными не
+    удаляются. Это сохраняет историю учёта; для них остаётся безопасное
+    действие «Отключить».
+    """
+    if not current_user.is_admin:
+        flash("Удалять склады может только администратор", "danger")
+        return redirect(url_for("warehouses.list_warehouses"))
+
+    wh = Warehouse.query.get_or_404(warehouse_id)
+    if not wh.marketplace:
+        flash(
+            "Обычный склад нельзя удалить. Если он больше не используется, отключите его.",
+            "danger",
+        )
+        return redirect(url_for("warehouses.list_warehouses"))
+
+    usage = _warehouse_blocking_usage(wh.id)
+    if usage:
+        details = ", ".join(f"{label}: {count}" for label, count in usage.items())
+        flash(
+            f"Склад «{wh.marketplace_label()} · {wh.name}» нельзя удалить: "
+            f"он уже используется ({details}). Отключите его вместо удаления.",
+            "danger",
+        )
+        return redirect(url_for("warehouses.list_warehouses"))
+
+    plan_line_count = ShipmentPlanLine.query.filter_by(warehouse_id=wh.id).delete(
+        synchronize_session=False
+    )
+    display_name = f"{wh.marketplace_label()} · {wh.name}"
+    db.session.delete(wh)
+    db.session.commit()
+    suffix = f" Строк плана удалено: {plan_line_count}." if plan_line_count else ""
+    flash(f"Лишний склад «{display_name}» удалён.{suffix}", "success")
     return redirect(url_for("warehouses.list_warehouses"))
 
 

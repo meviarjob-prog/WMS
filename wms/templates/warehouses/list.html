@@ -60,6 +60,12 @@
               <form method="post" action="{{ url_for('warehouses.toggle_warehouse', warehouse_id=wh.id) }}" class="d-inline">
                 <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if wh.is_active else 'Включить' }}</button>
               </form>
+              {% if current_user.is_admin and wh.marketplace %}
+              <form method="post" action="{{ url_for('warehouses.delete_warehouse', warehouse_id=wh.id) }}" class="d-inline"
+                    onsubmit="return confirm('Удалить склад «{{ wh.marketplace_label() }} · {{ wh.name }}» и его строки плана? Действие нельзя отменить.')">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Удалить</button>
+              </form>
+              {% endif %}
             </td>
           </tr>
         {% else %}
@@ -86,9 +92,17 @@
                   {% endif %}
                 {% endif %}
               </div>
-              <form method="post" action="{{ url_for('warehouses.toggle_warehouse', warehouse_id=wh.id) }}">
-                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if wh.is_active else 'Включить' }}</button>
-              </form>
+              <div class="d-flex flex-wrap justify-content-end gap-1">
+                <form method="post" action="{{ url_for('warehouses.toggle_warehouse', warehouse_id=wh.id) }}">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if wh.is_active else 'Включить' }}</button>
+                </form>
+                {% if current_user.is_admin and wh.marketplace %}
+                <form method="post" action="{{ url_for('warehouses.delete_warehouse', warehouse_id=wh.id) }}"
+                      onsubmit="return confirm('Удалить склад «{{ wh.marketplace_label() }} · {{ wh.name }}» и его строки плана? Действие нельзя отменить.')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger">Удалить</button>
+                </form>
+                {% endif %}
+              </div>
             </div>
           </div>
         {% else %}
