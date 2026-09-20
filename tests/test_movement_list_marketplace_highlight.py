@@ -31,6 +31,8 @@ def test_wb_destination_gets_wb_highlight_class(db, client_logged_in):
     row_start = html.index(doc.number)
     row_html = html[max(0, row_start - 400):row_start]
     assert "mp-row-wb" in row_html
+    row_end = html.index("</tr>", row_start)
+    assert ">ВБ</span>" in html[row_start:row_end]
 
 
 def test_ozon_destination_gets_ozon_highlight_class(db, client_logged_in):
@@ -39,6 +41,8 @@ def test_ozon_destination_gets_ozon_highlight_class(db, client_logged_in):
     row_start = html.index(doc.number)
     row_html = html[max(0, row_start - 400):row_start]
     assert "mp-row-ozon" in row_html
+    row_end = html.index("</tr>", row_start)
+    assert ">ОЗОН</span>" in html[row_start:row_end]
 
 
 def test_non_marketplace_destination_gets_no_highlight_class(db, client_logged_in):

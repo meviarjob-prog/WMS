@@ -54,7 +54,7 @@
           {% for entry in routing %}
             <tr{% if loop.first %} class="table-success"{% endif %}>
               <td>
-                {% if entry.warehouse.marketplace %}<span class="badge bg-secondary">{{ entry.warehouse.marketplace|upper }}</span>{% endif %}
+                {% if entry.warehouse.marketplace %}<span class="badge bg-secondary">{{ entry.warehouse.marketplace_label() }}</span>{% endif %}
                 {{ entry.warehouse.name }}{% if loop.first %} <span class="badge bg-success">рекомендуем</span>{% endif %}
               </td>
               <td>
@@ -97,7 +97,7 @@
           <tr>
             <td><a href="{{ url_for('movement.detail', doc_id=line.document.id) }}">{{ line.document.number }}</a></td>
             <td>{{ line.document.from_warehouse.name }}</td>
-            <td>{{ line.document.to_warehouse.name }}</td>
+            <td>{% if line.document.to_warehouse.marketplace %}<span class="badge bg-secondary">{{ line.document.to_warehouse.marketplace_label() }}</span> {% endif %}{{ line.document.to_warehouse.name }}</td>
             <td><span class="badge badge-status-{{ line.document.status }}">{{ 'На сборке' if line.document.status == 'draft' else 'Собрано' }}</span></td>
             <td>
               {% if line.document.status != 'completed' %}—
@@ -190,7 +190,7 @@
           </td>
           <td>{{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
           <td>{{ d.from_warehouse.name }}</td>
-          <td>{{ d.to_warehouse.name }}</td>
+          <td>{% if d.to_warehouse.marketplace %}<span class="badge bg-secondary">{{ d.to_warehouse.marketplace_label() }}</span> {% endif %}{{ d.to_warehouse.name }}</td>
           <td>{{ d.lines.count() }}</td>
           {% set tq = d.total_item_qty() %}
           <td>{{ tq | int if tq == tq | int else tq | round(3) }}</td>
@@ -288,7 +288,7 @@
             <span class="badge status-chip-onassembly">На сборке</span>
           {% endif %}
         </div>
-        <div class="small text-muted">{{ d.from_warehouse.name }} → {{ d.to_warehouse.name }}</div>
+        <div class="small text-muted">{{ d.from_warehouse.name }} → {% if d.to_warehouse.marketplace %}<span class="badge bg-secondary">{{ d.to_warehouse.marketplace_label() }}</span> {% endif %}{{ d.to_warehouse.name }}</div>
         <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }} · {{ d.lines.count() }} короб.{% if d.created_by %} · Автор: {{ d.created_by.display_name() }}{% endif %}</div>
         {% if d.status == 'completed' and not d.received_at %}
           <div class="mt-1">

@@ -224,6 +224,9 @@ class Warehouse(db.Model):
 
     cells = db.relationship("Cell", backref="warehouse", lazy="dynamic")
 
+    def marketplace_label(self):
+        return {"ozon": "ОЗОН", "wb": "ВБ"}.get(self.marketplace, "")
+
     def __repr__(self):
         return f"<Warehouse {self.code}>"
 
