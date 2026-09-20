@@ -3,7 +3,7 @@
 import io
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, time
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
@@ -104,6 +104,7 @@ def load_distribution_workbook(app):
 def movement_wms_totals(period_start=None):
     totals = defaultdict(
         lambda: {
+            "shipped": 0.0,
             "in_transit": 0.0,
             "received": 0.0,
             "received_seen": False,
@@ -114,16 +115,12 @@ def movement_wms_totals(period_start=None):
     documents = MovementDocument.query.filter_by(status="completed").all()
     for document in documents:
         shipped_at = document.completed_at or document.received_at or document.created_at
-        if period_start and shipped_at and shipped_at.date() < period_start:
-            continue
-        # Собранное перемещение еще не является фактом отгрузки. В факт
-        # попадает после создания заявки на маркетплейс; уже принятые
-        # документы оставляем для совместимости со старыми данными, где
-        # отдельной отметки заявки могло еще не быть.
-        if (
-            document.received_at is None
-            and document.marketplace_request_created_at is None
-            and not (document.marketplace_request_number or "").strip()
+        # Дата листа задает начало нового плана. Считаем все завершенные
+        # перемещения начиная с 00:01 этой даты — независимо от заявки на
+        # МП и последующей приемки на складе назначения.
+        if period_start and (
+            not shipped_at
+            or shipped_at < datetime.combine(period_start, time(0, 1))
         ):
             continue
         warehouse = document.to_warehouse
@@ -151,6 +148,7 @@ def movement_wms_totals(period_start=None):
             key = (warehouse.id, nomenclature.id)
             totals[key]["warehouse"] = warehouse
             totals[key]["nomenclature"] = nomenclature
+            totals[key]["shipped"] += expected_qty
             if document.received_at is None:
                 totals[key]["in_transit"] += expected_qty
             else:
@@ -206,14 +204,14 @@ def build_wms_movement_rows():
                 name,
                 in_transit,
                 received,
-                in_transit + received,
+                quantities["shipped"],
             ]
         )
     return rows
 
 
 def _current_plan_fact_totals():
-    """Факт для исходных листов: принято по текущему плану + еще в пути.
+    """Факт для исходных листов: все отправленное по текущему плану.
 
     Значения плана из Google сюда не входят. Благодаря этому WMS может
     записывать факт в Google и не читать собственную запись обратно.
@@ -226,18 +224,13 @@ def _current_plan_fact_totals():
             movement_totals_by_period[period_start] = movement_wms_totals(period_start)
         movement_totals = movement_totals_by_period[period_start]
         city = line.warehouse.marketplace_city if line.warehouse else ""
-        received = line.fulfilled_qty
-        in_transit = 0.0
+        shipped = 0.0
         if line.nomenclature_id is not None:
             quantities = movement_totals.get(
                 (line.warehouse_id, line.nomenclature_id), {}
             )
-            if quantities.get("received_seen"):
-                received = quantities.get("received", 0.0)
-            in_transit = quantities.get("in_transit", 0.0)
-        totals[(line.plan.marketplace, city.casefold(), line.barcode)] = (
-            received + in_transit
-        )
+            shipped = quantities.get("shipped", 0.0)
+        totals[(line.plan.marketplace, city.casefold(), line.barcode)] = shipped
     return totals
 
 

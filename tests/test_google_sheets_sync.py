@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 import io
 import json
 
@@ -11,6 +11,7 @@ from wms.models import (
     BoxItem,
     MovementDocument,
     MovementLine,
+    MovementReceiptDiscrepancy,
     Nomenclature,
     ShipmentPlan,
     ShipmentPlanLine,
@@ -23,6 +24,7 @@ from wms.utils.google_sheets import (
     _fact_ranges_for_sheet,
     build_wms_movement_rows,
     distribution_sheet_titles,
+    movement_wms_totals,
 )
 
 
@@ -109,12 +111,8 @@ def test_wms_rows_separate_in_transit_and_received(db):
     assert _current_plan_fact_totals()[("ozon", "москва", item.barcode)] == 10
 
 
-def test_wms_rows_count_request_number_without_request_checkbox(db):
-    """Старые документы могли получить номер заявки без даты галочки.
-
-    Номер заявки сам по себе подтверждает, что заявка на МП существует,
-    поэтому весь завершенный документ должен оставаться «в пути».
-    """
+def test_wms_rows_count_completed_movement_without_request_checkbox(db):
+    """Для факта отгрузки достаточно завершенного перемещения."""
     sender = Warehouse(code="SYNC-NUM-FROM", name="Основной")
     target = Warehouse(
         code="SYNC-NUM-TO",
@@ -129,7 +127,6 @@ def test_wms_rows_count_request_number_without_request_checkbox(db):
         from_warehouse=sender,
         to_warehouse=target,
         status="completed",
-        marketplace_request_number="41376379",
     )
     db.session.add_all([sender, target, item, box, document])
     db.session.flush()
@@ -145,6 +142,67 @@ def test_wms_rows_count_request_number_without_request_checkbox(db):
 
     assert len(rows) == 1
     assert rows[0][6:] == [7669.0, 0.0, 7669.0]
+
+
+def test_period_totals_sum_all_cities_from_0001_and_keep_sent_qty_on_shortage(db):
+    sender = Warehouse(code="SYNC-DATE-FROM", name="Основной")
+    kazan = Warehouse(
+        code="SYNC-DATE-KZN", name="ВБ: Казань", marketplace="wb", marketplace_city="Казань"
+    )
+    samara = Warehouse(
+        code="SYNC-DATE-SMR", name="ВБ: Самара", marketplace="wb", marketplace_city="Самара"
+    )
+    item = Nomenclature(sku="ART-DATE", barcode="4600000000088", name="Товар", unit="шт")
+    db.session.add_all([sender, kazan, samara, item])
+    db.session.flush()
+
+    period_start = date(2026, 9, 12)
+
+    def add_movement(number, warehouse, qty, completed_at, received_qty=None):
+        box = Box(box_number=f"BOX-{number}", warehouse=sender, status="shipped")
+        document = MovementDocument(
+            number=number,
+            from_warehouse=sender,
+            to_warehouse=warehouse,
+            status="completed",
+            completed_at=completed_at,
+            received_at=(completed_at + timedelta(days=1)) if received_qty is not None else None,
+        )
+        db.session.add_all([box, document])
+        db.session.flush()
+        db.session.add_all(
+            [
+                BoxItem(box_id=box.id, nomenclature_id=item.id, qty=qty),
+                MovementLine(document_id=document.id, box_id=box.id, from_warehouse_id=sender.id),
+            ]
+        )
+        if received_qty is not None:
+            db.session.add(
+                MovementReceiptDiscrepancy(
+                    document_id=document.id,
+                    nomenclature_id=item.id,
+                    expected_qty=qty,
+                    received_qty=received_qty,
+                )
+            )
+
+    add_movement("MOVE-BEFORE", kazan, 100, datetime.combine(period_start, time(0, 0)))
+    add_movement("MOVE-KZN-1", kazan, 20, datetime.combine(period_start, time(0, 1)))
+    add_movement(
+        "MOVE-KZN-2",
+        kazan,
+        30,
+        datetime.combine(period_start, time(10, 0)),
+        received_qty=25,
+    )
+    add_movement("MOVE-SMR", samara, 7, datetime.combine(period_start, time(12, 0)))
+    db.session.commit()
+
+    totals = movement_wms_totals(period_start)
+
+    assert totals[(kazan.id, item.id)]["shipped"] == 50
+    assert totals[(kazan.id, item.id)]["received"] == 25
+    assert totals[(samara.id, item.id)]["shipped"] == 7
 
 
 def test_fact_ranges_target_only_shipment_fact_column():

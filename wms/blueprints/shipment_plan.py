@@ -668,9 +668,9 @@ def _dashboard_context():
         lines = plan.lines.all()
         lines_by_marketplace[marketplace] = lines
 
-        # Факт каждый раз восстанавливается непосредственно из перемещений
-        # WMS. После создания заявки товар считается «в пути», после
-        # подтверждения склада назначения — принятым.
+        # «В пути» — весь товар из завершенных перемещений с 00:01 даты
+        # конкретного листа. Галочка/номер заявки и приемка на МП на этот
+        # показатель не влияют: это факт отправки из WMS.
         for line in lines:
             period_start = line.period_start or plan.period_start
             if period_start not in movement_totals_by_period:
@@ -678,18 +678,9 @@ def _dashboard_context():
             quantities = movement_totals_by_period[period_start].get(
                 (line.warehouse_id, line.nomenclature_id), {}
             )
-            # Пересчитываем факт непосредственно из перемещений. Сохраненное
-            # значение оставляем как резерв для старых данных, у которых
-            # документ перемещения мог еще не содержать новых отметок.
-            line.current_fulfilled_qty = (
-                quantities.get("received", 0.0)
-                if quantities.get("received_seen")
-                else line.fulfilled_qty
-            )
-            line.in_transit_qty = quantities.get("in_transit", 0.0)
-            line.fulfilled_with_transit_qty = (
-                line.current_fulfilled_qty + line.in_transit_qty
-            )
+            line.current_fulfilled_qty = 0.0
+            line.in_transit_qty = quantities.get("shipped", 0.0)
+            line.fulfilled_with_transit_qty = line.in_transit_qty
             line.effective_remaining_qty = max(
                 line.planned_qty - line.fulfilled_with_transit_qty,
                 0,
@@ -702,13 +693,11 @@ def _dashboard_context():
                 {
                     "warehouse": line.warehouse,
                     "planned": 0,
-                    "fulfilled": 0,
                     "fulfilled_with_transit": 0,
                     "in_transit": 0,
                 },
             )
             row["planned"] += line.planned_qty
-            row["fulfilled"] += line.current_fulfilled_qty
             row["fulfilled_with_transit"] += line.fulfilled_with_transit_qty
             row["in_transit"] += line.in_transit_qty
         cities = sorted(by_warehouse.values(), key=lambda r: r["warehouse"].marketplace_city)
@@ -727,9 +716,8 @@ def _dashboard_context():
         }
 
         total_planned = sum(line.planned_qty for line in lines)
-        total_fulfilled = sum(line.current_fulfilled_qty for line in lines)
         total_in_transit = sum(row["in_transit"] for row in cities)
-        total_fulfilled_with_transit = total_fulfilled + total_in_transit
+        total_fulfilled_with_transit = total_in_transit
         pace = _pace_analysis(plan, total_planned, total_fulfilled_with_transit)
 
         marketplaces_data.append(
@@ -740,11 +728,9 @@ def _dashboard_context():
                 "cities": cities,
                 "problems_count": len(problem_barcodes),
                 "total_planned": total_planned,
-                "total_fulfilled": total_fulfilled,
+                "total_fulfilled": 0,
                 "total_in_transit": total_in_transit,
-                # Факт формирует сама WMS: принятое хранится в строках
-                # плана, отправленное, но еще не принятое, добавляется один
-                # раз из текущих перемещений.
+                # Для плана факт — все завершенные перемещения за период.
                 "total_fulfilled_with_transit": total_fulfilled_with_transit,
                 "pace": pace,
             }

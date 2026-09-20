@@ -1,9 +1,7 @@
-"""Дашборд плана отгрузок должен показывать, сколько по каждой позиции уже
-"в пути" (отправлено перемещением, но еще не подтверждено кнопкой "Принято
-на складе") — отдельным числом рядом с потребностью. Сама потребность
-(remaining_qty) при этом не меняется: пока товар физически не проверен на
-складе назначения, план по нему остается открытым, ровно как и
-fulfilled_qty, который тоже засчитывается только по факту приемки."""
+"""«В пути» в плане — все завершенные перемещения с даты листа.
+
+Заявка на МП и последующая приемка не меняют факт отправки из WMS.
+"""
 
 import io
 
@@ -101,7 +99,7 @@ def test_picking_list_shows_plan_and_in_transit_separately(db, client_logged_in)
     assert "(10)" in snippet
 
 
-def test_completed_movement_without_marketplace_request_is_not_fact(db, client_logged_in):
+def test_completed_movement_without_marketplace_request_is_in_transit(db, client_logged_in):
     sender, city, item = _setup(planned_qty=30)
     _ship_box(
         sender,
@@ -118,7 +116,7 @@ def test_completed_movement_without_marketplace_request_is_not_fact(db, client_l
     idx = html.find("ART-1")
     snippet = html[idx : idx + 3000]
     assert ">30<" in snippet
-    assert "(10)" not in snippet
+    assert "(10)" in snippet
 
 
 def test_top_summary_shows_in_transit_per_marketplace_and_total(db, client_logged_in):
@@ -181,7 +179,7 @@ def test_top_summary_shows_total_production_since_period_start(db, client_logged
     assert ">1<" in html[idx : idx + 200]
 
 
-def test_marketplace_header_combines_received_and_in_transit(db, client_logged_in):
+def test_marketplace_header_uses_only_completed_movement_fact(db, client_logged_in):
     from datetime import date, timedelta
 
     sender, city, item = _setup(planned_qty=30)
@@ -194,20 +192,20 @@ def test_marketplace_header_combines_received_and_in_transit(db, client_logged_i
 
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
-    # Из Google приходит только план: факт WMS равен 5 принято + 10 в пути.
-    idx = html.find("выполнено")
+    # Сохраненный старый счетчик 5 не участвует: факт WMS — 10 отправлено.
+    idx = html.find("в пути")
     snippet = html[idx : idx + 200]
-    assert "<b>15</b>" in snippet
+    assert "<b>10</b>" in snippet
     assert "Пока нет отгрузок" not in html
+    assert "Выполнено" not in html
 
     city_idx = html.find("<td>Город</td>")
     city_snippet = html[city_idx : city_idx + 500]
-    assert "Принято на складе получателя и находится в пути" in html
-    assert ">15<" in city_snippet
-    assert "50%" in city_snippet
+    assert "Все завершенные перемещения с 00:01 даты листа" in html
+    assert ">10<" in city_snippet
 
 
-def test_dashboard_restores_received_fact_from_movements_when_plan_counter_is_stale(
+def test_dashboard_keeps_sent_qty_after_marketplace_receives_less(
     db, client_logged_in
 ):
     sender, city, item = _setup(planned_qty=30)
@@ -229,8 +227,9 @@ def test_dashboard_restores_received_fact_from_movements_when_plan_counter_is_st
 
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
-    idx = html.find("выполнено")
-    assert "<b>4</b>" in html[idx : idx + 200]
+    idx = html.find("в пути")
+    # Отправлено 6; недовоз 2 ведется отдельно и не уменьшает отгрузку WMS.
+    assert "<b>6</b>" in html[idx : idx + 200]
 
 
 def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, client_logged_in):
@@ -252,9 +251,9 @@ def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, cli
     assert sheet["H2"].value == "Город"
     assert sheet["A3"].value == "Итого (1 поз.)"
     assert sheet["G3"].value == 10
-    assert sheet["H3"].value == 25
+    assert sheet["H3"].value == 30
     assert sheet["A4"].value == "ART-1"
-    assert sheet["H4"].value == "25 (10)"
+    assert sheet["H4"].value == "30 (10)"
 
 
 def test_picking_list_has_totals_row_summing_columns(db, client_logged_in):
