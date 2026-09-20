@@ -84,6 +84,51 @@ def test_dashboard_top_summary_shows_in_transit(db, client_logged_in):
     assert "10" in html[idx : idx + 400]
 
 
+def test_city_in_transit_includes_shipped_sku_missing_from_current_plan(
+    db, client_logged_in
+):
+    """Городская сумма — все отгрузки, а не только совпавшие строки плана."""
+    from datetime import date, timedelta
+
+    sender, city, planned_item = _setup(planned_qty=30)
+    plan = ShipmentPlan.query.filter_by(marketplace="ozon").first()
+    plan.period_start = date.today() - timedelta(days=1)
+    unplanned_item = Nomenclature(
+        sku="SKU-NOT-IN-PLAN",
+        barcode="7770000999",
+        name="Товар вне актуального плана",
+        unit="шт",
+    )
+    db.session.add(unplanned_item)
+    db.session.commit()
+
+    _ship_box(
+        sender,
+        city,
+        planned_item,
+        qty=10,
+        box_number="BOX-PLANNED-CITY-TOTAL",
+        client=client_logged_in,
+    )
+    _ship_box(
+        sender,
+        city,
+        unplanned_item,
+        qty=824,
+        box_number="BOX-UNPLANNED-CITY-TOTAL",
+        client=client_logged_in,
+        mark_request=False,
+    )
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    city_idx = html.find("<td>Город</td>")
+    city_snippet = html[city_idx : city_idx + 300]
+    assert ">834<" in city_snippet
+    top_idx = html.find("в пути")
+    assert "<b>834</b>" in html[top_idx : top_idx + 100]
+
+
 def test_picking_list_shows_plan_and_in_transit_separately(db, client_logged_in):
     """В таблице остается остаток плана, товар в пути показан в скобках.
     Защита от лишней отправки применяется отдельно в маршрутизации."""

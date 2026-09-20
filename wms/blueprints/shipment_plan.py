@@ -700,6 +700,26 @@ def _dashboard_context():
             row["planned"] += line.planned_qty
             row["fulfilled_with_transit"] += line.fulfilled_with_transit_qty
             row["in_transit"] += line.in_transit_qty
+
+        # Карточка города показывает ВСЕ завершенные перемещения на этот
+        # склад с даты плана, в том числе товары, которых уже нет (или еще
+        # нет) среди строк актуального плана. Иначе городская сумма меньше
+        # сводного экспорта перемещений: такие SKU просто не находят
+        # ShipmentPlanLine и выпадают. Позиционная таблица и маршрутизация
+        # выше по-прежнему считают только совпавшие SKU.
+        city_totals = movement_totals_by_period.setdefault(
+            plan.period_start,
+            movement_wms_totals(plan.period_start),
+        )
+        shipped_by_warehouse = {}
+        for (warehouse_id, _nomenclature_id), quantities in city_totals.items():
+            shipped_by_warehouse[warehouse_id] = (
+                shipped_by_warehouse.get(warehouse_id, 0.0)
+                + quantities.get("shipped", 0.0)
+            )
+        for warehouse_id, row in by_warehouse.items():
+            row["in_transit"] = shipped_by_warehouse.get(warehouse_id, 0.0)
+            row["fulfilled_with_transit"] = row["in_transit"]
         cities = sorted(by_warehouse.values(), key=lambda r: r["warehouse"].marketplace_city)
         for row in cities:
             row["remaining"] = max(row["planned"] - row["fulfilled_with_transit"], 0)
