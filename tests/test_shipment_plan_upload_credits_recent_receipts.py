@@ -168,3 +168,22 @@ def test_upload_counts_shipments_after_fourteen_day_deadline(db, client_logged_i
 
     line = ShipmentPlanLine.query.filter_by(warehouse_id=city.id, nomenclature_id=item.id).first()
     assert line.fulfilled_qty == 77
+
+
+def test_repeated_upload_reuses_canonical_city_warehouse(db, client_logged_in):
+    item = Nomenclature(sku="SKU-CITY-NORM", barcode="7770100098", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    sheet_name = f"Распределение ОЗОН ФБС от {date.today().strftime('%d.%m')}"
+
+    assert _upload(client_logged_in, sheet_name, "ОЗОН: МОСКВА", item.barcode, 30).status_code == 302
+    first = Warehouse.query.filter_by(marketplace="ozon").one()
+    assert first.name == "Москва"
+    assert first.marketplace_city == "Москва"
+
+    assert _upload(client_logged_in, sheet_name, "  Москва  ", item.barcode, 40).status_code == 302
+    warehouses = Warehouse.query.filter_by(marketplace="ozon").all()
+    assert len(warehouses) == 1
+    assert warehouses[0].id == first.id
+    line = ShipmentPlanLine.query.filter_by(warehouse_id=first.id, barcode=item.barcode).one()
+    assert line.planned_qty == 40

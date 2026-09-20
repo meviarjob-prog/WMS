@@ -8,7 +8,7 @@
 склад 1С (Черкесск и Пятигорск — оба к одному фулфилменту)."""
 
 from wms.blueprints.shipment_plan import _get_or_create_city_warehouse
-from wms.blueprints.warehouses import default_fulfillment_1c_name
+from wms.blueprints.warehouses import canonical_marketplace_city, default_fulfillment_1c_name
 from wms.extensions import db
 from wms.models import AppSetting, Box, BoxItem, MovementDocument, MovementLine, Nomenclature, User, Warehouse
 
@@ -22,6 +22,15 @@ def test_default_fulfillment_1c_name_known_city():
 
 def test_default_fulfillment_1c_name_unknown_city_is_none():
     assert default_fulfillment_1c_name("Владивосток") is None
+
+
+def test_marketplace_city_aliases_are_canonical_and_moscow_numbers_stay_separate():
+    assert canonical_marketplace_city("  ЕКБ ") == "Екатеринбург"
+    assert canonical_marketplace_city("ВБ: Спб") == "Санкт-Петербург"
+    assert canonical_marketplace_city("ОЗОН — ПИТЕР") == "Санкт-Петербург"
+    assert canonical_marketplace_city(" МОСКВА ") == "Москва"
+    assert canonical_marketplace_city("ОЗОН: МОСКВА 1") == "Москва 1"
+    assert canonical_marketplace_city("ОЗОН: МОСКВА 2") == "Москва 2"
 
 
 def test_cherkessk_and_pyatigorsk_share_same_1c_warehouse():
@@ -40,6 +49,57 @@ def test_new_city_warehouse_gets_default_1c_name_on_creation(db):
 def test_new_city_warehouse_unknown_city_has_no_default(db):
     wh = _get_or_create_city_warehouse("wb", "Владивосток")
     assert wh.fulfillment_1c_name is None
+
+
+def test_repeated_city_import_reuses_direction_and_merges_existing_alias(db):
+    sender = Warehouse(code="WH-DUP-S", name="Основной")
+    first = Warehouse(
+        code="WH-DUP-1",
+        name="ВБ: МОСКВА",
+        marketplace="wb",
+        marketplace_city="МОСКВА",
+    )
+    duplicate = Warehouse(
+        code="WH-DUP-2",
+        name="ВБ: Москва",
+        marketplace="wb",
+        marketplace_city="  Москва ",
+    )
+    db.session.add_all([sender, first, duplicate])
+    db.session.commit()
+    box = Box(box_number="BOX-DUP-CITY", warehouse_id=duplicate.id, status="open")
+    movement = MovementDocument(
+        number="MOV-DUP-CITY",
+        from_warehouse_id=sender.id,
+        to_warehouse_id=duplicate.id,
+    )
+    db.session.add_all([box, movement])
+    db.session.commit()
+
+    resolved = _get_or_create_city_warehouse("wb", "вб: МОСКВА")
+    db.session.commit()
+
+    warehouses = Warehouse.query.filter_by(marketplace="wb").all()
+    assert len(warehouses) == 1
+    assert resolved.id == warehouses[0].id
+    assert resolved.name == "Москва"
+    assert resolved.marketplace_city == "Москва"
+    assert Box.query.get(box.id).warehouse_id == resolved.id
+    assert MovementDocument.query.get(movement.id).to_warehouse_id == resolved.id
+
+    again = _get_or_create_city_warehouse("wb", " Москва  ")
+    db.session.commit()
+    assert again.id == resolved.id
+    assert Warehouse.query.filter_by(marketplace="wb").count() == 1
+
+
+def test_moscow_one_and_two_create_different_directions(db):
+    first = _get_or_create_city_warehouse("ozon", "МОСКВА 1")
+    second = _get_or_create_city_warehouse("ozon", "ОЗОН: Москва 2")
+    db.session.commit()
+
+    assert first.id != second.id
+    assert {first.marketplace_city, second.marketplace_city} == {"Москва 1", "Москва 2"}
 
 
 def test_update_fulfillment_1c_name_is_per_warehouse_not_per_city(db, client_logged_in):

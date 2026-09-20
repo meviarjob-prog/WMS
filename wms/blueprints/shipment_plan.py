@@ -47,7 +47,11 @@ from ..utils.google_sheets import (
     write_distribution_facts,
     write_wms_movement_sheet,
 )
-from .warehouses import default_fulfillment_1c_name
+from .warehouses import (
+    canonical_marketplace_city,
+    consolidate_marketplace_warehouses,
+    default_fulfillment_1c_name,
+)
 
 bp = Blueprint("shipment_plan", __name__)
 
@@ -66,12 +70,24 @@ GOOGLE_SHEETS_PUBLIC_ENDPOINTS = {"shipment_plan.google_trigger"}
 
 
 def _get_or_create_city_warehouse(marketplace, city_name):
-    wh = Warehouse.query.filter_by(marketplace=marketplace, marketplace_city=city_name).first()
+    city_name = canonical_marketplace_city(city_name)
+    consolidate_marketplace_warehouses(marketplace)
+    wh = next(
+        (
+            warehouse
+            for warehouse in Warehouse.query.filter_by(marketplace=marketplace).all()
+            if canonical_marketplace_city(warehouse.marketplace_city or warehouse.name)
+            == city_name
+        ),
+        None,
+    )
     if wh:
+        wh.marketplace_city = city_name
+        wh.name = city_name
         return wh
     wh = Warehouse(
         code=next_number("warehouse"),
-        name=f"{MARKETPLACE_LABELS[marketplace]}: {city_name}",
+        name=city_name,
         marketplace=marketplace,
         marketplace_city=city_name,
         # Стартовая догадка склада 1С по городу (см.
@@ -134,6 +150,11 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
 
     plan.lines.delete()
 
+    # Все варианты написания направления сводим до создания складов и строк
+    # плана. «Москва 1» и «Москва 2» остаются раздельными ключами.
+    for row in parsed.rows:
+        row["city"] = canonical_marketplace_city(row["city"])
+    parsed.cities = list(dict.fromkeys(canonical_marketplace_city(city) for city in parsed.cities))
     city_warehouses = {
         city: _get_or_create_city_warehouse(marketplace, city) for city in parsed.cities
     }

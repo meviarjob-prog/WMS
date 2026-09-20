@@ -53,7 +53,10 @@
           <tbody>
           {% for entry in routing %}
             <tr{% if loop.first %} class="table-success"{% endif %}>
-              <td>{{ entry.warehouse.name }}{% if loop.first %} <span class="badge bg-success">рекомендуем</span>{% endif %}</td>
+              <td>
+                {% if entry.warehouse.marketplace %}<span class="badge bg-secondary">{{ entry.warehouse.marketplace|upper }}</span>{% endif %}
+                {{ entry.warehouse.name }}{% if loop.first %} <span class="badge bg-success">рекомендуем</span>{% endif %}
+              </td>
               <td>
                 <form method="post" action="{{ url_for('movement.route_box_add') }}">
                   <input type="hidden" name="box_id" value="{{ route_box.id }}">

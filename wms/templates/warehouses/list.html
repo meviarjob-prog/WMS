@@ -41,7 +41,7 @@
         {% for wh in warehouses %}
           <tr>
             <td>{{ wh.code }}</td>
-            <td>{{ wh.name }}</td>
+            <td>{% if wh.marketplace %}<span class="badge bg-secondary">{{ wh.marketplace|upper }}</span> {% endif %}{{ wh.name }}</td>
             <td>{{ wh.address or '' }}</td>
             <td>{% if wh.is_active %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}</td>
             <td>
@@ -72,7 +72,7 @@
         {% for wh in warehouses %}
           <div class="list-group-item py-2 px-2">
             <div class="d-flex justify-content-between align-items-center gap-2">
-              <a href="{{ url_for('warehouses.cells', warehouse_id=wh.id) }}" class="fw-bold text-decoration-none">{{ wh.code }} — {{ wh.name }}</a>
+              <a href="{{ url_for('warehouses.cells', warehouse_id=wh.id) }}" class="fw-bold text-decoration-none">{{ wh.code }} — {% if wh.marketplace %}{{ wh.marketplace|upper }} · {% endif %}{{ wh.name }}</a>
               {% if wh.is_active %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}
             </div>
             {% if wh.address %}<div class="small text-muted">{{ wh.address }}</div>{% endif %}
@@ -109,7 +109,7 @@
     <tbody>
     {% for wh in fulfillment_warehouses %}
       <tr>
-        <td>{{ wh.name }}</td>
+        <td><span class="badge bg-secondary">{{ wh.marketplace|upper }}</span> {{ wh.name }}</td>
         <td style="min-width:340px">
           <form method="post" action="{{ url_for('warehouses.update_fulfillment_1c_name', warehouse_id=wh.id) }}" class="d-flex gap-1">
             <input type="text" name="fulfillment_1c_name" value="{{ wh.fulfillment_1c_name or '' }}" class="form-control form-control-sm" placeholder="Товары в пути ФФ ...">

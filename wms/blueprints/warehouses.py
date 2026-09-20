@@ -1,8 +1,11 @@
+import re
+import unicodedata
+
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user
 
 from ..extensions import db
-from ..models import Box, Cell, ShipmentPlanLine, Warehouse, Zone
+from ..models import Box, Cell, ShipmentPlanLine, UnplacedStock, Warehouse, Zone
 from ..utils.numbering import next_number
 
 bp = Blueprint("warehouses", __name__)
@@ -35,6 +38,145 @@ FULFILLMENT_1C_DEFAULTS = {
     "пятигорск": "Товары в пути ФФ ЧЕРКЕССК (Лейла)",
 }
 
+_CITY_ALIASES = {
+    "екб": "Екатеринбург",
+    "екатеринбург": "Екатеринбург",
+    "спб": "Санкт-Петербург",
+    "питер": "Санкт-Петербург",
+    "санкт петербург": "Санкт-Петербург",
+    "санкт-петербург": "Санкт-Петербург",
+    "москва": "Москва",
+}
+_MARKETPLACE_PREFIX_RE = re.compile(
+    r"^(?:озон|ozon|вб|wb)\s*(?::|[-–—])?\s*", re.IGNORECASE
+)
+
+
+def canonical_marketplace_city(value):
+    """Каноническое название направления из заголовка плана.
+
+    Маркетплейс не является частью города и хранится в Warehouse.marketplace.
+    Москва, Москва 1 и Москва 2 намеренно остаются тремя разными ключами.
+    """
+    text = unicodedata.normalize("NFKC", str(value or "")).replace("ё", "е")
+    text = _MARKETPLACE_PREFIX_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip(" \t,;:")
+    key = text.casefold()
+    key = re.sub(r"\s*[-–—]\s*", "-", key)
+    if key in _CITY_ALIASES:
+        return _CITY_ALIASES[key]
+    moscow = re.fullmatch(r"москва\s*([12])", key)
+    if moscow:
+        return f"Москва {moscow.group(1)}"
+    return "-".join(part.capitalize() for part in key.split("-"))
+
+
+def _replace_foreign_keys(target_table_name, old_id, new_id):
+    """Переносит все ссылки на запись справочника через метаданные моделей."""
+    for table in db.metadata.sorted_tables:
+        for column in table.columns:
+            if any(
+                fk.column.table.name == target_table_name and fk.column.name == "id"
+                for fk in column.foreign_keys
+            ):
+                db.session.execute(
+                    table.update().where(column == old_id).values({column.name: new_id})
+                )
+
+
+def _merge_marketplace_warehouse(primary, duplicate):
+    """Без потери истории сводит склад-дубль в каноническое направление."""
+    if not primary.address and duplicate.address:
+        primary.address = duplicate.address
+    if not primary.recipient_info and duplicate.recipient_info:
+        primary.recipient_info = duplicate.recipient_info
+    if not primary.fulfillment_1c_name and duplicate.fulfillment_1c_name:
+        primary.fulfillment_1c_name = duplicate.fulfillment_1c_name
+    primary.is_active = primary.is_active or duplicate.is_active
+
+    # Агрегаты с уникальностью по складу нельзя переносить простым UPDATE.
+    for source in UnplacedStock.query.filter_by(warehouse_id=duplicate.id).all():
+        target = UnplacedStock.query.filter_by(
+            warehouse_id=primary.id, nomenclature_id=source.nomenclature_id
+        ).first()
+        if target:
+            target.qty += source.qty
+            db.session.delete(source)
+        else:
+            source.warehouse_id = primary.id
+
+    for source in ShipmentPlanLine.query.filter_by(warehouse_id=duplicate.id).all():
+        target = ShipmentPlanLine.query.filter_by(
+            plan_id=source.plan_id, warehouse_id=primary.id, barcode=source.barcode
+        ).first()
+        if target:
+            target.planned_qty += source.planned_qty
+            target.fulfilled_qty += source.fulfilled_qty
+            dates = [d for d in (target.period_start, source.period_start) if d]
+            target.period_start = max(dates) if dates else None
+            db.session.delete(source)
+        else:
+            source.warehouse_id = primary.id
+
+    # Если на дублях успели создать одинаковые ячейки, сохраняем одну ячейку
+    # и переносим на нее короба/документы. Разные коды просто переезжают.
+    for source in Cell.query.filter_by(warehouse_id=duplicate.id).all():
+        target = Cell.query.filter_by(warehouse_id=primary.id, code=source.code).first()
+        if target:
+            _replace_foreign_keys("cells", source.id, target.id)
+            db.session.delete(source)
+        else:
+            source.warehouse_id = primary.id
+
+    db.session.flush()
+    for source in Zone.query.filter_by(warehouse_id=duplicate.id).all():
+        target = Zone.query.filter_by(warehouse_id=primary.id, code=source.code).first()
+        if target:
+            Cell.query.filter_by(zone_id=source.id).update(
+                {Cell.zone_id: target.id}, synchronize_session=False
+            )
+            db.session.delete(source)
+        else:
+            source.warehouse_id = primary.id
+
+    db.session.flush()
+    _replace_foreign_keys("warehouses", duplicate.id, primary.id)
+    db.session.delete(duplicate)
+    db.session.flush()
+
+
+def consolidate_marketplace_warehouses(marketplace=None):
+    """Нормализует направления и объединяет старые дубли одного маркетплейса."""
+    query = Warehouse.query.filter(Warehouse.marketplace.isnot(None))
+    if marketplace:
+        query = query.filter_by(marketplace=marketplace)
+    groups = {}
+    for warehouse in query.order_by(Warehouse.id).all():
+        city = canonical_marketplace_city(warehouse.marketplace_city or warehouse.name)
+        if city:
+            groups.setdefault((warehouse.marketplace, city.casefold()), []).append(warehouse)
+
+    for (warehouse_marketplace, _city_key), warehouses in groups.items():
+        city = canonical_marketplace_city(
+            warehouses[0].marketplace_city or warehouses[0].name
+        )
+        primary = next(
+            (
+                wh
+                for wh in warehouses
+                if canonical_marketplace_city(wh.marketplace_city) == city
+                and wh.marketplace_city == city
+            ),
+            warehouses[0],
+        )
+        for duplicate in warehouses:
+            if duplicate.id != primary.id:
+                _merge_marketplace_warehouse(primary, duplicate)
+        primary.marketplace = warehouse_marketplace
+        primary.marketplace_city = city
+        primary.name = city
+    db.session.flush()
+
 
 def default_fulfillment_1c_name(city):
     """Стартовая догадка склада 1С по названию города WMS (см.
@@ -42,7 +184,7 @@ def default_fulfillment_1c_name(city):
     (тогда поле остается пустым для ручного заполнения администратором)."""
     if not city:
         return None
-    return FULFILLMENT_1C_DEFAULTS.get(city.strip().lower().replace("ё", "е"))
+    return FULFILLMENT_1C_DEFAULTS.get(canonical_marketplace_city(city).casefold())
 
 
 def _generate_cells(zone, count):
