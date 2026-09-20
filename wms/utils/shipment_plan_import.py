@@ -262,10 +262,87 @@ def _parse_one_sheet(ws):
                     "city": city,
                     "qty": qty or 0.0,
                     "fact": fact,
+                    "_source_row": r,
                 }
             )
 
+    rows = _exclude_blocks_outside_control_totals(
+        ws, header_row, barcode_col, city_columns, rows
+    )
+    for row in rows:
+        row.pop("_source_row", None)
     return cities, rows
+
+
+def _exclude_blocks_outside_control_totals(
+    ws, header_row, barcode_col, city_columns, rows
+):
+    """Сверяет детализацию обычного листа с его верхней итоговой строкой.
+
+    В рабочей Google Таблице встречаются вложенные блоки: у блока есть
+    собственный подытог и строки со штрихкодами, но родительский итог листа
+    этот блок не включает. Простое суммирование всех штрихкодов тогда
+    завышает план. Если превышение целиком совпадает с одним таким блоком,
+    исключаем его строки — итог WMS становится равен контрольной строке
+    источника, а остальные SKU остаются без изменений.
+    """
+    control_row = header_row + 1
+    if _to_barcode_str(ws.cell(row=control_row, column=barcode_col).value):
+        return rows
+
+    cities = [city for _col, city, _fact_col in city_columns]
+    control = {
+        city: _to_qty(ws.cell(row=control_row, column=col).value) or 0.0
+        for col, city, _fact_col in city_columns
+    }
+    if not any(control.values()):
+        return rows
+
+    detailed = {city: 0.0 for city in cities}
+    for row in rows:
+        detailed[row["city"]] += row["qty"]
+    excess = {city: detailed[city] - control[city] for city in cities}
+    tolerance = 1e-6
+    if any(value < -tolerance for value in excess.values()) or not any(
+        value > tolerance for value in excess.values()
+    ):
+        return rows
+
+    rows_by_source = {}
+    for row in rows:
+        rows_by_source.setdefault(row["_source_row"], []).append(row)
+
+    # Кандидат — подытог без штрихкода, непосредственно после которого
+    # идут товарные строки до следующего подытога/заголовка.
+    for candidate_row in range(control_row + 1, ws.max_row + 1):
+        if _to_barcode_str(ws.cell(row=candidate_row, column=barcode_col).value):
+            continue
+        if not any(
+            (_to_qty(ws.cell(row=candidate_row, column=col).value) or 0.0) > 0
+            for col, _city, _fact_col in city_columns
+        ):
+            continue
+
+        source_rows = []
+        next_row = candidate_row + 1
+        while next_row <= ws.max_row and _to_barcode_str(
+            ws.cell(row=next_row, column=barcode_col).value
+        ):
+            if next_row in rows_by_source:
+                source_rows.append(next_row)
+            next_row += 1
+        if not source_rows:
+            continue
+
+        block = {city: 0.0 for city in cities}
+        for source_row in source_rows:
+            for row in rows_by_source[source_row]:
+                block[row["city"]] += row["qty"]
+        if all(abs(block[city] - excess[city]) <= tolerance for city in cities):
+            excluded = set(source_rows)
+            return [row for row in rows if row["_source_row"] not in excluded]
+
+    return rows
 
 
 # Заголовки колонки штрихкода на листах, где ОБЕ площадки сведены в одну

@@ -56,6 +56,31 @@ def test_parse_single_sheet():
     assert all(r["period_start"].strftime("%d.%m") == "01.09" for r in plan.rows)
 
 
+def test_regular_sheet_excludes_nested_block_missing_from_control_total():
+    """Верхний итог листа — контроль плана; вложенный блок вне него не
+    должен повторно увеличивать городские суммы (реальный блок «Лейла»)."""
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБО от 16.09": [
+                ["Артикул", "Размер", "SKU Ozon", "Баркод", "Москва", "отгружено", "Казань", "отгружено"],
+                ["ИТОГО", None, None, None, 100, 0, 80, 0],
+                ["КАРДИГАНЫ", None, None, None, 100, 0, 80, 0],
+                ["Основной блок", None, None, None, 100, 0, 80, 0],
+                ["Товар 1", "44", 111, "1111", 100, 0, 80, 0],
+                ["м_кардиган_лейла", None, None, None, 10, 0, 8, 0],
+                ["Лейла", "46", 222, "2222", 10, 0, 8, 0],
+            ]
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    assert {row["barcode"] for row in plan.rows} == {"1111"}
+    assert sum(row["qty"] for row in plan.rows if row["city"] == "Москва") == 100
+    assert sum(row["qty"] for row in plan.rows if row["city"] == "Казань") == 80
+
+
 def test_parse_merges_multiple_sheets_for_same_marketplace():
     """Если в файле два листа "Распределение..." под один и тот же
     маркетплейс (например, основная выгрузка + отдельная категория) —
