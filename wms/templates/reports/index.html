@@ -113,5 +113,12 @@
       <a class="btn btn-warning" href="{{ url_for('reports.movement_shortages_report') }}">Открыть недовозы</a>
     </div>
   </div>
+  <div class="col-md-6">
+    <div class="card p-3 border-danger">
+      <h5>Сверка количества WMS ↔ 1С</h5>
+      <p class="text-muted small">Документы и товары, количество которых после выгрузки отличается в 1С от WMS.</p>
+      <a class="btn btn-outline-danger" href="{{ url_for('reports.one_c_quantity_mismatches') }}">Открыть расхождения</a>
+    </div>
+  </div>
 </div>
 {% endblock %}

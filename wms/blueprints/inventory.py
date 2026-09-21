@@ -13,6 +13,7 @@ from ..models import (
     InventoryLine,
     InventoryScannedBox,
     Nomenclature,
+    ReceivingDocument,
     UnplacedStock,
     Warehouse,
 )
@@ -233,8 +234,16 @@ def detail(doc_id):
         key=lambda row: row["nomenclature"].name,
     )
 
+    empty_box = None
+    empty_box_id = request.args.get("empty_box", type=int)
+    if empty_box_id and doc.cell_id:
+        empty_box = Box.query.filter_by(
+            id=empty_box_id, warehouse_id=doc.warehouse_id
+        ).first()
     return render_template(
-        "inventory/detail.html", doc=doc, lines=lines, scanned_boxes=scanned_boxes, comparison=comparison
+        "inventory/detail.html", doc=doc, lines=lines, scanned_boxes=scanned_boxes,
+        comparison=comparison, empty_box=empty_box,
+        resume_box_number=request.args.get("resume_box_number", ""),
     )
 
 
@@ -262,6 +271,10 @@ def add_box(doc_id):
     if InventoryScannedBox.query.filter_by(document_id=doc.id, box_id=box.id).first():
         flash(f"Короб {box.box_number} уже учтен в этом листе", "danger")
         return redirect(url_for("inventory.detail", doc_id=doc.id))
+
+    if doc.cell_id and box.items.count() == 0:
+        flash(f"Короб {box.box_number} пуст. Можно сразу принять товар в него.", "warning")
+        return redirect(url_for("inventory.detail", doc_id=doc.id, empty_box=box.id))
 
     moved_from = None
     if doc.cell_id:
@@ -299,6 +312,29 @@ def add_box(doc_id):
     else:
         flash(f"Короб {box.box_number} учтен{move_note}: короб пуст, товар не добавлен", "warning")
     return redirect(url_for("inventory.detail", doc_id=doc.id))
+
+
+@bp.route("/<int:doc_id>/empty-box/<int:box_id>/receive", methods=["POST"])
+def receive_into_empty_box(doc_id, box_id):
+    doc = InventoryDocument.query.get_or_404(doc_id)
+    box = Box.query.filter_by(id=box_id, warehouse_id=doc.warehouse_id).first_or_404()
+    if doc.status != "draft" or not doc.cell_id or box.items.count() != 0:
+        flash("Короб уже заполнен либо инвентаризация завершена", "danger")
+        return redirect(url_for("inventory.detail", doc_id=doc.id))
+    receiving = ReceivingDocument(
+        number=next_number("receiving"),
+        warehouse_id=doc.warehouse_id,
+        created_by_id=current_user.id,
+        return_inventory_id=doc.id,
+        return_inventory_box_id=box.id,
+    )
+    db.session.add(receiving)
+    db.session.commit()
+    flash(
+        f"Приемка {receiving.number} создана. Сканируйте товар в короб {box.box_number}, затем завершите приемку.",
+        "success",
+    )
+    return redirect(url_for("receiving.detail", doc_id=receiving.id, box=box.id))
 
 
 @bp.route("/<int:doc_id>/scanned-boxes/<int:scanned_id>/delete", methods=["POST"])

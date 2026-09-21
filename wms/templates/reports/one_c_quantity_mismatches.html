@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Расхождения WMS и 1С{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('reports.index') }}">&larr; Отчеты</a></p>
+<h3 class="mb-3">Расхождения количества WMS и 1С</h3>
+<p class="text-muted">Здесь остаются только позиции, в которых количество после записи документа в 1С не совпало с WMS. Повторная успешная сверка удаляет старое расхождение.</p>
+<div class="card p-3">
+  <table class="table table-sm table-mobile-compact">
+    <thead><tr><th>Проверено</th><th>Тип</th><th>Документ</th><th>Штрихкод</th><th>Товар</th><th>WMS</th><th>1С</th><th>Разница</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ (row.checked_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ row.document_type }}</td><td>{{ row.document_number }}</td>
+        <td>{{ row.barcode or '—' }}</td><td>{{ row.item_name or '—' }}</td>
+        <td>{{ row.wms_qty | round(3) }}</td><td>{{ row.one_c_qty | round(3) }}</td>
+        <td class="text-danger fw-bold">{{ '%+g'|format(row.diff()) }}</td>
+      </tr>
+    {% else %}<tr><td colspan="8" class="text-muted">Расхождений не найдено</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -25,6 +25,7 @@ from ..models import (
     PlacementDocument,
     PlacementLine,
     UnplacedStock,
+    UnplacedStockLot,
     Warehouse,
 )
 from ..utils.excel_io import export_placement_to_excel, timestamp_for_filename
@@ -309,7 +310,30 @@ def list_documents():
         open_boxes=open_boxes,
         boxes_pagination=boxes_pagination,
         cell_suggestions=cell_suggestions,
+        warehouses=Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all(),
     )
+
+
+@bp.route("/unplaced/clear", methods=["POST"])
+def clear_unplaced_stock():
+    """Административная очистка ошибочно созданного неразмещенного остатка."""
+    if not current_user.is_admin:
+        flash("Очищать неразмещенный остаток может только администратор", "danger")
+        return redirect(url_for("placement.list_documents"))
+    warehouse_id = request.form.get("warehouse_id", type=int)
+    if not warehouse_id:
+        flash("Выберите склад", "danger")
+        return redirect(url_for("placement.list_documents"))
+    warehouse = Warehouse.query.get_or_404(warehouse_id)
+    rows = UnplacedStock.query.filter_by(warehouse_id=warehouse_id).all()
+    cleared = sum(max(row.qty, 0) for row in rows)
+    for row in rows:
+        db.session.delete(row)
+    for lot in UnplacedStockLot.query.filter_by(warehouse_id=warehouse_id).all():
+        lot.qty_remaining = 0
+    db.session.commit()
+    flash(f"Неразмещенный остаток склада «{warehouse.name}» очищен: {cleared:g} шт.", "success")
+    return redirect(url_for("placement.list_documents"))
 
 
 @bp.route("/write-off-stock", methods=["POST"])

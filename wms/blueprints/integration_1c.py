@@ -15,7 +15,10 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from flask_login import current_user
 
 from ..extensions import db
-from ..models import AppSetting, InventoryDocument, MovementDocument, ReceivingDocument, SupplierReturn
+from ..models import (
+    AppSetting, InventoryDocument, MovementDocument, OneCQuantityCheck,
+    ReceivingDocument, SupplierReturn,
+)
 
 bp = Blueprint("integration_1c", __name__)
 
@@ -424,6 +427,40 @@ def export_confirm():
     # подтвержден, только не полностью — показываем "!" в списке.
     movement_warnings = data.get("movement_warnings") or {}
 
+    # 1С может вернуть фактически записанные количества строк. Сохраняем
+    # только расхождения; повторная сверка полностью заменяет результат по
+    # документу, поэтому старое предупреждение не остается висеть.
+    quantity_checks = data.get("quantity_checks") or []
+    checked_documents = set()
+    quantity_mismatches = 0
+    for check in quantity_checks:
+        document_type = str(check.get("document_type") or "movement")[:30]
+        document_id = int(check.get("document_id") or 0)
+        if not document_id:
+            continue
+        key = (document_type, document_id)
+        if key not in checked_documents:
+            OneCQuantityCheck.query.filter_by(
+                document_type=document_type, document_id=document_id
+            ).delete(synchronize_session=False)
+            checked_documents.add(key)
+        wms_qty = float(check.get("wms_qty") or 0)
+        one_c_qty = float(check.get("one_c_qty") or 0)
+        if abs(wms_qty - one_c_qty) < 0.000001:
+            continue
+        db.session.add(
+            OneCQuantityCheck(
+                document_type=document_type,
+                document_id=document_id,
+                document_number=str(check.get("document_number") or document_id),
+                barcode=str(check.get("barcode") or "") or None,
+                item_name=str(check.get("name") or "") or None,
+                wms_qty=wms_qty,
+                one_c_qty=one_c_qty,
+            )
+        )
+        quantity_mismatches += 1
+
     now = datetime.utcnow()
     confirmed_movements = (
         MovementDocument.query.filter(
@@ -498,6 +535,7 @@ def export_confirm():
                 "supplier_returns": len(confirmed_returns),
                 "receiving_adjustments": len(confirmed_receiving_adjustments),
                 "movement_corrections": len(confirmed_movement_corrections),
+                "quantity_mismatches": quantity_mismatches,
             },
         }
     )

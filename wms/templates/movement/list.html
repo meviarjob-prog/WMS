@@ -192,7 +192,7 @@
           <td>{{ d.from_warehouse.name }}</td>
           <td>{% if d.to_warehouse.marketplace %}<span class="badge bg-secondary">{{ d.to_warehouse.marketplace_label() }}</span> {% endif %}{{ d.to_warehouse.name }}</td>
           <td>{{ d.lines.count() }}</td>
-          {% set tq = d.total_item_qty() %}
+          {% set tq = d.total_sent_qty() %}
           <td>
             {{ tq | int if tq == tq | int else tq | round(3) }}
             {% if d.received_at %}
@@ -209,7 +209,7 @@
               <span class="status-chips" role="group" aria-label="Статус перемещения">
                 <span class="status-chip status-chip-wide status-chip-onassembly status-chip-reached"
                       title="На сборке: {{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Сб</span>
-                <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if d.completed_at else '' }}"
+                <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if d.status in ('collected', 'completed') else '' }}"
                       title="Собрано: {{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else 'еще не наступило' }}">Со</span>
                 <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if d.marketplace_request_created_at else '' }}"
                       title="Создана заявка: {{ (d.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if d.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
@@ -224,7 +224,7 @@
               <span class="text-muted">—</span>
             {% elif d.received_at %}
               <span class="badge bg-success" title="{{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') }}">Отгружено {{ (d.received_at|msk).strftime('%d.%m') }}</span>
-            {% elif can_manage_document and (d.marketplace_request_created_at or d.marketplace_request_number) %}
+            {% elif current_user.can_receive_movements() and (d.marketplace_request_created_at or d.marketplace_request_number) %}
               <a class="btn btn-sm btn-warning movement-receive-btn text-decoration-none" href="{{ url_for('movement.receive', doc_id=d.id) }}"
                  title="Товар считается «в пути», пока не нажата эта кнопка">📥 Принято на складе</a>
             {% elif can_manage_document %}
@@ -287,14 +287,14 @@
             <span class="badge status-chip-shipped">Отгружено</span>
           {% elif d.marketplace_request_created_at or d.marketplace_request_number %}
             <span class="badge status-chip-requested">Создана заявка</span>
-          {% elif d.completed_at %}
+          {% elif d.status in ('collected', 'completed') %}
             <span class="badge status-chip-assembled">Собрано</span>
           {% else %}
             <span class="badge status-chip-onassembly">На сборке</span>
           {% endif %}
         </div>
         <div class="small text-muted">{{ d.from_warehouse.name }} → {% if d.to_warehouse.marketplace %}<span class="badge bg-secondary">{{ d.to_warehouse.marketplace_label() }}</span> {% endif %}{{ d.to_warehouse.name }}</div>
-        {% set mobile_total_qty = d.total_item_qty() %}
+        {% set mobile_total_qty = d.total_sent_qty() %}
         <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }} · {{ d.lines.count() }} короб. · {{ mobile_total_qty | int if mobile_total_qty == mobile_total_qty | int else mobile_total_qty | round(3) }} шт.{% if d.received_at %}{% set mobile_accepted_qty = d.total_received_qty() %} (принято {{ mobile_accepted_qty | int if mobile_accepted_qty == mobile_accepted_qty | int else mobile_accepted_qty | round(3) }}){% endif %}{% if d.created_by %} · Автор: {{ d.created_by.display_name() }}{% endif %}</div>
         {% if d.status == 'completed' and not d.received_at %}
           <div class="mt-1">

@@ -2,6 +2,7 @@
 {% block title %}Перемещение {{ doc.number }}{% endblock %}
 {% block content %}
 {% set can_manage_document = current_user.is_admin or current_user.can_complete_movements() or doc.created_by_id == current_user.id %}
+{% set can_receive_document = current_user.can_receive_movements() %}
 <p><a href="{{ url_for('movement.list_documents') }}">&larr; Перемещение</a></p>
 
 <div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
@@ -14,8 +15,8 @@
       <span class="status-chips" role="group" aria-label="Статус перемещения">
         <span class="status-chip status-chip-wide status-chip-onassembly status-chip-reached"
               title="На сборке: {{ (doc.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Сб</span>
-        <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if doc.completed_at else '' }}"
-              title="Собрано: {{ (doc.completed_at|msk).strftime('%d.%m.%Y %H:%M') if doc.completed_at else 'еще не наступило' }}">Со</span>
+        <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if doc.status in ('collected', 'completed') else '' }}"
+              title="Собрано{{ ': автоматически при 30 коробах' if doc.status == 'collected' else '' }}">Со</span>
         <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at else '' }}"
               title="Создана заявка: {{ (doc.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if doc.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
         <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.received_at else '' }}"
@@ -38,15 +39,20 @@
     <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
       <button type="submit" class="btn btn-success">📦 Собрано</button>
     </form>
-    {% elif can_manage_document and doc.status == 'completed' and not doc.received_at %}
+    {% elif can_manage_document and doc.status == 'collected' %}
+    <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
+      <button type="submit" class="btn btn-success">🚚 Подтвердить отправку</button>
+    </form>
+    {% elif (can_manage_document or can_receive_document) and doc.status == 'completed' and not doc.received_at %}
       {% if not doc.marketplace_request_created_at and not doc.marketplace_request_number %}
       <form method="post" action="{{ url_for('movement.mark_marketplace_request', doc_id=doc.id) }}" class="d-inline">
         <button type="submit" class="btn btn-primary" title="Отметить: заявка на маркетплейс создана">🔖 Отметить: заявка на МП создана</button>
       </form>
       <span class="text-muted small d-block mt-1">Обязательный шаг перед приемкой — после отметки появится кнопка «Принято на складе».</span>
       {% else %}
-      <a class="btn btn-warning" href="{{ url_for('movement.receive', doc_id=doc.id) }}"
+      {% if can_receive_document %}<a class="btn btn-warning" href="{{ url_for('movement.receive', doc_id=doc.id) }}"
          title="До этой кнопки товар считается «в пути» и не засчитывается в план отгрузок">📥 Принято на складе</a>
+      {% else %}<span class="text-warning-emphasis">В пути</span>{% endif %}
       {% endif %}
     {% elif doc.status == 'completed' and doc.received_at %}
     <span class="badge bg-success">Отгружено {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
@@ -70,7 +76,7 @@
 {% endif %}
 
 {% set can_edit = can_manage_document and (doc.status == 'draft' or current_user.is_admin) %}
-{% if doc.status != 'draft' and current_user.is_admin %}
+{% if doc.status not in ('draft', 'collected') and current_user.is_admin %}
 <div class="alert alert-warning">
   ⚠ Документ уже завершен. Как администратор вы можете добавлять/убирать короба и менять ячейку назначения —
   изменения сразу же применяются к реальному расположению короба (и к выполнению плана отгрузок, если перемещение уже принято на складе).
@@ -119,10 +125,19 @@
 {% endif %}
 
 <div class="card p-3">
-  <h5>Короба в списке</h5>
+  <div class="d-flex justify-content-between align-items-center gap-2">
+    <h5>Короба в списке</h5>
+    {% if can_manage_document and doc.status in ('draft', 'collected') and lines|length > 1 %}
+    <form id="splitMovementForm" method="post" action="{{ url_for('movement.split_document', doc_id=doc.id) }}"
+          onsubmit="return confirm('Перенести выбранные короба в отдельное перемещение?');">
+      <button class="btn btn-sm btn-outline-primary" type="submit">Разделить выбранные</button>
+    </form>
+    {% endif %}
+  </div>
   <table class="table table-sm align-middle">
     <thead>
       <tr>
+        {% if can_manage_document and doc.status in ('draft', 'collected') and lines|length > 1 %}<th></th>{% endif %}
         <th>Короб</th>
         <th>Товары</th>
         <th>Откуда</th>
@@ -132,6 +147,7 @@
     <tbody>
     {% for line in lines %}
       <tr>
+        {% if can_manage_document and doc.status in ('draft', 'collected') and lines|length > 1 %}<td><input type="checkbox" name="line_ids" value="{{ line.id }}" form="splitMovementForm" class="form-check-input"></td>{% endif %}
         <td>
           <a href="{{ url_for('boxes.detail', box_id=line.box.id) }}"><b>{{ line.box.box_number }}</b></a>
           <div><a target="_blank" href="{{ url_for('labels.box_label', box_id=line.box.id) }}">🖨 этикетка</a></div>

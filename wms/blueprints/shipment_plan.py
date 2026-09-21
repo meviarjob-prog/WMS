@@ -115,26 +115,26 @@ def _received_since_by_warehouse_and_item(window_start):
     в Google Таблицу (local_received). Приемка за пределами интервала (до
     начала периода или после дедлайна +PERIOD_DAYS) к текущему плану
     отношения не имеет и не учитывается."""
-    rows = (
-        db.session.query(
-            MovementDocument.to_warehouse_id,
-            BoxItem.nomenclature_id,
-            func.sum(BoxItem.qty),
-        )
-        .join(MovementLine, MovementLine.document_id == MovementDocument.id)
-        .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
-        .filter(
-            MovementDocument.received_at.isnot(None),
-            func.coalesce(
-                MovementDocument.completed_at,
-                MovementDocument.received_at,
-                MovementDocument.created_at,
-            ) >= window_start,
-        )
-        .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
-        .all()
-    )
-    return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
+    totals = {}
+    documents = MovementDocument.query.filter(
+        MovementDocument.received_at.isnot(None),
+        func.coalesce(
+            MovementDocument.completed_at,
+            MovementDocument.received_at,
+            MovementDocument.created_at,
+        ) >= window_start,
+    ).all()
+    for document in documents:
+        actual = {}
+        for movement_line in document.lines:
+            for item in movement_line.box.items:
+                actual[item.nomenclature_id] = actual.get(item.nomenclature_id, 0) + item.qty
+        for discrepancy in document.discrepancies:
+            actual[discrepancy.nomenclature_id] = discrepancy.received_qty
+        for nomenclature_id, qty in actual.items():
+            key = (document.to_warehouse_id, nomenclature_id)
+            totals[key] = totals.get(key, 0) + qty
+    return totals
 
 
 def _apply_plan(marketplace, parsed, uploaded_by_id=None):

@@ -17,6 +17,7 @@ from ..models import (
     Nomenclature,
     ShipmentPlanLine,
     Warehouse,
+    UnplacedStock,
 )
 from ..utils.excel_io import export_movement_summary_to_excel, export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
@@ -48,8 +49,9 @@ def _can_view_movement_document(doc):
         current_user.is_admin
         or current_user.can_view_movements()
         or current_user.can_complete_movements()
+        or current_user.can_receive_movements()
         or doc.created_by_id == current_user.id
-        or doc.status == "draft"
+        or doc.status in ("draft", "collected")
     )
 
 
@@ -73,10 +75,8 @@ BOOKKEEPING_ENDPOINTS = {
 # User.movement_complete_allowed, настраивается в «Настройки» → доступ к
 # разделам) — например, заведующему складом назначения, который принимает
 # чужие перемещения.
-COMPLETION_ENDPOINTS = {
-    "movement.complete",
-    "movement.receive",
-}
+COMPLETION_ENDPOINTS = {"movement.complete"}
+RECEIVING_ENDPOINTS = {"movement.receive"}
 
 
 @bp.before_request
@@ -98,6 +98,10 @@ def _restrict_document_access():
         ):
             abort(404)
         return None
+    if request.endpoint in RECEIVING_ENDPOINTS:
+        if not current_user.can_receive_movements():
+            abort(404)
+        return None
     # Остальные изменяющие маршруты (добавить/убрать короб, удалить и
     # т.п.) — только автор или админ, как и раньше. "Просмотр всех
     # перемещений" здесь не действует (он read-only), а совместный доступ к
@@ -110,10 +114,10 @@ def _restrict_document_access():
 
 
 def _visible_movement_query():
-    if current_user.can_view_movements():
+    if current_user.can_view_movements() or current_user.can_receive_movements():
         return MovementDocument.query
     return MovementDocument.query.filter(
-        or_(MovementDocument.created_by_id == current_user.id, MovementDocument.status == "draft")
+        or_(MovementDocument.created_by_id == current_user.id, MovementDocument.status.in_(("draft", "collected")))
     )
 
 
@@ -178,7 +182,7 @@ def _committed_by_warehouse_and_item(period_start=None):
         .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
         .filter(
             or_(
-                MovementDocument.status == "draft",
+                MovementDocument.status.in_(("draft", "collected")),
                 and_(MovementDocument.status == "completed", MovementDocument.received_at.is_(None)),
             )
         )
@@ -188,7 +192,7 @@ def _committed_by_warehouse_and_item(period_start=None):
         query = query.filter(
             or_(
                 and_(
-                    MovementDocument.status == "draft",
+                    MovementDocument.status.in_(("draft", "collected")),
                     MovementLine.scanned_at >= window_start,
                 ),
                 and_(
@@ -393,7 +397,7 @@ def find_box():
                 # "Куда везти короб", выглядел бы "не найденным ни в одном
                 # перемещении" для того, кто его туда положил.
                 lines_query = lines_query.filter(
-                    or_(MovementDocument.created_by_id == current_user.id, MovementDocument.status == "draft")
+                    or_(MovementDocument.created_by_id == current_user.id, MovementDocument.status.in_(("draft", "collected")))
                 )
             lines = lines_query.order_by(MovementDocument.created_at.desc()).all()
 
@@ -441,7 +445,7 @@ def _find_conflicting_movement_line(box, exclude_doc_id=None):
     ).filter(
         MovementLine.box_id == box.id,
         or_(
-            MovementDocument.status == "draft",
+            MovementDocument.status.in_(("draft", "collected")),
             and_(MovementDocument.status == "completed", MovementDocument.received_at.is_(None)),
         ),
     )
@@ -451,7 +455,11 @@ def _find_conflicting_movement_line(box, exclude_doc_id=None):
 
 
 def _conflict_status_label(document):
-    return "черновик" if document.status == "draft" else "в пути, еще не принят"
+    if document.status == "draft":
+        return "черновик"
+    if document.status == "collected":
+        return "собрано"
+    return "в пути, еще не принят"
 
 
 def _conflict_message(box, conflict):
@@ -474,6 +482,14 @@ def route_box_add():
     to_warehouse_id = request.form.get("to_warehouse_id", type=int)
     box = Box.query.get_or_404(box_id)
     to_warehouse = Warehouse.query.get_or_404(to_warehouse_id)
+
+    if current_user.warehouse_id and box.warehouse_id != current_user.warehouse_id:
+        flash(
+            f"Короб {box.box_number} относится к складу «{box.warehouse.name}». "
+            f"Ваш рабочий склад — «{current_user.warehouse.name}».",
+            "danger",
+        )
+        return redirect(url_for("movement.list_documents"))
 
     # Ищем черновик на этот маршрут независимо от того, кто его начал —
     # иначе двое сотрудников, собирающих одно направление порознь, каждый
@@ -507,6 +523,8 @@ def route_box_add():
         return redirect(url_for("movement.list_documents"))
 
     _create_movement_line(doc, box)
+    if to_warehouse.marketplace == "ozon" and doc.lines.count() >= 30:
+        doc.status = "collected"
     db.session.commit()
     # Не уводим в сам документ перемещения — сборщик сканирует короба один
     # за другим на этой же странице; открыть документ можно из списка ниже,
@@ -517,7 +535,8 @@ def route_box_add():
     ) or "короб пуст"
     flash(
         f"Короб {box.box_number} добавлен в перемещение {doc.number} на «{to_warehouse.name}». "
-        f"Содержимое: {contents}",
+        f"Содержимое: {contents}"
+        + (" Перемещение достигло лимита 30 коробов и отмечено как собранное." if doc.status == "collected" else ""),
         "success",
     )
     return redirect(url_for("movement.list_documents"))
@@ -588,9 +607,14 @@ def transfer_box_item(item_id):
 def new_document():
     if request.method == "GET":
         warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
-        return render_template("movement/new.html", warehouses=warehouses)
+        return render_template("movement/new.html", warehouses=warehouses, assigned_warehouse=current_user.warehouse)
 
-    from_warehouse_id = request.form.get("from_warehouse_id", type=int)
+    from_warehouse_id = current_user.warehouse_id
+    if current_user.is_admin and not from_warehouse_id:
+        from_warehouse_id = request.form.get("from_warehouse_id", type=int)
+    if not current_user.is_admin and not from_warehouse_id:
+        flash("Администратор еще не назначил вам рабочий склад", "danger")
+        return redirect(url_for("movement.new_document"))
     to_warehouse_id = request.form.get("to_warehouse_id", type=int)
     if not from_warehouse_id or not to_warehouse_id:
         flash("Выберите склад-отправитель и склад назначения", "danger")
@@ -691,7 +715,10 @@ def flag_movement_dirty_for_box(box_id):
 @bp.route("/<int:doc_id>/boxes/add", methods=["POST"])
 def add_box(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)
-    editing_after_completion = doc.status != "draft"
+    if doc.status == "collected":
+        flash("В Ozon-перемещении уже 30 коробов. Следующий короб добавляйте в новый документ.", "warning")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+    editing_after_completion = doc.status not in ("draft", "collected")
     if editing_after_completion and not current_user.is_admin:
         flash("Документ уже завершен — изменить может только администратор", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
@@ -721,6 +748,9 @@ def add_box(doc_id):
 
     _create_movement_line(doc, box)
 
+    if doc.to_warehouse.marketplace == "ozon" and doc.lines.count() >= 30:
+        doc.status = "collected"
+
     if doc.synced_to_1c_at is not None:
         # Документ уже выгружен в 1С — новый короб в нем 1С еще не видела,
         # значит документ там нужно дозаполнить (см. composition_changed_at).
@@ -738,7 +768,12 @@ def add_box(doc_id):
             _apply_shipment_fulfillment(box, doc.to_warehouse_id, doc.completed_at)
 
     db.session.commit()
-    if box.items.count() == 0:
+    if doc.status == "collected":
+        flash(
+            f"Короб {box.box_number} добавлен. В перемещении 30 коробов — оно отмечено как собранное.",
+            "success",
+        )
+    elif box.items.count() == 0:
         # Не блокируем — короб мог осознанно перемещаться пустым (например,
         # для повторного использования на другом складе), просто
         # предупреждаем, чтобы не увезти короб по ошибке вместо того, что
@@ -752,7 +787,7 @@ def add_box(doc_id):
 @bp.route("/<int:doc_id>/lines/<int:line_id>/delete", methods=["POST"])
 def delete_line(doc_id, line_id):
     doc = MovementDocument.query.get_or_404(doc_id)
-    editing_after_completion = doc.status != "draft"
+    editing_after_completion = doc.status not in ("draft", "collected")
     if editing_after_completion and not current_user.is_admin:
         flash("Документ уже завершен — изменить может только администратор", "danger")
         return redirect(url_for("movement.detail", doc_id=doc_id))
@@ -768,14 +803,47 @@ def delete_line(doc_id, line_id):
         doc.composition_changed_at = datetime.utcnow()
 
     db.session.delete(line)
+    if doc.status == "collected":
+        doc.status = "draft"
     db.session.commit()
     return redirect(url_for("movement.detail", doc_id=doc_id))
+
+
+@bp.route("/<int:doc_id>/split", methods=["POST"])
+def split_document(doc_id):
+    """Выносит выбранные короба в отдельный документ того же маршрута."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status not in ("draft", "collected"):
+        flash("Дробить можно только перемещение до отправки", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+    line_ids = request.form.getlist("line_ids", type=int)
+    lines = doc.lines.filter(MovementLine.id.in_(line_ids)).all() if line_ids else []
+    if not lines or len(lines) == doc.lines.count():
+        flash("Выберите часть коробов: минимум один, но не все", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    new_doc = MovementDocument(
+        number=next_number("movement"),
+        from_warehouse_id=doc.from_warehouse_id,
+        to_warehouse_id=doc.to_warehouse_id,
+        created_by_id=current_user.id,
+    )
+    db.session.add(new_doc)
+    db.session.flush()
+    for line in lines:
+        line.document_id = new_doc.id
+
+    doc.status = "collected" if doc.to_warehouse.marketplace == "ozon" and doc.lines.count() >= 30 else "draft"
+    new_doc.status = "collected" if doc.to_warehouse.marketplace == "ozon" and len(lines) >= 30 else "draft"
+    db.session.commit()
+    flash(f"Создано отдельное перемещение {new_doc.number}: {len(lines)} короб(ов)", "success")
+    return redirect(url_for("movement.detail", doc_id=new_doc.id))
 
 
 @bp.route("/<int:doc_id>/lines/<int:line_id>/set-cell", methods=["POST"])
 def set_cell(doc_id, line_id):
     doc = MovementDocument.query.get_or_404(doc_id)
-    editing_after_completion = doc.status != "draft"
+    editing_after_completion = doc.status not in ("draft", "collected")
     if editing_after_completion and not current_user.is_admin:
         flash("Документ уже завершен — изменить может только администратор", "danger")
         return redirect(url_for("movement.detail", doc_id=doc_id))
@@ -833,6 +901,9 @@ def delete_document(doc_id):
         # логика, что и при удалении отдельной строки завершенного
         # документа, см. delete_line), иначе короба останутся числиться
         # на складе назначения без какого-либо документа-основания.
+        if doc.received_at is not None:
+            _revert_document_receipt(doc)
+            doc.received_at = None
         for line in doc.lines:
             _revert_line_effects(doc, line)
 
@@ -855,7 +926,7 @@ def delete_document(doc_id):
 @bp.route("/<int:doc_id>/complete", methods=["POST"])
 def complete(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)
-    if doc.status != "draft":
+    if doc.status not in ("draft", "collected"):
         flash("Документ уже завершен", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
@@ -872,6 +943,7 @@ def complete(doc_id):
         # действием "Принято на складе" (см. receive()) — короб физически
         # мог еще ехать/лежать непроверенным на складе назначения.
 
+    doc.sent_qty_snapshot = doc.total_item_qty()
     doc.status = "completed"
     doc.completed_at = datetime.utcnow()
     db.session.commit()
@@ -887,6 +959,70 @@ def _expected_qty_by_nomenclature(doc):
         for item in line.box.items:
             expected[item.nomenclature_id] = expected.get(item.nomenclature_id, 0) + item.qty
     return expected
+
+
+def _apply_receipt_stock_difference(doc, nomenclature_id, expected_qty, received_qty):
+    """Приводит физический остаток склада назначения к факту приемки.
+
+    Недовоз списывается из содержимого коробов этого перемещения, излишек
+    попадает в неразмещенный остаток — его затем можно упаковать обычным
+    размещением. Документ сохраняет исходное отправленное количество в
+    sent_qty_snapshot.
+    """
+    shortage = max(expected_qty - received_qty, 0)
+    for line in doc.lines.order_by(MovementLine.id.desc()).all():
+        if shortage <= 0:
+            break
+        box_item = BoxItem.query.filter_by(
+            box_id=line.box_id, nomenclature_id=nomenclature_id
+        ).first()
+        if not box_item:
+            continue
+        take = min(box_item.qty, shortage)
+        box_item.qty -= take
+        shortage -= take
+        if box_item.qty <= 0:
+            db.session.delete(box_item)
+
+    excess = max(received_qty - expected_qty, 0)
+    if excess:
+        UnplacedStock.add(doc.to_warehouse_id, nomenclature_id, excess)
+
+
+def _revert_document_receipt(doc):
+    """Отменяет учет фактической приемки перед удалением документа."""
+    current = _expected_qty_by_nomenclature(doc)
+    discrepancies = {d.nomenclature_id: d for d in doc.discrepancies}
+    for nomenclature_id, qty in current.items():
+        actual_qty = discrepancies.get(nomenclature_id).received_qty if nomenclature_id in discrepancies else qty
+        plan_line = ShipmentPlanLine.query.filter_by(
+            warehouse_id=doc.to_warehouse_id, nomenclature_id=nomenclature_id
+        ).first()
+        if plan_line and _shipment_is_in_plan(plan_line, doc.completed_at):
+            plan_line.fulfilled_qty = max(plan_line.fulfilled_qty - actual_qty, 0)
+
+    for discrepancy in doc.discrepancies:
+        if discrepancy.shortage_qty():
+            first_line = doc.lines.first()
+            if first_line:
+                item = BoxItem.query.filter_by(
+                    box_id=first_line.box_id,
+                    nomenclature_id=discrepancy.nomenclature_id,
+                ).first()
+                if item:
+                    item.qty += discrepancy.shortage_qty()
+                else:
+                    db.session.add(BoxItem(
+                        box_id=first_line.box_id,
+                        nomenclature_id=discrepancy.nomenclature_id,
+                        qty=discrepancy.shortage_qty(),
+                    ))
+        if discrepancy.excess_qty():
+            UnplacedStock.consume(
+                doc.to_warehouse_id,
+                discrepancy.nomenclature_id,
+                discrepancy.excess_qty(),
+            )
 
 
 @bp.route("/<int:doc_id>/receive", methods=["GET", "POST"])
@@ -942,10 +1078,12 @@ def receive(doc_id):
 
     has_discrepancy = False
     shortage_qty = 0
+    total_received_qty = 0
     for nomenclature_id, expected_qty in expected.items():
         received_qty = request.form.get(f"qty_{nomenclature_id}", type=float)
         if received_qty is None or received_qty < 0:
             received_qty = expected_qty
+        total_received_qty += received_qty
 
         plan_line = ShipmentPlanLine.query.filter_by(
             warehouse_id=doc.to_warehouse_id, nomenclature_id=nomenclature_id
@@ -964,7 +1102,12 @@ def receive(doc_id):
                     received_qty=received_qty,
                 )
             )
+            _apply_receipt_stock_difference(
+                doc, nomenclature_id, expected_qty, received_qty
+            )
 
+    doc.sent_qty_snapshot = doc.sent_qty_snapshot or sum(expected.values())
+    doc.received_qty_snapshot = total_received_qty
     doc.received_at = datetime.utcnow()
     db.session.commit()
     if shortage_qty:

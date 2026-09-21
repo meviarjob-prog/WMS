@@ -137,6 +137,11 @@ def movement_wms_totals(period_start=None):
         actual = dict(expected)
         if document.received_at is not None:
             for discrepancy in document.discrepancies:
+                # После приемки с недовозом физический остаток короба уже
+                # уменьшен. Для показателя «отправлено/в пути» восстанавливаем
+                # исходное количество из документа расхождения.
+                expected[discrepancy.nomenclature_id] = discrepancy.expected_qty
+                nomenclature_by_id[discrepancy.nomenclature_id] = discrepancy.nomenclature
                 actual[discrepancy.nomenclature_id] = discrepancy.received_qty
 
         for nomenclature_id, expected_qty in expected.items():

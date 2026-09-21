@@ -12,6 +12,7 @@ from ..models import (
     MovementLine,
     MovementReceiptDiscrepancy,
     Nomenclature,
+    OneCQuantityCheck,
     PlacementDocument,
     ProductCategory,
     ReceivingDocument,
@@ -272,6 +273,14 @@ def movement_shortages_report():
         date_from=request.args.get("date_from", ""),
         date_to=request.args.get("date_to", ""),
     )
+
+
+@bp.route("/one-c-quantity-mismatches")
+def one_c_quantity_mismatches():
+    rows = OneCQuantityCheck.query.order_by(
+        OneCQuantityCheck.checked_at.desc(), OneCQuantityCheck.document_number
+    ).all()
+    return render_template("reports/one_c_quantity_mismatches.html", rows=rows)
 
 
 def _shipped_rows():

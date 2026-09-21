@@ -1153,6 +1153,15 @@ def complete(doc_id):
         f"нужно только расставить по ячейкам.",
         "success",
     )
+    if doc.return_inventory_id:
+        box = Box.query.get(doc.return_inventory_box_id) if doc.return_inventory_box_id else None
+        return redirect(
+            url_for(
+                "inventory.detail",
+                doc_id=doc.return_inventory_id,
+                resume_box_number=box.box_number if box else "",
+            )
+        )
     return _next_redirect(doc.id)
 
 
