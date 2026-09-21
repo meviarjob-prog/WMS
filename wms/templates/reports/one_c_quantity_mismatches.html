@@ -11,7 +11,7 @@
     {% for row in rows %}
       <tr>
         <td>{{ (row.checked_at|msk).strftime('%d.%m.%Y %H:%M') }}</td>
-        <td>{{ row.document_type }}</td><td>{{ row.document_number }}</td>
+        <td>{{ {'movement': 'Перемещение', 'inventory': 'Инвентаризация', 'receiving': 'Приёмка'}.get(row.document_type, row.document_type) }}</td><td>{{ row.document_number }}</td>
         <td>{{ row.barcode or '—' }}</td><td>{{ row.item_name or '—' }}</td>
         <td>{{ row.wms_qty | round(3) }}</td><td>{{ row.one_c_qty | round(3) }}</td>
         <td class="text-danger fw-bold">{{ '%+g'|format(row.diff()) }}</td>

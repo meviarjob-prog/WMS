@@ -6,6 +6,7 @@
 поставщику по приемке (см. receiving.complete/разбраковка)."""
 
 import json
+from datetime import datetime
 
 from wms.extensions import db
 from wms.models import (
@@ -70,6 +71,87 @@ def _ship_box(
 def test_export_requires_token(db, client):
     resp = client.get("/integrations/1c/api/export")
     assert resp.status_code == 401
+
+
+def test_reconciliation_requires_token(db, client):
+    resp = client.get("/integrations/1c/api/reconciliation")
+    assert resp.status_code == 401
+
+
+def test_reconciliation_validates_and_applies_period(db, client_logged_in):
+    _set_token()
+    response = client_logged_in.get(
+        "/integrations/1c/api/reconciliation?date_from=2026-10-01&date_to=2026-09-01",
+        headers={"X-1C-Token": TOKEN},
+    )
+    assert response.status_code == 400
+
+    response = client_logged_in.get(
+        "/integrations/1c/api/reconciliation?date_from=2099-01-01&date_to=2099-01-31",
+        headers={"X-1C-Token": TOKEN},
+    )
+    assert response.status_code == 200
+    assert response.get_json()["movements"] == []
+    assert response.get_json()["receivings"] == []
+
+
+def test_reconciliation_returns_synced_movements_and_invoice_receivings(
+    db, client_logged_in
+):
+    _set_token()
+    sender = Warehouse(code="WH-REC-S", name="Основной склад")
+    receiver = Warehouse(code="WH-REC-T", name="ОЗОН: Казань", marketplace="ozon")
+    item = _make_item("460000000001", "Товар сверки")
+    db.session.add_all([sender, receiver])
+    db.session.commit()
+
+    # Один SKU лежит в двух коробах — для 1С он должен уйти одной сводной
+    # строкой, иначе объединенная строка документа даст ложное расхождение.
+    first = _ship_box(sender, receiver, item, 4, "REC-A", client_logged_in)
+    extra_box = Box(box_number="REC-B", warehouse_id=sender.id, status="open")
+    db.session.add(extra_box)
+    db.session.commit()
+    db.session.add_all(
+        [
+            BoxItem(box_id=extra_box.id, nomenclature_id=item.id, qty=6),
+            MovementLine(
+                document_id=first.id,
+                box_id=extra_box.id,
+                from_warehouse_id=sender.id,
+            ),
+        ]
+    )
+    first.synced_to_1c_at = datetime.utcnow()
+
+    receiving = ReceivingDocument(
+        number="INV-RECONCILE",
+        warehouse_id=sender.id,
+        status="completed",
+        invoice_file_name="invoice.xlsx",
+        completed_at=datetime.utcnow(),
+    )
+    db.session.add(receiving)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=receiving.id, nomenclature_id=item.id, qty=7))
+    db.session.commit()
+
+    response = client_logged_in.get(
+        "/integrations/1c/api/reconciliation", headers={"X-1C-Token": TOKEN}
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    movement = next(row for row in payload["movements"] if row["id"] == first.id)
+    assert movement["lines"] == [
+        {"barcode": item.barcode, "name": item.name, "qty": 10.0}
+    ]
+    assert payload["receivings"] == [
+        {
+            "id": receiving.id,
+            "number": receiving.number,
+            "invoice_number": receiving.number,
+            "lines": [{"barcode": item.barcode, "name": item.name, "qty": 7.0}],
+        }
+    ]
 
 
 def test_export_movement_uses_fulfillment_warehouse_by_default(db, client_logged_in):
