@@ -14,7 +14,10 @@ def test_guide_requires_login(client):
 def test_guide_reachable_by_ordinary_staff(db, client_logged_in):
     resp = client_logged_in.get("/onboarding/")
     assert resp.status_code == 200
-    assert "Первый день на складе" in resp.get_data(as_text=True)
+    html = resp.get_data(as_text=True)
+    assert "Первый день на складе" in html
+    assert "Сверка документов WMS и 1С" in html
+    assert "ДатаНачалаСверки" not in html  # курс объясняет работу, а не внутренние имена полей
 
 
 def test_guide_reachable_by_section_restricted_user(db, client):
