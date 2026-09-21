@@ -39,6 +39,64 @@ def test_assigned_employee_cannot_move_box_from_another_warehouse(db, client):
     assert MovementDocument.query.count() == 0
 
 
+def test_admin_can_choose_sender_even_when_admin_has_assigned_warehouse(
+    db, client_logged_in, admin_user
+):
+    assigned = Warehouse(code="ADM-A", name="Назначенный админу")
+    selected = Warehouse(code="ADM-B", name="Выбранный отправитель")
+    target = Warehouse(code="ADM-C", name="Получатель")
+    db.session.add_all([assigned, selected, target])
+    db.session.commit()
+    admin_user.warehouse_id = assigned.id
+    db.session.commit()
+
+    client_logged_in.post(
+        "/movement/new",
+        data={"from_warehouse_id": selected.id, "to_warehouse_id": target.id},
+    )
+
+    assert MovementDocument.query.one().from_warehouse_id == selected.id
+
+
+def test_admin_can_edit_sender_before_dispatch(db, client_logged_in):
+    old = Warehouse(code="EDIT-A", name="Старый отправитель")
+    new = Warehouse(code="EDIT-B", name="Новый отправитель")
+    target = Warehouse(code="EDIT-C", name="Получатель")
+    db.session.add_all([old, new, target])
+    db.session.commit()
+    doc = MovementDocument(number="PER-EDIT", from_warehouse_id=old.id, to_warehouse_id=target.id)
+    db.session.add(doc)
+    db.session.commit()
+
+    client_logged_in.post(
+        f"/movement/{doc.id}/change-sender", data={"from_warehouse_id": new.id}
+    )
+
+    assert MovementDocument.query.get(doc.id).from_warehouse_id == new.id
+
+
+def test_admin_cannot_change_sender_while_boxes_are_on_another_warehouse(
+    db, client_logged_in
+):
+    old = Warehouse(code="LOCK-A", name="Фактический склад")
+    new = Warehouse(code="LOCK-B", name="Неверный склад")
+    target = Warehouse(code="LOCK-C", name="Получатель")
+    db.session.add_all([old, new, target])
+    db.session.commit()
+    box = Box(box_number="LOCK-BOX", warehouse_id=old.id)
+    doc = MovementDocument(number="PER-LOCK", from_warehouse_id=old.id, to_warehouse_id=target.id)
+    db.session.add_all([box, doc])
+    db.session.commit()
+    db.session.add(MovementLine(document_id=doc.id, box_id=box.id, from_warehouse_id=old.id))
+    db.session.commit()
+
+    client_logged_in.post(
+        f"/movement/{doc.id}/change-sender", data={"from_warehouse_id": new.id}
+    )
+
+    assert MovementDocument.query.get(doc.id).from_warehouse_id == old.id
+
+
 def test_thirtieth_ozon_box_closes_document_and_next_box_starts_new(db, client_logged_in):
     sender = Warehouse(code="S30", name="Основной")
     target = Warehouse(code="O30", name="Краснодар", marketplace="ozon")

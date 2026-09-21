@@ -25,6 +25,17 @@
       {% endif %}
     </h3>
     <div class="text-muted">{{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
+    {% if current_user.is_admin and doc.status in ('draft', 'collected') %}
+    <form method="post" action="{{ url_for('movement.change_sender', doc_id=doc.id) }}" class="d-flex gap-1 align-items-center mt-2">
+      <label class="small text-muted text-nowrap" for="senderWarehouse{{ doc.id }}">Склад-отправитель:</label>
+      <select id="senderWarehouse{{ doc.id }}" name="from_warehouse_id" class="form-select form-select-sm" style="max-width:300px">
+        {% for wh in warehouses %}
+        <option value="{{ wh.id }}" {% if wh.id == doc.from_warehouse_id %}selected{% endif %}>{{ wh.code }} — {{ wh.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-sm btn-outline-secondary">Сохранить</button>
+    </form>
+    {% endif %}
   </div>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>

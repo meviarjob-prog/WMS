@@ -609,9 +609,14 @@ def new_document():
         warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
         return render_template("movement/new.html", warehouses=warehouses, assigned_warehouse=current_user.warehouse)
 
-    from_warehouse_id = current_user.warehouse_id
-    if current_user.is_admin and not from_warehouse_id:
-        from_warehouse_id = request.form.get("from_warehouse_id", type=int)
+    # Администратор может выбрать отправителя вручную, даже если ему самому
+    # назначен рабочий склад. Для обычного сотрудника поле всегда жестко
+    # определяется его рабочим складом.
+    from_warehouse_id = (
+        request.form.get("from_warehouse_id", type=int)
+        if current_user.is_admin
+        else current_user.warehouse_id
+    )
     if not current_user.is_admin and not from_warehouse_id:
         flash("Администратор еще не назначил вам рабочий склад", "danger")
         return redirect(url_for("movement.new_document"))
@@ -653,11 +658,54 @@ def new_document():
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
+@bp.route("/<int:doc_id>/change-sender", methods=["POST"])
+def change_sender(doc_id):
+    """Исправление склада-отправителя администратором до отправки."""
+    if not current_user.is_admin:
+        abort(404)
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status not in ("draft", "collected"):
+        flash("Склад-отправитель можно изменить только до отправки перемещения", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    warehouse_id = request.form.get("from_warehouse_id", type=int)
+    warehouse = Warehouse.query.filter_by(id=warehouse_id, is_active=True).first()
+    if not warehouse:
+        flash("Выбранный склад не найден или отключен", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+    if warehouse.id == doc.to_warehouse_id:
+        flash("Склад-отправитель и склад назначения не могут совпадать", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    wrong_boxes = [line.box.box_number for line in doc.lines if line.box.warehouse_id != warehouse.id]
+    if wrong_boxes:
+        shown = ", ".join(wrong_boxes[:5]) + ("…" if len(wrong_boxes) > 5 else "")
+        flash(
+            f"Нельзя выбрать этот склад: короба {shown} находятся на другом складе. "
+            "Сначала переместите их документом.",
+            "danger",
+        )
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    doc.from_warehouse_id = warehouse.id
+    for line in doc.lines:
+        line.from_warehouse_id = warehouse.id
+        line.from_cell_id = line.box.cell_id
+    db.session.commit()
+    flash(f"Склад-отправитель изменен на «{warehouse.name}»", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
 @bp.route("/<int:doc_id>")
 def detail(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)
     lines = doc.lines.order_by(MovementLine.id.asc()).all()
-    return render_template("movement/detail.html", doc=doc, lines=lines)
+    warehouses = (
+        Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
+        if current_user.is_admin and doc.status in ("draft", "collected")
+        else []
+    )
+    return render_template("movement/detail.html", doc=doc, lines=lines, warehouses=warehouses)
 
 
 def _revert_shipment_fulfillment(box, warehouse_id, shipped_at=None):
