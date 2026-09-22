@@ -1097,3 +1097,85 @@ class OzonArticleMapping(db.Model):
     barcode = db.Column(db.String(50), unique=True, nullable=False, index=True)
     article = db.Column(db.String(200), nullable=False)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# Этапы производства до прихода на склад (после — уже ведется в WMS сквозь
+# ReceivingDocument/PlacementDocument/MovementDocument) — см. панель
+# руководителя. Порядок важен: используется и для последовательного
+# "продвижения" этапа при синхронизации (см. production_orders.
+# _apply_stage_from_status), и для отображения воронки в нужном порядке.
+PRODUCTION_ORDER_STAGE_KEYS = [
+    "order_placed",
+    "workshop_search",
+    "sample_sewing",
+    "sample_approval",
+    "batch_sewing",
+    "batch_ready",
+]
+PRODUCTION_ORDER_STAGE_LABELS = {
+    "order_placed": "Заказ на продукцию",
+    "workshop_search": "Поиск цеха",
+    "sample_sewing": "Отшив образца",
+    "sample_approval": "Согласование образца",
+    "batch_sewing": "Отшив партии",
+    "batch_ready": "Партия готова к отгрузке",
+}
+
+
+class ProductionOrder(db.Model):
+    """Заказ на пошив продукции — этапы ДО прихода на склад: заказ, поиск
+    цеха, отшив образца, согласование образца, отшив партии (см. чат —
+    панель руководителя). Источник данных — внешняя Google-таблица, которую
+    ведет менеджер вручную (см. production_orders.py — синхронизация по
+    кнопке в самой таблице, по аналогии с планом отгрузок, см.
+    shipment_plan.google_button_setup).
+
+    Таблица обычно хранит только ТЕКУЩИЙ статус заказа, без истории — сама
+    WMS не может знать даты этапов, которые уже прошли ДО первой
+    синхронизации. Если в таблице есть отдельные колонки с датами этапов
+    (см. production_orders_import._STAGE_DATE_CANDIDATES), даты берутся из
+    них напрямую — это надежный случай. Если таких колонок нет, WMS
+    засчитывает дату этапа тем моментом, когда САМА впервые увидела эту
+    строку в этом статусе (при каждой синхронизации) — это лишь
+    приближение: если менеджер сменил статус за день до синхронизации (или
+    вообще ни разу не запускал ее раньше), фактическая длительность этапа
+    в отчете будет неточной. Чем чаще идет синхронизация, тем точнее."""
+
+    __tablename__ = "production_orders"
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_number = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    marketplace = db.Column(db.String(20), nullable=True)
+    # Текущий этап — один из PRODUCTION_ORDER_STAGE_KEYS, либо NULL, если
+    # текст статуса из таблицы не удалось сопоставить ни с одним из них
+    # (см. raw_status — тогда там видно, что именно не распозналось).
+    current_stage = db.Column(db.String(30), nullable=True)
+    raw_status = db.Column(db.String(200), nullable=True)
+
+    order_placed_at = db.Column(db.DateTime, nullable=True)
+    workshop_search_started_at = db.Column(db.DateTime, nullable=True)
+    sample_sewing_started_at = db.Column(db.DateTime, nullable=True)
+    sample_approval_started_at = db.Column(db.DateTime, nullable=True)
+    batch_sewing_started_at = db.Column(db.DateTime, nullable=True)
+    batch_ready_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    last_synced_at = db.Column(db.DateTime, nullable=True)
+
+    _STAGE_TIMESTAMP_COLUMNS = {
+        "order_placed": "order_placed_at",
+        "workshop_search": "workshop_search_started_at",
+        "sample_sewing": "sample_sewing_started_at",
+        "sample_approval": "sample_approval_started_at",
+        "batch_sewing": "batch_sewing_started_at",
+        "batch_ready": "batch_ready_at",
+    }
+
+    def stage_timestamp(self, stage_key):
+        column = self._STAGE_TIMESTAMP_COLUMNS.get(stage_key)
+        return getattr(self, column) if column else None
+
+    def set_stage_timestamp(self, stage_key, value):
+        column = self._STAGE_TIMESTAMP_COLUMNS.get(stage_key)
+        if column:
+            setattr(self, column, value)

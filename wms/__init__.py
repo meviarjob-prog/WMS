@@ -289,6 +289,7 @@ def create_app(config_class=Config):
     from .blueprints.production import bp as production_bp
     from .blueprints.api import bp as api_bp
     from .blueprints.shipment_plan import bp as shipment_plan_bp
+    from .blueprints.production_orders import bp as production_orders_bp
     from .blueprints.integration_1c import bp as integration_1c_bp
     from .blueprints.onboarding import bp as onboarding_bp
     from .blueprints.marketplace_export import bp as marketplace_export_bp
@@ -307,6 +308,7 @@ def create_app(config_class=Config):
     app.register_blueprint(production_bp, url_prefix="/production")
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(shipment_plan_bp, url_prefix="/shipment-plan")
+    app.register_blueprint(production_orders_bp, url_prefix="/production-orders")
     app.register_blueprint(integration_1c_bp, url_prefix="/integrations/1c")
     app.register_blueprint(onboarding_bp, url_prefix="/onboarding")
     app.register_blueprint(marketplace_export_bp, url_prefix="/marketplace-export")
@@ -331,6 +333,9 @@ def create_app(config_class=Config):
     def require_login():
         from .blueprints.integration_1c import API_1C_PUBLIC_ENDPOINTS
         from .blueprints.shipment_plan import GOOGLE_SHEETS_PUBLIC_ENDPOINTS
+        from .blueprints.production_orders import (
+            GOOGLE_SHEETS_PUBLIC_ENDPOINTS as PRODUCTION_ORDERS_PUBLIC_ENDPOINTS,
+        )
         from .models import User
 
         if request.endpoint is None:
@@ -361,6 +366,7 @@ def create_app(config_class=Config):
             or request.endpoint.startswith("auth.")
             or request.endpoint in API_1C_PUBLIC_ENDPOINTS
             or request.endpoint in GOOGLE_SHEETS_PUBLIC_ENDPOINTS
+            or request.endpoint in PRODUCTION_ORDERS_PUBLIC_ENDPOINTS
         ):
             return None
         if not current_user.is_authenticated:

@@ -100,6 +100,60 @@ def load_distribution_workbook(app):
     return stream, titles
 
 
+def resolve_sheet_title(app, spreadsheet_id, sheet_gid):
+    """Название листа по его gid (числу после "gid=" в ссылке на таблицу) —
+    надежнее, чем хранить название листа текстом: его могут переименовать,
+    а gid не меняется. Возвращает None, если лист с таким gid не найден."""
+    service = _service(app)
+    metadata = service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets.properties(sheetId,title)",
+    ).execute()
+    for sheet in metadata.get("sheets", []):
+        if str(sheet["properties"]["sheetId"]) == str(sheet_gid):
+            return sheet["properties"]["title"]
+    return None
+
+
+def read_sheet_table(app, spreadsheet_id, sheet_title):
+    """Читает один лист как простую таблицу «заголовок + строки» — первая
+    непустая строка считается заголовком, дальше каждая строка отдается
+    структурой {название_колонки: значение}. В отличие от
+    load_distribution_workbook (заточен под план отгрузок — многоуровневые
+    заголовки, колонки-города), здесь формат листа заранее не предполагается
+    вообще — только "таблица с шапкой", подходит для любого простого
+    списка (см. production_orders_import)."""
+    if not google_sheets_configured(app):
+        raise RuntimeError("Google Таблица не настроена")
+    service = _service(app)
+    response = service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=_a1_sheet(sheet_title),
+        valueRenderOption="UNFORMATTED_VALUE",
+        dateTimeRenderOption="FORMATTED_STRING",
+    ).execute()
+    values = response.get("values", [])
+    header_row_idx = None
+    for idx, row in enumerate(values):
+        if any(str(cell).strip() for cell in row):
+            header_row_idx = idx
+            break
+    if header_row_idx is None:
+        return [], []
+    headers = [str(cell).strip() for cell in values[header_row_idx]]
+    rows = []
+    for raw_row in values[header_row_idx + 1 :]:
+        if not any(str(cell).strip() for cell in raw_row if cell is not None):
+            continue
+        row = {}
+        for col_idx, header in enumerate(headers):
+            if not header:
+                continue
+            row[header] = raw_row[col_idx] if col_idx < len(raw_row) else None
+        rows.append(row)
+    return headers, rows
+
+
 def _movement_totals():
     totals = defaultdict(
         lambda: {
