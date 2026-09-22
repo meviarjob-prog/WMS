@@ -66,6 +66,31 @@ def _configure_sheet(monkeypatch, headers, rows, sheet_id="SHEET1", gid="123"):
     )
 
 
+def test_sync_uses_default_sheet_id_when_settings_never_saved(db, monkeypatch):
+    """Форма настроек показывает ID таблицы по умолчанию, подставленный (см.
+    DEFAULT_SHEET_ID) — но пока "Сохранить" ни разу не нажимали, в базе
+    ничего нет. Синхронизация должна все равно сработать по этому же
+    значению по умолчанию, а не требовать обязательного сохранения формы
+    (см. чат — репортили именно эту ошибку)."""
+    from wms.blueprints.production_orders import DEFAULT_SHEET_ID, sync_production_orders
+
+    assert AppSetting.query.get("production_sheet_id") is None
+
+    monkeypatch.setattr("wms.blueprints.production_orders.google_sheets_configured", lambda app: True)
+    monkeypatch.setattr(
+        "wms.blueprints.production_orders.list_sheet_titles", lambda app, sid: ["Заказы"] if sid == DEFAULT_SHEET_ID else []
+    )
+    monkeypatch.setattr(
+        "wms.blueprints.production_orders.read_sheet_table",
+        lambda app, sid, title: (["№ заказа", "Статус"], [{"№ заказа": "ЗК-999", "Статус": "Заказ размещен"}]),
+    )
+
+    created, _updated, _diag = sync_production_orders()
+
+    assert created == 1
+    assert ProductionOrder.query.filter_by(order_number="ЗК-999").first() is not None
+
+
 def test_sync_reads_all_sheets_when_gid_not_set(db, monkeypatch):
     """Пустой gid в настройках (см. чат — "все страницы с актуальными
     датами, а не одна") означает читать ВСЕ листы таблицы, а не один
