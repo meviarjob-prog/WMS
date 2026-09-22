@@ -17,7 +17,7 @@ from ..models import AppSetting, PRODUCTION_ORDER_STAGE_KEYS, PRODUCTION_ORDER_S
 from ..utils.google_sheets import (
     google_sheets_configured,
     list_sheet_titles,
-    read_sheet_table,
+    read_sheet_tables,
     resolve_sheet_title,
 )
 from ..utils.production_orders_import import map_columns, match_stage
@@ -266,8 +266,15 @@ def sync_production_orders():
     now = datetime.utcnow()
     sheet_reports = []
 
+    # Одним HTTP-запросом на ВСЕ листы разом (batchGet) — при нескольких
+    # листах (режим "читать все листы таблицы") это принципиально быстрее,
+    # чем по отдельному запросу на каждый: настройки таблицы могут иметь
+    # много листов (по периодам/партиям), и по одному запросу на лист
+    # синхронизация может не уложиться в таймаут веб-сервера.
+    tables = read_sheet_tables(current_app, spreadsheet_id, titles)
+
     for title in titles:
-        headers, rows = read_sheet_table(current_app, spreadsheet_id, title)
+        headers, rows = tables.get(title, ([], []))
         columns, created, updated, skipped, unmatched_statuses = _sync_sheet_rows(headers, rows, now)
         sheet_reports.append(
             {

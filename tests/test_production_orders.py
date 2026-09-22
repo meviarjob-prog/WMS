@@ -2,7 +2,7 @@
 прихода на склад, синхронизация из Google-таблицы менеджера по кнопке
 Apps Script (по аналогии с планом отгрузок — см. test_google_sheets_sync.py).
 Реальный вызов Google Sheets API не тестируется — вместо этого
-read_sheet_table/resolve_sheet_title подменяются моком, как и в тестах
+read_sheet_tables/resolve_sheet_title подменяются моком, как и в тестах
 плана отгрузок."""
 
 from datetime import datetime, timedelta
@@ -62,7 +62,8 @@ def _configure_sheet(monkeypatch, headers, rows, sheet_id="SHEET1", gid="123"):
         "wms.blueprints.production_orders.resolve_sheet_title", lambda app, sid, gid_: "Заказы"
     )
     monkeypatch.setattr(
-        "wms.blueprints.production_orders.read_sheet_table", lambda app, sid, title: (headers, rows)
+        "wms.blueprints.production_orders.read_sheet_tables",
+        lambda app, sid, titles: {t: (headers, rows) for t in titles},
     )
 
 
@@ -81,8 +82,10 @@ def test_sync_uses_default_sheet_id_when_settings_never_saved(db, monkeypatch):
         "wms.blueprints.production_orders.list_sheet_titles", lambda app, sid: ["Заказы"] if sid == DEFAULT_SHEET_ID else []
     )
     monkeypatch.setattr(
-        "wms.blueprints.production_orders.read_sheet_table",
-        lambda app, sid, title: (["№ заказа", "Статус"], [{"№ заказа": "ЗК-999", "Статус": "Заказ размещен"}]),
+        "wms.blueprints.production_orders.read_sheet_tables",
+        lambda app, sid, titles: {
+            t: (["№ заказа", "Статус"], [{"№ заказа": "ЗК-999", "Статус": "Заказ размещен"}]) for t in titles
+        },
     )
 
     created, _updated, _diag = sync_production_orders()
@@ -116,7 +119,8 @@ def test_sync_reads_all_sheets_when_gid_not_set(db, monkeypatch):
         "wms.blueprints.production_orders.list_sheet_titles", lambda app, sid: list(sheets.keys())
     )
     monkeypatch.setattr(
-        "wms.blueprints.production_orders.read_sheet_table", lambda app, sid, title: sheets[title]
+        "wms.blueprints.production_orders.read_sheet_tables",
+        lambda app, sid, titles: {t: sheets[t] for t in titles},
     )
 
     created, updated, diagnostics = sync_production_orders()
@@ -145,7 +149,8 @@ def test_sync_same_order_on_two_sheets_does_not_duplicate(db, monkeypatch):
         "wms.blueprints.production_orders.list_sheet_titles", lambda app, sid: list(sheets.keys())
     )
     monkeypatch.setattr(
-        "wms.blueprints.production_orders.read_sheet_table", lambda app, sid, title: sheets[title]
+        "wms.blueprints.production_orders.read_sheet_tables",
+        lambda app, sid, titles: {t: sheets[t] for t in titles},
     )
 
     created, updated, _diag = sync_production_orders()
