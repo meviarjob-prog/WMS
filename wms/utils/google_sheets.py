@@ -116,6 +116,18 @@ def resolve_sheet_title(app, spreadsheet_id, sheet_gid):
     return None
 
 
+def list_sheet_titles(app, spreadsheet_id):
+    """Названия всех листов таблицы — для случая, когда заказы разложены по
+    нескольким листам (например, по датам/периодам) и нужно читать их все,
+    а не один конкретный gid (см. production_orders.sync_production_orders)."""
+    service = _service(app)
+    metadata = service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets.properties(title)",
+    ).execute()
+    return [sheet["properties"]["title"] for sheet in metadata.get("sheets", [])]
+
+
 def read_sheet_table(app, spreadsheet_id, sheet_title):
     """Читает один лист как простую таблицу «заголовок + строки» — первая
     непустая строка считается заголовком, дальше каждая строка отдается

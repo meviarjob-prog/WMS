@@ -66,6 +66,72 @@ def _configure_sheet(monkeypatch, headers, rows, sheet_id="SHEET1", gid="123"):
     )
 
 
+def test_sync_reads_all_sheets_when_gid_not_set(db, monkeypatch):
+    """Пустой gid в настройках (см. чат — "все страницы с актуальными
+    датами, а не одна") означает читать ВСЕ листы таблицы, а не один
+    конкретный, и сводить заказы с них вместе."""
+    from wms.blueprints.production_orders import sync_production_orders
+
+    db.session.add(AppSetting(key="production_sheet_id", value="SHEET1"))
+    # gid намеренно не сохранен вообще.
+    db.session.commit()
+
+    sheets = {
+        "Заказы сентябрь": (
+            ["№ заказа", "Статус"],
+            [{"№ заказа": "ЗК-101", "Статус": "Отшив образца"}],
+        ),
+        "Заказы октябрь": (
+            ["№ заказа", "Статус"],
+            [{"№ заказа": "ЗК-102", "Статус": "Отшив партии"}],
+        ),
+    }
+    monkeypatch.setattr("wms.blueprints.production_orders.google_sheets_configured", lambda app: True)
+    monkeypatch.setattr(
+        "wms.blueprints.production_orders.list_sheet_titles", lambda app, sid: list(sheets.keys())
+    )
+    monkeypatch.setattr(
+        "wms.blueprints.production_orders.read_sheet_table", lambda app, sid, title: sheets[title]
+    )
+
+    created, updated, diagnostics = sync_production_orders()
+
+    assert created == 2
+    assert updated == 0
+    assert ProductionOrder.query.filter_by(order_number="ЗК-101").first().current_stage == "sample_sewing"
+    assert ProductionOrder.query.filter_by(order_number="ЗК-102").first().current_stage == "batch_sewing"
+    assert "Заказы сентябрь" in diagnostics
+    assert "Заказы октябрь" in diagnostics
+    assert "Прочитано листов: 2" in diagnostics
+
+
+def test_sync_same_order_on_two_sheets_does_not_duplicate(db, monkeypatch):
+    from wms.blueprints.production_orders import sync_production_orders
+
+    db.session.add(AppSetting(key="production_sheet_id", value="SHEET1"))
+    db.session.commit()
+
+    sheets = {
+        "Лист 1": (["№ заказа", "Статус"], [{"№ заказа": "ЗК-200", "Статус": "Отшив образца"}]),
+        "Лист 2": (["№ заказа", "Статус"], [{"№ заказа": "ЗК-200", "Статус": "Образец согласован"}]),
+    }
+    monkeypatch.setattr("wms.blueprints.production_orders.google_sheets_configured", lambda app: True)
+    monkeypatch.setattr(
+        "wms.blueprints.production_orders.list_sheet_titles", lambda app, sid: list(sheets.keys())
+    )
+    monkeypatch.setattr(
+        "wms.blueprints.production_orders.read_sheet_table", lambda app, sid, title: sheets[title]
+    )
+
+    created, updated, _diag = sync_production_orders()
+
+    assert ProductionOrder.query.filter_by(order_number="ЗК-200").count() == 1
+    assert created == 1
+    assert updated == 1
+    # Последний прочитанный лист выигрывает — этап должен быть тем, что на "Лист 2".
+    assert ProductionOrder.query.filter_by(order_number="ЗК-200").first().current_stage == "sample_approval"
+
+
 def test_sync_creates_order_and_stamps_current_stage(db, monkeypatch):
     from wms.blueprints.production_orders import sync_production_orders
 

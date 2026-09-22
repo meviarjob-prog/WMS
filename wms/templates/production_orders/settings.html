@@ -26,22 +26,31 @@
              placeholder="из ссылки: .../spreadsheets/d/ЭТОТ-КУСОК/edit">
     </div>
     <div class="col-md-3">
-      <label class="form-label">gid листа</label>
+      <label class="form-label">gid листа (необязательно)</label>
       <input type="text" name="sheet_gid" class="form-control" value="{{ sheet_gid }}"
-             placeholder="из ссылки: ...#gid=ЧИСЛО">
+             placeholder="пусто = все листы">
     </div>
     <div class="col-md-2">
       <button type="submit" class="btn btn-primary w-100">Сохранить</button>
     </div>
   </form>
   <p class="text-muted small mt-2 mb-0">
-    Поля уже подставлены из ссылки на таблицу, которую вы присылали ранее —
+    ID таблицы уже подставлен из ссылки, которую вы присылали ранее —
     проверьте и нажмите «Сохранить», если всё верно.
   </p>
   <p class="text-muted small mt-2 mb-0">
-    Оба значения берутся прямо из адресной строки открытой таблицы:
+    <b>Пустой gid — WMS читает ВСЕ листы таблицы</b> и сводит заказы с них
+    вместе (по номеру заказа, поэтому один и тот же заказ, встреченный на
+    двух листах, не задвоится). Так и стоит оставить, если заказы разложены
+    по нескольким листам/периодам. Указывайте gid, только если нужно
+    ограничиться ровно одним конкретным листом — его можно взять из
+    адресной строки открытого листа:
     <code>https://docs.google.com/spreadsheets/d/<b>ID_ТАБЛИЦЫ</b>/edit?gid=<b>GID_ЛИСТА</b></code>.
-    Таблицу нужно расшарить на e-mail сервис-аккаунта (он указан в файле ключа, поле <code>client_email</code>) — иначе Google откажет в доступе.
+  </p>
+  <p class="text-muted small mt-2 mb-0">
+    В любом случае таблицу нужно расшарить на e-mail сервис-аккаунта (он
+    указан в файле ключа, поле <code>client_email</code>) — иначе Google
+    откажет в доступе.
   </p>
 </div>
 

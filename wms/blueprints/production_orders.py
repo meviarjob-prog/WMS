@@ -14,19 +14,27 @@ from flask_login import current_user
 
 from ..extensions import db
 from ..models import AppSetting, PRODUCTION_ORDER_STAGE_KEYS, PRODUCTION_ORDER_STAGE_LABELS, ProductionOrder
-from ..utils.google_sheets import google_sheets_configured, read_sheet_table, resolve_sheet_title
+from ..utils.google_sheets import (
+    google_sheets_configured,
+    list_sheet_titles,
+    read_sheet_table,
+    resolve_sheet_title,
+)
 from ..utils.production_orders_import import map_columns, match_stage
 
 bp = Blueprint("production_orders", __name__)
 
 SHEET_ID_KEY = "production_sheet_id"
 SHEET_GID_KEY = "production_sheet_gid"
-# Подставляются по умолчанию в форму настроек, пока их явно не сохранили —
-# это ID и gid таблицы заказов на производство и статусов, которую прислали
-# в чате. Нажатие "Сохранить" без изменений зафиксирует их как обычную
-# настройку — ничего не подключается сама по себе.
+# ID подставляется по умолчанию в форму настроек, пока его явно не
+# сохранили — это таблица заказов на производство и статусов, которую
+# прислали в чате. Нажатие "Сохранить" без изменений зафиксирует его как
+# обычную настройку — ничего не подключается само по себе.
+# gid по умолчанию НЕ подставляется (пусто = читать все листы таблицы,
+# см. чат — "все страницы с актуальными датами, а не одна") — конкретный
+# лист указывают только если нужно ограничиться одним.
 DEFAULT_SHEET_ID = "1Pakv6rjDxXtObySNkED2KzF9XFgCXUILOA8SmCDUPWA"
-DEFAULT_SHEET_GID = "307807198"
+DEFAULT_SHEET_GID = ""
 SYNC_TOKEN_KEY = "production_sheet_token"
 SYNC_AT_KEY = "production_sheet_synced_at"
 SYNC_ERROR_KEY = "production_sheet_error"
@@ -132,61 +140,12 @@ def _advance_stage(order, stage, now):
     order.current_stage = stage
 
 
-def _build_diagnostics(headers, columns, total_rows, created, updated, skipped, unmatched_statuses):
-    lines = []
-    lines.append(f"Заголовки листа ({len(headers)}): " + ", ".join(headers) if headers else "Заголовки листа: не найдены")
-    lines.append(
-        "№ заказа -> "
-        + (f'"{columns["order_number"]}"' if columns["order_number"] else "НЕ НАЙДЕНА — заказы без номера пропускаются")
-    )
-    lines.append("Маркетплейс -> " + (f'"{columns["marketplace"]}"' if columns["marketplace"] else "не найдена (необязательно)"))
-    lines.append(
-        "Статус/этап -> "
-        + (f'"{columns["status"]}"' if columns["status"] else "НЕ НАЙДЕНА — этап не будет определяться по статусу")
-    )
-    found_dates = [
-        f"{PRODUCTION_ORDER_STAGE_LABELS[stage]} -> \"{col}\""
-        for stage, col in columns["stage_dates"].items()
-        if col
-    ]
-    if found_dates:
-        lines.append("Даты этапов найдены напрямую: " + "; ".join(found_dates))
-    else:
-        lines.append(
-            "Отдельных колонок с датами этапов не найдено — даты будут "
-            "проставляться по факту синхронизации (см. подсказку на этой странице)."
-        )
-    lines.append(
-        f"Строк обработано: {total_rows} (создано заказов {created}, обновлено {updated}, "
-        f"без номера заказа пропущено {skipped})"
-    )
-    if unmatched_statuses:
-        sample = ", ".join(f'"{s}"' for s in unmatched_statuses[:10])
-        lines.append(
-            f"Нераспознанные статусы ({len(unmatched_statuses)} строк): {sample}"
-            + (" ..." if len(unmatched_statuses) > 10 else "")
-        )
-    return "\n".join(lines)
-
-
-def sync_production_orders():
-    spreadsheet_id = _get_setting(SHEET_ID_KEY)
-    if not spreadsheet_id:
-        raise RuntimeError("Не указан ID Google-таблицы с заказами на производство")
-    if not google_sheets_configured(current_app):
-        raise RuntimeError("В WMS не настроен ключ Google Таблицы (см. страницу «Обмен с 1С» — тот же ключ)")
-
-    gid = _get_setting(SHEET_GID_KEY)
-    if not gid:
-        raise RuntimeError("Не указан gid листа (число после \"gid=\" в ссылке на таблицу)")
-    title = resolve_sheet_title(current_app, spreadsheet_id, gid)
-    if not title:
-        raise RuntimeError(f"Лист с gid={gid} не найден в таблице — проверьте ссылку и доступ сервис-аккаунта")
-
-    headers, rows = read_sheet_table(current_app, spreadsheet_id, title)
+def _sync_sheet_rows(headers, rows, now):
+    """Разбирает строки ОДНОГО листа и заводит/обновляет ProductionOrder —
+    общая логика для режима "один лист по gid" и "все листы таблицы" (см.
+    sync_production_orders). Возвращает (columns, created, updated, skipped,
+    unmatched_statuses) для диагностики."""
     columns = map_columns(headers)
-
-    now = datetime.utcnow()
     created = 0
     updated = 0
     skipped = 0
@@ -227,12 +186,105 @@ def sync_production_orders():
 
         order.last_synced_at = now
 
-    diagnostics = _build_diagnostics(headers, columns, len(rows), created, updated, skipped, unmatched_statuses)
+    return columns, created, updated, skipped, unmatched_statuses
+
+
+def _build_diagnostics(sheet_reports):
+    """sheet_reports — список {title, headers, columns, rows_count, created,
+    updated, skipped, unmatched_statuses}, один элемент на прочитанный лист
+    (несколько — в режиме "все листы таблицы", см. sync_production_orders)."""
+    lines = []
+    total_created = sum(r["created"] for r in sheet_reports)
+    total_updated = sum(r["updated"] for r in sheet_reports)
+    total_skipped = sum(r["skipped"] for r in sheet_reports)
+    lines.append(
+        f"Прочитано листов: {len(sheet_reports)} — "
+        + ", ".join(f'"{r["title"]}"' for r in sheet_reports)
+    )
+    lines.append(
+        f"Всего строк обработано: {sum(r['rows_count'] for r in sheet_reports)} "
+        f"(создано заказов {total_created}, обновлено {total_updated}, "
+        f"без номера заказа пропущено {total_skipped})"
+    )
+    for report in sheet_reports:
+        columns = report["columns"]
+        lines.append(f"--- Лист \"{report['title']}\" ---")
+        lines.append(f"Заголовки ({len(report['headers'])}): " + (", ".join(report["headers"]) or "не найдены"))
+        lines.append(
+            "№ заказа -> "
+            + (f'"{columns["order_number"]}"' if columns["order_number"] else "НЕ НАЙДЕНА — заказы без номера пропускаются")
+        )
+        lines.append("Маркетплейс -> " + (f'"{columns["marketplace"]}"' if columns["marketplace"] else "не найдена (необязательно)"))
+        lines.append(
+            "Статус/этап -> "
+            + (f'"{columns["status"]}"' if columns["status"] else "НЕ НАЙДЕНА — этап не будет определяться по статусу")
+        )
+        found_dates = [
+            f"{PRODUCTION_ORDER_STAGE_LABELS[stage]} -> \"{col}\""
+            for stage, col in columns["stage_dates"].items()
+            if col
+        ]
+        if found_dates:
+            lines.append("Даты этапов найдены напрямую: " + "; ".join(found_dates))
+        if report["unmatched_statuses"]:
+            sample = ", ".join(f'"{s}"' for s in report["unmatched_statuses"][:10])
+            lines.append(
+                f"Нераспознанные статусы ({len(report['unmatched_statuses'])} строк): {sample}"
+                + (" ..." if len(report["unmatched_statuses"]) > 10 else "")
+            )
+    return "\n".join(lines)
+
+
+def sync_production_orders():
+    """Пустой gid в настройках (см. settings()) означает «читать ВСЕ листы
+    таблицы», а не один конкретный — на случай, если заказы разложены по
+    нескольким листам (периодам/партиям), см. чат. Заказы сопоставляются
+    между листами по номеру (order_number), так что один и тот же заказ,
+    встреченный на двух листах, не задвоится — просто обновится дважды."""
+    spreadsheet_id = _get_setting(SHEET_ID_KEY)
+    if not spreadsheet_id:
+        raise RuntimeError("Не указан ID Google-таблицы с заказами на производство")
+    if not google_sheets_configured(current_app):
+        raise RuntimeError("В WMS не настроен ключ Google Таблицы (см. страницу «Обмен с 1С» — тот же ключ)")
+
+    gid = _get_setting(SHEET_GID_KEY)
+    if gid:
+        title = resolve_sheet_title(current_app, spreadsheet_id, gid)
+        if not title:
+            raise RuntimeError(f"Лист с gid={gid} не найден в таблице — проверьте ссылку и доступ сервис-аккаунта")
+        titles = [title]
+    else:
+        titles = list_sheet_titles(current_app, spreadsheet_id)
+        if not titles:
+            raise RuntimeError("В таблице не найдено ни одного листа")
+
+    now = datetime.utcnow()
+    sheet_reports = []
+
+    for title in titles:
+        headers, rows = read_sheet_table(current_app, spreadsheet_id, title)
+        columns, created, updated, skipped, unmatched_statuses = _sync_sheet_rows(headers, rows, now)
+        sheet_reports.append(
+            {
+                "title": title,
+                "headers": headers,
+                "columns": columns,
+                "rows_count": len(rows),
+                "created": created,
+                "updated": updated,
+                "skipped": skipped,
+                "unmatched_statuses": unmatched_statuses,
+            }
+        )
+
+    diagnostics = _build_diagnostics(sheet_reports)
+    total_created = sum(r["created"] for r in sheet_reports)
+    total_updated = sum(r["updated"] for r in sheet_reports)
     _set_setting(SYNC_AT_KEY, now.strftime("%d.%m.%Y %H:%M:%S"))
     _set_setting(SYNC_ERROR_KEY, "")
     _set_setting(DIAGNOSTICS_KEY, diagnostics)
     db.session.commit()
-    return created, updated, diagnostics
+    return total_created, total_updated, diagnostics
 
 
 @bp.route("/")
