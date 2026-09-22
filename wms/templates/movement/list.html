@@ -147,7 +147,7 @@
     </div>
     <table class="table">
       <thead>
-        <tr><th></th><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Кол-во товара</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th class="text-center">Заявка на МП</th><th>№ заявки на МП</th><th></th></tr>
+        <tr><th></th><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Кол-во товара</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th class="text-center">Заявка на МП</th><th>№ заявки на МП</th>{% if current_user.is_admin %}<th class="text-center">Отгружено</th>{% endif %}<th></th></tr>
         <!-- Фильтр по каждой колонке — текстовое поле, ищет по подстроке в
              видимом тексте ячейки (см. applyColumnFilters в scripts ниже).
              "Заявка на МП" — выпадающий список (Да/Нет), т.к. там всего два
@@ -173,6 +173,7 @@
             </select>
           </th>
           <th><input type="text" class="form-control form-control-sm col-filter" data-col="12" placeholder="Фильтр"></th>
+          {% if current_user.is_admin %}<th></th>{% endif %}
           <th></th>
         </tr>
       </thead>
@@ -266,12 +267,25 @@
               <button type="submit" form="mpReqForm{{ d.id }}" class="btn btn-sm btn-outline-secondary">✓</button>
             </div>
           </td>
+          {% if current_user.is_admin %}
+          <td class="text-center">
+            {% set can_toggle_shipped = d.status == 'completed' and d.marketplace_request_created_at and d.marketplace_request_number %}
+            <button type="button" class="btn btn-sm btn-link p-0 text-primary toggle-flag-btn" style="font-size:1.15rem; line-height:1; text-decoration:none;"
+                  data-url="{{ url_for('movement.toggle_shipped', doc_id=d.id) }}"
+                  data-on-icon="✅" data-off-icon="☐"
+                  data-on-title-prefix="Передано транспорту "
+                  data-off-title="Отметить: транспорт забрал товар"
+                  title="{% if d.shipped_at %}Передано транспорту {{ (d.shipped_at|msk).strftime('%d.%m.%Y %H:%M') }}{% elif can_toggle_shipped %}Отметить: транспорт забрал товар{% else %}Сначала завершите перемещение, внесите номер и отметьте заявку на МП{% endif %}"
+                  {% if not can_toggle_shipped or d.received_at %}disabled{% endif %}
+                  >{{ '✅' if d.shipped_at else '☐' }}</button>
+          </td>
+          {% endif %}
           <td>
             <a href="{{ url_for('movement.export_document', doc_id=d.id) }}">Excel</a>
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="14" class="text-muted">Перемещений еще нет</td></tr>
+        <tr><td colspan="{{ 15 if current_user.is_admin else 14 }}" class="text-muted">Перемещений еще нет</td></tr>
       {% endfor %}
       </tbody>
     </table>

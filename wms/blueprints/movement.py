@@ -1018,6 +1018,42 @@ def mark_shipped(doc_id):
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
+@bp.route("/<int:doc_id>/toggle-shipped", methods=["POST"])
+def toggle_shipped(doc_id):
+    """Быстрая администраторская отметка передачи груза транспорту.
+
+    В отличие от обычной кнопки на странице документа, этот маршрут
+    возвращает JSON и используется галочкой в общем списке перемещений.
+    Снять ошибочную отметку можно только до фиксации приемки на МП.
+    """
+    if not current_user.is_admin:
+        abort(403)
+
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status != "completed":
+        return jsonify(ok=False, error="Сначала завершите сборку перемещения"), 400
+    if not doc.marketplace_request_created_at or not (
+        doc.marketplace_request_number or ""
+    ).strip():
+        return jsonify(
+            ok=False,
+            error="Сначала внесите номер и отметьте подачу заявки на МП",
+        ), 400
+    if doc.received_at is not None:
+        return jsonify(
+            ok=False,
+            error="Нельзя изменить отметку: товар уже принят на маркетплейсе",
+        ), 400
+
+    doc.shipped_at = None if doc.shipped_at is not None else datetime.utcnow()
+    db.session.commit()
+    return jsonify(
+        ok=True,
+        checked=doc.shipped_at is not None,
+        at=(to_moscow(doc.shipped_at).strftime("%d.%m.%Y %H:%M") if doc.shipped_at else ""),
+    )
+
+
 def _expected_qty_by_nomenclature(doc):
     """Сколько какого товара по факту едет в этом перемещении — сумма по
     всем коробам документа."""
