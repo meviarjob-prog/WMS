@@ -52,6 +52,14 @@ def _qty(doc):
     return float(value or 0)
 
 
+def _warehouse_label(warehouse):
+    if warehouse is None:
+        return "—"
+    marketplace = warehouse.marketplace_label()
+    destination = warehouse.marketplace_city or warehouse.name
+    return f"{marketplace}: {destination}" if marketplace else destination
+
+
 @bp.route("/")
 def dashboard():
     today = date.today()
@@ -210,7 +218,7 @@ def dashboard():
                     "title": title,
                     "subtitle": subtitle,
                     "number": doc.number,
-                    "destination": doc.to_warehouse.display_name() if doc.to_warehouse else "—",
+                    "destination": _warehouse_label(doc.to_warehouse),
                     "qty": _qty(doc),
                     "url": url_for("movement.detail", doc_id=doc.id),
                 }

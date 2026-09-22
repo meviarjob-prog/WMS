@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from wms.extensions import db
 from wms.models import MovementDocument, User, Warehouse
@@ -60,3 +60,31 @@ def test_transport_pickup_is_separate_from_marketplace_receipt(db, client_logged
     assert document.shipped_at is not None
     assert document.received_at is None
 
+
+def test_dashboard_renders_problem_movement_destination(db, client_logged_in):
+    sender = Warehouse(code="MGMT-ALERT-S", name="Основной")
+    destination = Warehouse(
+        code="MGMT-ALERT-D",
+        name="ВБ: Казань",
+        marketplace="wb",
+        marketplace_city="Казань",
+    )
+    db.session.add_all([sender, destination])
+    db.session.commit()
+    document = MovementDocument(
+        number="PER-MGMT-ALERT",
+        from_warehouse_id=sender.id,
+        to_warehouse_id=destination.id,
+        status="completed",
+        created_at=datetime.utcnow() - timedelta(hours=8),
+        completed_at=datetime.utcnow() - timedelta(hours=6),
+    )
+    db.session.add(document)
+    db.session.commit()
+
+    response = client_logged_in.get("/management/")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "PER-MGMT-ALERT" in html
+    assert "ВБ: Казань" in html
