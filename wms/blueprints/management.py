@@ -12,6 +12,7 @@ from ..models import (
     OneCQuantityCheck,
     PlacementDocument,
     PlacementLine,
+    ProductionOrder,
     ProductionRecord,
     ReceivingDocument,
     ReceivingLine,
@@ -247,10 +248,43 @@ def dashboard():
     )
     health_score = max(0, 100 - issue_weight)
 
+    # Этапы до прихода на склад — ведет менеджер в отдельной Google-таблице,
+    # синхронизируется в ProductionOrder по кнопке Apps Script (см.
+    # production_orders.py). Пока таблицу не подключили (заказов в базе
+    # нет вообще), оставляем None — как и раньше, "ожидает подключение".
+    production_orders_synced = ProductionOrder.query.count() > 0
+    production_stage_counts = (
+        dict(
+            db.session.query(ProductionOrder.current_stage, func.count(ProductionOrder.id))
+            .group_by(ProductionOrder.current_stage)
+            .all()
+        )
+        if production_orders_synced
+        else {}
+    )
+    sample_stage_qty = production_stage_counts.get(
+        "sample_sewing", 0
+    ) + production_stage_counts.get("sample_approval", 0)
+
     process_steps = [
-        {"name": "Размещение заказа", "source": "Google Таблицы", "state": "source", "value": None},
-        {"name": "Поиск цеха", "source": "Google Таблицы", "state": "source", "value": None},
-        {"name": "Образец и согласование", "source": "Google Таблицы", "state": "source", "value": None},
+        {
+            "name": "Размещение заказа",
+            "source": "Google Таблицы",
+            "state": "ok" if production_orders_synced else "source",
+            "value": production_stage_counts.get("order_placed", 0) if production_orders_synced else None,
+        },
+        {
+            "name": "Поиск цеха",
+            "source": "Google Таблицы",
+            "state": "ok" if production_orders_synced else "source",
+            "value": production_stage_counts.get("workshop_search", 0) if production_orders_synced else None,
+        },
+        {
+            "name": "Образец и согласование",
+            "source": "Google Таблицы",
+            "state": "ok" if production_orders_synced else "source",
+            "value": sample_stage_qty if production_orders_synced else None,
+        },
         {"name": "Отшив партии", "source": "WMS / Google", "state": "ok" if produced_qty else "quiet", "value": produced_qty},
         {"name": "Приёмка", "source": "WMS", "state": "risk" if active_receiving else "ok", "value": len(active_receiving)},
         {"name": "Пересчёт", "source": "WMS", "state": "risk" if any(d.status == "recounting" for d in active_receiving) else "ok", "value": sum(d.status == "recounting" for d in active_receiving)},

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 from wms.extensions import db
-from wms.models import MovementDocument, User, Warehouse
+from wms.models import MovementDocument, ProductionOrder, User, Warehouse
 
 
 def test_admin_sees_visual_management_dashboard(client_logged_in):
@@ -88,3 +88,29 @@ def test_dashboard_renders_problem_movement_destination(db, client_logged_in):
     assert response.status_code == 200
     assert "PER-MGMT-ALERT" in html
     assert "ВБ: Казань" in html
+
+
+def test_process_flow_shows_production_stage_awaiting_connection_before_sync(client_logged_in):
+    """Пока Google-таблица заказов (см. production_orders.py) ни разу не
+    синхронизировалась, первые три этапа воронки остаются "ожидает
+    подключение" — как и до появления ProductionOrder вообще."""
+    html = client_logged_in.get("/management/").get_data(as_text=True)
+    assert "ожидает подключение" in html
+
+
+def test_process_flow_uses_real_production_order_counts_after_sync(db, client_logged_in):
+    db.session.add_all(
+        [
+            ProductionOrder(order_number="ЗК-MGMT-1", current_stage="order_placed"),
+            ProductionOrder(order_number="ЗК-MGMT-2", current_stage="workshop_search"),
+            ProductionOrder(order_number="ЗК-MGMT-3", current_stage="sample_sewing"),
+            ProductionOrder(order_number="ЗК-MGMT-4", current_stage="sample_approval"),
+        ]
+    )
+    db.session.commit()
+
+    html = client_logged_in.get("/management/").get_data(as_text=True)
+
+    assert "ожидает подключение" not in html
+    # "Образец и согласование" объединяет sample_sewing и sample_approval — 2 заказа.
+    assert '<div class="process-value">2</div>' in html
