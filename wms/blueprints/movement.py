@@ -1095,12 +1095,12 @@ def receive(doc_id):
         flash("Перемещение уже отмечено как принятое", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
-    if doc.marketplace_request_created_at is None and not (
+    if doc.marketplace_request_created_at is None or not (
         doc.marketplace_request_number or ""
     ).strip():
         flash(
-            "Сначала отметьте, что заявка на маркетплейс создана — "
-            "это обязательный шаг перед приемкой на складе",
+            "Сначала внесите номер заявки на маркетплейс и отметьте, что заявка создана — "
+            "оба шага обязательны перед приемкой на складе",
             "danger",
         )
         return redirect(url_for("movement.detail", doc_id=doc.id))
@@ -1198,12 +1198,17 @@ def toggle_accounting(doc_id):
 
 @bp.route("/<int:doc_id>/toggle-marketplace-request", methods=["POST"])
 def toggle_marketplace_request(doc_id):
-    """Ручная отметка "заявка на МП создана" — так же как toggle_accounting,
-    просто галочка для контроля (синяя в списке, в отличие от зеленой "1С"),
-    независима и от выгрузки в 1С, и от самого статуса перемещения (см.
-    MovementDocument.marketplace_request_created_at). Отвечает JSON — см.
-    комментарий в toggle_accounting."""
+    """Отметка доступна только после сохранения номера заявки на МП."""
     doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.marketplace_request_created_at is None and not (
+        doc.marketplace_request_number or ""
+    ).strip():
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Сначала внесите и сохраните номер заявки на МП",
+            }
+        ), 400
     doc.marketplace_request_created_at = (
         None if doc.marketplace_request_created_at else datetime.utcnow()
     )
@@ -1229,6 +1234,9 @@ def mark_marketplace_request(doc_id):
     кнопку приемки, а toggle-в-обратную-сторону тут не нужен."""
     doc = MovementDocument.query.get_or_404(doc_id)
     if doc.marketplace_request_created_at is None:
+        if not (doc.marketplace_request_number or "").strip():
+            flash("Сначала внесите номер заявки на МП", "danger")
+            return redirect(url_for("movement.detail", doc_id=doc.id))
         doc.marketplace_request_created_at = datetime.utcnow()
         db.session.commit()
         flash("Отмечено: заявка на маркетплейс создана", "success")
@@ -1237,12 +1245,16 @@ def mark_marketplace_request(doc_id):
 
 @bp.route("/<int:doc_id>/marketplace-request-number", methods=["POST"])
 def update_marketplace_request_number(doc_id):
-    """Номер заявки на приемку у маркетплейса — вносится вручную, когда
-    становится известен, отдельно от галочки "заявка создана" выше
-    (галочку можно поставить раньше, до того как номер стал известен)."""
+    """Номер заявки обязателен перед установкой галочки "Заявка на МП"."""
     doc = MovementDocument.query.get_or_404(doc_id)
     doc.marketplace_request_number = request.form.get("marketplace_request_number", "").strip() or None
+    if doc.marketplace_request_number is None:
+        # Нельзя оставить достигнутый этап без номера, по которому документ
+        # затем ищут в кабинете маркетплейса и показывают в выгрузках.
+        doc.marketplace_request_created_at = None
     db.session.commit()
+    if request.form.get("return_to") == "detail":
+        return redirect(url_for("movement.detail", doc_id=doc.id))
     return redirect(url_for("movement.list_documents"))
 
 

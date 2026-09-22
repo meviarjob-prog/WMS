@@ -59,6 +59,7 @@ def _make_pending_movement(number="PER-PEND-1", from_code="WH-PEND-A", to_code="
         to_warehouse_id=receiver.id,
         status="completed",
         marketplace_request_created_at=datetime.utcnow(),
+        marketplace_request_number=f"REQ-{number}",
     )
     db.session.add(doc)
     db.session.commit()

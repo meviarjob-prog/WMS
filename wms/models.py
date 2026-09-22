@@ -815,9 +815,8 @@ class MovementDocument(db.Model):
     # от зеленой "1С" — независима от нее и от самой отправки, для
     # отдельного контроля за заявкой на приемку на стороне маркетплейса.
     marketplace_request_created_at = db.Column(db.DateTime, nullable=True)
-    # Номер самой заявки на приемку у маркетплейса — вносится вручную,
-    # когда становится известен (галочка выше могла быть отмечена раньше,
-    # до того как номер стал известен). См. movement.update_marketplace_request_number.
+    # Номер самой заявки на приемку у маркетплейса вносится вручную до
+    # установки галочки выше. См. movement.update_marketplace_request_number.
     marketplace_request_number = db.Column(db.String(50), nullable=True)
     # Заполняется, когда состав уже выгруженного в 1С документа меняют
     # (добавили/удалили короб — movement.add_box/delete_line, или поправили
@@ -881,7 +880,7 @@ class MovementDocument(db.Model):
             return 0
         if self.received_at is not None:
             return self.total_received_qty()
-        if self.marketplace_request_created_at is not None or (
+        if self.marketplace_request_created_at is not None and (
             self.marketplace_request_number or ""
         ).strip():
             return self.total_item_qty()

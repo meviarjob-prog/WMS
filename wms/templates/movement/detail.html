@@ -17,7 +17,7 @@
               title="На сборке: {{ (doc.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Сб</span>
         <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if doc.status in ('collected', 'completed') else '' }}"
               title="Собрано{{ ': автоматически при 30 коробах' if doc.status == 'collected' else '' }}">Со</span>
-        <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at else '' }}"
+        <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at and doc.marketplace_request_number else '' }}"
               title="Создана заявка: {{ (doc.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if doc.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
         <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.received_at else '' }}"
               title="Отгружено: {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') if doc.received_at else 'еще не наступило' }}">От</span>
@@ -55,7 +55,14 @@
       <button type="submit" class="btn btn-success">🚚 Подтвердить отправку</button>
     </form>
     {% elif (can_manage_document or can_receive_document) and doc.status == 'completed' and not doc.received_at %}
-      {% if not doc.marketplace_request_created_at and not doc.marketplace_request_number %}
+      {% if not doc.marketplace_request_number %}
+      <form method="post" action="{{ url_for('movement.update_marketplace_request_number', doc_id=doc.id) }}" class="d-inline-flex gap-1 align-items-center">
+        <input type="hidden" name="return_to" value="detail">
+        <input type="text" name="marketplace_request_number" class="form-control form-control-sm" style="width:150px" placeholder="№ заявки на МП" required>
+        <button type="submit" class="btn btn-outline-primary">Сохранить номер</button>
+      </form>
+      <span class="text-muted small d-block mt-1">Сначала сохраните номер заявки — до этого галочка «Заявка на МП» недоступна.</span>
+      {% elif not doc.marketplace_request_created_at %}
       <form method="post" action="{{ url_for('movement.mark_marketplace_request', doc_id=doc.id) }}" class="d-inline">
         <button type="submit" class="btn btn-primary" title="Отметить: заявка на маркетплейс создана">🔖 Отметить: заявка на МП создана</button>
       </form>

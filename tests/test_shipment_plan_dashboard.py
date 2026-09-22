@@ -66,6 +66,8 @@ def _ship_box(sender, city, item, qty, box_number, client, mark_request=True):
 
     client.post(f"/movement/{doc.id}/complete")
     if mark_request:
+        doc.marketplace_request_number = f"REQ-{box_number}"
+        db.session.commit()
         client.post(f"/movement/{doc.id}/mark-marketplace-request")
     return doc
 

@@ -16,6 +16,8 @@ def test_guide_reachable_by_ordinary_staff(db, client_logged_in):
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     assert "Первый день на складе" in html
+    assert "Работа с отчётами" in html
+    assert "Недовозы по перемещениям" in html
     assert "Сверка документов WMS и 1С" in html
     assert "ДатаНачалаСверки" not in html  # курс объясняет работу, а не внутренние имена полей
 

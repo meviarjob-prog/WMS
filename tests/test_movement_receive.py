@@ -53,6 +53,7 @@ def _make_completed_document(qty=10, marketplace_request_created=True):
         from datetime import datetime
 
         doc.marketplace_request_created_at = datetime.utcnow()
+        doc.marketplace_request_number = "REQ-D0001"
     db.session.add(doc)
     db.session.commit()
     db.session.add(
@@ -136,7 +137,7 @@ def test_excess_credits_actual_received_qty_and_records_discrepancy(db, client_l
     assert f'href="/movement/{doc.id}" class="fw-bold">{doc.number}</a>' not in shortage_html
 
 
-def test_request_number_allows_receiving_without_legacy_checkbox(db, client_logged_in):
+def test_request_number_alone_does_not_allow_receiving(db, client_logged_in):
     doc, item, _plan_line = _make_completed_document(
         qty=10, marketplace_request_created=False
     )
@@ -149,7 +150,7 @@ def test_request_number_allows_receiving_without_legacy_checkbox(db, client_logg
     )
 
     assert response.status_code == 302
-    assert MovementDocument.query.get(doc.id).received_at is not None
+    assert MovementDocument.query.get(doc.id).received_at is None
 
 
 def test_matching_quantity_creates_no_discrepancy_row(db, client_logged_in):
@@ -195,18 +196,20 @@ def test_cannot_receive_without_marketplace_request_created(db, client_logged_in
     doc, item, _plan_line = _make_completed_document(qty=10, marketplace_request_created=False)
 
     resp = client_logged_in.get(f"/movement/{doc.id}/receive", follow_redirects=True)
-    assert "Сначала отметьте, что заявка на маркетплейс создана" in resp.get_data(as_text=True)
+    assert "Сначала внесите номер заявки на маркетплейс" in resp.get_data(as_text=True)
     assert MovementDocument.query.get(doc.id).received_at is None
 
     resp = client_logged_in.post(
         f"/movement/{doc.id}/receive", data={f"qty_{item.id}": "10"}, follow_redirects=True
     )
-    assert "Сначала отметьте, что заявка на маркетплейс создана" in resp.get_data(as_text=True)
+    assert "Сначала внесите номер заявки на маркетплейс" in resp.get_data(as_text=True)
     assert MovementDocument.query.get(doc.id).received_at is None
 
 
 def test_marking_marketplace_request_unblocks_receive(db, client_logged_in):
     doc, item, _plan_line = _make_completed_document(qty=10, marketplace_request_created=False)
+    doc.marketplace_request_number = "REQ-UNBLOCK"
+    db.session.commit()
 
     client_logged_in.post(f"/movement/{doc.id}/mark-marketplace-request")
     assert MovementDocument.query.get(doc.id).marketplace_request_created_at is not None

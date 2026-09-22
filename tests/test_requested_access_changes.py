@@ -206,10 +206,6 @@ def test_non_admin_viewer_can_toggle_marketplace_bookkeeping_marks_on_foreign_mo
     assert resp.status_code == 200
     assert MovementDocument.query.get(movement.id).accounting_entered_at is not None
 
-    resp = client.post(f"/movement/{movement.id}/toggle-marketplace-request", follow_redirects=True)
-    assert resp.status_code == 200
-    assert MovementDocument.query.get(movement.id).marketplace_request_created_at is not None
-
     resp = client.post(
         f"/movement/{movement.id}/marketplace-request-number",
         data={"marketplace_request_number": "REQ-999"},
@@ -217,6 +213,10 @@ def test_non_admin_viewer_can_toggle_marketplace_bookkeeping_marks_on_foreign_mo
     )
     assert resp.status_code == 200
     assert MovementDocument.query.get(movement.id).marketplace_request_number == "REQ-999"
+
+    resp = client.post(f"/movement/{movement.id}/toggle-marketplace-request", follow_redirects=True)
+    assert resp.status_code == 200
+    assert MovementDocument.query.get(movement.id).marketplace_request_created_at is not None
 
     # Реальное изменение документа (не просто пометка) чужим не-админом
     # по-прежнему запрещено.
@@ -353,6 +353,8 @@ def test_movement_complete_permission_allows_completing_foreign_movement(db, cli
     assert resp.status_code == 200
     assert MovementDocument.query.get(movement.id).status == "completed"
 
+    movement.marketplace_request_number = "REQ-COMPLETE-1"
+    db.session.commit()
     client.post(f"/movement/{movement.id}/mark-marketplace-request")
 
     resp = client.post(f"/movement/{movement.id}/receive", follow_redirects=True)

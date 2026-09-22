@@ -82,6 +82,8 @@ def _check_token():
 def _pending_movements_query():
     return MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None).filter(
         MovementDocument.marketplace_request_created_at.isnot(None),
+        MovementDocument.marketplace_request_number.isnot(None),
+        MovementDocument.marketplace_request_number != "",
         MovementDocument.accounting_entered_at.is_(None),
     )
 
@@ -511,8 +513,9 @@ def reconciliation():
 @bp.route("/api/export")
 def export():
     """Отдает документы, готовые к переносу в 1С: перемещение — только когда
-    в WMS дошло до статуса "Создана заявка" (marketplace_request_created_at
-    заполнен) — на сборке/собрано еще рано, а ждать "Отгружено" (кнопка
+    в WMS дошло до статуса "Создана заявка" (сохранен номер заявки и
+    заполнен marketplace_request_created_at) — на сборке/собрано еще рано,
+    а ждать "Отгружено" (кнопка
     "Принято на складе", doc.received_at) не нужно: как только заявка на
     маркетплейс создана, документ уже достаточно определен для 1С.
     Инвентаризация — завершенные. Уже выгруженные (synced_to_1c_at заполнен)

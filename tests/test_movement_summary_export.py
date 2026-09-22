@@ -136,6 +136,7 @@ def test_summary_export_separates_boxed_and_actually_received_qty(db, client_log
         receiver_code="WH-MSUM-ACTUAL",
         receiver_marketplace="wb",
         completed_at=now,
+        marketplace_request_number="REQ-MSUM-5",
         marketplace_request_created_at=now,
         received_at=now,
     )

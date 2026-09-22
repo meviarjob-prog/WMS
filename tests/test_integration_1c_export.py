@@ -60,6 +60,7 @@ def _ship_box(
         # created_at), а не "Отгружено" (см. чат) — до приемки на складе
         # получателя ждать не нужно.
         doc.marketplace_request_created_at = doc.completed_at
+        doc.marketplace_request_number = f"REQ-{box_number}"
     if accounting_entered:
         from datetime import datetime
 
@@ -247,7 +248,7 @@ def test_export_comment_includes_marketplace_request_number(db, client_logged_in
     assert "REQ-778: PER-BOX-1C-5" not in movement["comment"]
 
 
-def test_export_comment_without_marketplace_request_number_unchanged(db, client_logged_in):
+def test_export_excludes_movement_without_marketplace_request_number(db, client_logged_in):
     _set_token()
     sender = Warehouse(code="WH-1C-13", name="Основной склад")
     city = Warehouse(code="WH-1C-14", name="ОЗОН: Тула", marketplace="ozon", marketplace_city="Тула")
@@ -255,12 +256,13 @@ def test_export_comment_without_marketplace_request_number_unchanged(db, client_
     db.session.commit()
     item = _make_item("9990000009")
 
-    _ship_box(sender, city, item, 1, "BOX-1C-6", client_logged_in)
+    doc = _ship_box(sender, city, item, 1, "BOX-1C-6", client_logged_in)
+    doc.marketplace_request_number = None
+    db.session.commit()
 
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     data = resp.get_json()
-    movement = next(m for m in data["movements"] if m["number"] == "PER-BOX-1C-6")
-    assert "№ заявки МП" not in movement["comment"]
+    assert all(m["number"] != "PER-BOX-1C-6" for m in data["movements"])
 
 
 def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_in):

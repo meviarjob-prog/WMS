@@ -70,6 +70,7 @@ def test_receive_button_has_no_underline_class(db, client_logged_in):
     doc = _make_movement("PER-MPH-5", marketplace="wb")
     doc.status = "completed"
     doc.completed_at = datetime.utcnow()
+    doc.marketplace_request_number = "REQ-MPH-5"
     doc.marketplace_request_created_at = datetime.utcnow()
     db.session.commit()
 

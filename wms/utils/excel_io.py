@@ -355,7 +355,10 @@ def export_movement_summary_to_excel(documents) -> bytes:
                 doc.to_warehouse.marketplace_label() if doc.to_warehouse else "",
                 doc.to_warehouse.name if doc.to_warehouse else "",
                 doc.marketplace_request_number or "",
-                "Да" if doc.marketplace_request_created_at else "Нет",
+                "Да"
+                if doc.marketplace_request_created_at
+                and (doc.marketplace_request_number or "").strip()
+                else "Нет",
                 doc.completed_at.strftime("%Y-%m-%d %H:%M") if doc.completed_at else "",
                 doc.received_at.strftime("%Y-%m-%d %H:%M") if doc.received_at else "",
                 doc.lines.count(),

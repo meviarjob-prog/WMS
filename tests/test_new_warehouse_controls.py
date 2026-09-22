@@ -215,6 +215,7 @@ def test_movement_shortage_reduces_physical_box_stock(db, client_logged_in):
     doc = MovementDocument(
         number="PER-R", from_warehouse_id=sender.id, to_warehouse_id=target.id,
         status="completed", completed_at=datetime.utcnow(),
+        marketplace_request_number="REQ-PER-R",
         marketplace_request_created_at=datetime.utcnow(), sent_qty_snapshot=10,
     )
     db.session.add_all([box_item, doc])

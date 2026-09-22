@@ -211,7 +211,7 @@
                       title="На сборке: {{ (d.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Сб</span>
                 <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if d.status in ('collected', 'completed') else '' }}"
                       title="Собрано: {{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else 'еще не наступило' }}">Со</span>
-                <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if d.marketplace_request_created_at else '' }}"
+                <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if d.marketplace_request_created_at and d.marketplace_request_number else '' }}"
                       title="Создана заявка: {{ (d.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if d.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
                 <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if d.received_at else '' }}"
                       title="Отгружено: {{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') if d.received_at else 'еще не наступило' }}">От</span>
@@ -224,7 +224,7 @@
               <span class="text-muted">—</span>
             {% elif d.received_at %}
               <span class="badge bg-success" title="{{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') }}">Отгружено {{ (d.received_at|msk).strftime('%d.%m') }}</span>
-            {% elif current_user.can_receive_movements() and (d.marketplace_request_created_at or d.marketplace_request_number) %}
+            {% elif current_user.can_receive_movements() and d.marketplace_request_created_at and d.marketplace_request_number %}
               <a class="btn btn-sm btn-warning movement-receive-btn text-decoration-none" href="{{ url_for('movement.receive', doc_id=d.id) }}"
                  title="Товар считается «в пути», пока не нажата эта кнопка">📥 Принято на складе</a>
             {% elif can_manage_document %}
@@ -251,8 +251,9 @@
                   data-url="{{ url_for('movement.toggle_marketplace_request', doc_id=d.id) }}"
                   data-on-icon="✔" data-off-icon="☐"
                   data-on-title-prefix="Заявка на МП создана "
-                  data-off-title="Отметить: заявка на маркетплейс создана"
-                  title="{{ 'Заявка на МП создана ' + (d.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if d.marketplace_request_created_at else 'Отметить: заявка на маркетплейс создана' }}"
+                  data-off-title="{{ 'Отметить: заявка на маркетплейс создана' if d.marketplace_request_number else 'Сначала внесите номер заявки на МП' }}"
+                  title="{{ 'Заявка на МП создана ' + (d.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if d.marketplace_request_created_at else ('Отметить: заявка на маркетплейс создана' if d.marketplace_request_number else 'Сначала внесите номер заявки на МП') }}"
+                  {% if not d.marketplace_request_number and not d.marketplace_request_created_at %}disabled{% endif %}
                   >{{ '✔' if d.marketplace_request_created_at else '☐' }}</button>
           </td>
           <td style="min-width:100px">
@@ -285,7 +286,7 @@
             <span class="badge badge-status-merged">Объединен</span>
           {% elif d.received_at %}
             <span class="badge status-chip-shipped">Отгружено</span>
-          {% elif d.marketplace_request_created_at or d.marketplace_request_number %}
+          {% elif d.marketplace_request_created_at and d.marketplace_request_number %}
             <span class="badge status-chip-requested">Создана заявка</span>
           {% elif d.status in ('collected', 'completed') %}
             <span class="badge status-chip-assembled">Собрано</span>
@@ -397,18 +398,18 @@
     updatePrintButtonState();
   }));
 
-  // Галочки "1С"/"Заявка на МП" — просто пометки для контроля, не влияют
-  // на сам документ (см. movement.toggle_accounting/toggle_marketplace_request),
-  // поэтому переключаем их через fetch() без перезагрузки страницы: список
-  // перемещений может быть длинным, и дергать его целиком ради одной
-  // галочки неудобно.
+  // Галочка 1С — пометка для контроля. Галочка «Заявка на МП» дополнительно
+  // требует сохраненного номера заявки; сервер повторно проверяет это условие.
   document.querySelectorAll(".toggle-flag-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       btn.disabled = true;
       fetch(btn.dataset.url, { method: "POST" })
         .then((r) => r.json())
         .then((data) => {
-          if (!data.ok) return;
+          if (!data.ok) {
+            if (data.error) window.alert(data.error);
+            return;
+          }
           btn.textContent = data.checked ? btn.dataset.onIcon : btn.dataset.offIcon;
           btn.title = data.checked ? btn.dataset.onTitlePrefix + data.at : btn.dataset.offTitle;
         })
