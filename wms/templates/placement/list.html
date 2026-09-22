@@ -26,7 +26,19 @@
           <button type="button" class="hint-icon d-md-none" data-bs-toggle="popover" data-bs-trigger="focus"
                   data-bs-placement="bottom" data-bs-content="{{ hint_stock }}" aria-label="Подсказка">?</button>
         </h5>
-        <a class="btn btn-primary btn-sm" href="{{ url_for('placement.new_document') }}">➕ Новое размещение</a>
+        <div class="d-flex gap-2">
+          <a class="btn btn-primary btn-sm" href="{{ url_for('placement.new_document') }}">➕ Новое размещение</a>
+          {% if current_user.is_admin %}
+          <form method="post" action="{{ url_for('placement.clear_unplaced_stock') }}" class="d-flex gap-1"
+                onsubmit="return confirm('Обнулить весь неразмещенный остаток выбранного склада? Это изменит учетные остатки.');">
+            <select name="warehouse_id" class="form-select form-select-sm" required>
+              <option value="">Склад...</option>
+              {% for wh in warehouses %}<option value="{{ wh.id }}">{{ wh.name }}</option>{% endfor %}
+            </select>
+            <button class="btn btn-sm btn-outline-danger" type="submit">Очистить список</button>
+          </form>
+          {% endif %}
+        </div>
       </div>
       <p class="text-muted small d-none d-md-block">{{ hint_stock }}</p>
       <table class="table table-sm table-mobile-compact">

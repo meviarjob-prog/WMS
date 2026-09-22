@@ -13,12 +13,20 @@
     <form method="post">
       <div class="mb-3">
         <label class="form-label">Склад-отправитель</label>
+        {% if current_user.is_admin %}
         <select name="from_warehouse_id" class="form-select" required>
           <option value="">Выберите склад...</option>
           {% for wh in warehouses %}
-            <option value="{{ wh.id }}">{{ wh.code }} — {{ wh.name }}</option>
+            <option value="{{ wh.id }}" {% if assigned_warehouse and assigned_warehouse.id == wh.id %}selected{% endif %}>{{ wh.code }} — {{ wh.name }}</option>
           {% endfor %}
         </select>
+        {% elif assigned_warehouse %}
+        <input type="hidden" name="from_warehouse_id" value="{{ assigned_warehouse.id }}">
+        <div class="form-control bg-light">{{ assigned_warehouse.code }} — {{ assigned_warehouse.name }}</div>
+        <div class="form-text">Определен по вашему рабочему складу.</div>
+        {% else %}
+        <div class="alert alert-warning mb-0">Рабочий склад не назначен. Обратитесь к администратору.</div>
+        {% endif %}
       </div>
       <div class="mb-3">
         <label class="form-label">Склад назначения</label>

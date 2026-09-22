@@ -43,6 +43,8 @@ def test_list_shows_unchecked_by_default(db, client_logged_in):
 
 def test_toggle_sets_and_clears_timestamp(db, client_logged_in):
     doc = _make_document()
+    doc.marketplace_request_number = "МП-TOGGLE"
+    db.session.commit()
 
     client_logged_in.post(f"/movement/{doc.id}/toggle-marketplace-request")
     assert doc.marketplace_request_created_at is not None
@@ -56,6 +58,8 @@ def test_toggle_sets_and_clears_timestamp(db, client_logged_in):
 
 def test_toggle_is_independent_from_accounting_flag(db, client_logged_in):
     doc = _make_document()
+    doc.marketplace_request_number = "МП-ACCOUNTING"
+    db.session.commit()
 
     client_logged_in.post(f"/movement/{doc.id}/toggle-marketplace-request")
 
@@ -107,6 +111,8 @@ def test_set_marketplace_request_number(db, client_logged_in):
 def test_marketplace_request_number_can_be_cleared(db, client_logged_in):
     doc = _make_document()
     doc.marketplace_request_number = "МП-999"
+    from datetime import datetime
+    doc.marketplace_request_created_at = datetime.utcnow()
     db.session.commit()
 
     client_logged_in.post(
@@ -115,6 +121,7 @@ def test_marketplace_request_number_can_be_cleared(db, client_logged_in):
     )
 
     assert doc.marketplace_request_number is None
+    assert doc.marketplace_request_created_at is None
 
 
 def test_marketplace_request_number_independent_of_checkbox(db, client_logged_in):
@@ -127,3 +134,15 @@ def test_marketplace_request_number_independent_of_checkbox(db, client_logged_in
 
     assert doc.marketplace_request_number == "МП-777"
     assert doc.marketplace_request_created_at is None
+
+
+def test_marketplace_checkbox_cannot_be_set_before_number(db, client_logged_in):
+    doc = _make_document()
+
+    response = client_logged_in.post(f"/movement/{doc.id}/toggle-marketplace-request")
+
+    assert response.status_code == 400
+    assert response.get_json()["ok"] is False
+    assert doc.marketplace_request_created_at is None
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    assert "Сначала внесите номер заявки на МП" in html

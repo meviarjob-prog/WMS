@@ -69,6 +69,8 @@
       <h5>Адрес для обработки в 1С</h5>
       <p class="text-muted small mb-1">Получить документы (GET, токен — заголовком <code>X-1C-Token</code> или параметром <code>?token=</code>):</p>
       <code class="d-block mb-2">{{ request.url_root }}integrations/1c/api/export</code>
+      <p class="text-muted small mb-1">Получить существующие перемещения и приёмки для повторной сверки за период (без параметров — последние 30 дней):</p>
+      <code class="d-block mb-2">{{ request.url_root }}integrations/1c/api/reconciliation?date_from=2026-09-01&amp;date_to=2026-09-21</code>
       <p class="text-muted small mb-1">Подтвердить прием (POST, JSON <code>{"movement_ids": [...], "inventory_ids": [...], "supplier_return_ids": [...], "movement_correction_ids": [...]}</code>):</p>
       <code class="d-block">{{ request.url_root }}integrations/1c/api/export/confirm</code>
     </div>

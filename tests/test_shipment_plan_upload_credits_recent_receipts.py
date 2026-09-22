@@ -1,8 +1,7 @@
 """Загрузка новой версии плана отгрузок (shipment_plan._apply_plan)
 полностью заменяет строки старой версии (plan.lines.delete()) — вместе с
 ними терялся бы и накопленный fulfilled_qty, если подтвержденная приемка
-по направлению случилась ДО этой загрузки и не попала в сам файл плана
-("факт") или в Google Таблицу. Поэтому при загрузке дополнительно
+по направлению случилась ДО этой загрузки. Поэтому при загрузке дополнительно
 учитывается уже принятое перемещением (received_at) в интервале действия
 плана: с самой "даты распределения" и до дедлайна +PERIOD_DAYS (14) — тот
 же интервал, что и в shipment_plan._pace_analysis. Приемка до начала
@@ -92,6 +91,34 @@ def test_upload_credits_receipt_within_period_window_into_fulfilled_qty(db, clie
     assert line.fulfilled_qty == 12
 
 
+def test_upload_ignores_google_fact_and_uses_only_wms_fact(db, client_logged_in):
+    item = Nomenclature(sku="SKU-UPC-G", barcode="7770100099", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    period_start = date.today() - timedelta(days=2)
+    sheet_name = f"Распределение ОЗОН ФБС от {period_start.strftime('%d.%m')}"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = sheet_name
+    sheet.append(["Артикул", "Размер", "Баркод", "Город", "отгружено / в пути"])
+    sheet.append(["ART-1", "44", item.barcode, 30, 25])
+    stream = io.BytesIO()
+    workbook.save(stream)
+    stream.seek(0)
+
+    response = client_logged_in.post(
+        "/shipment-plan/upload",
+        data={"file": (stream, "plan.xlsx")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 302
+    line = ShipmentPlanLine.query.filter_by(nomenclature_id=item.id).first()
+    assert line.planned_qty == 30
+    assert line.fulfilled_qty == 0
+
+
 def test_upload_ignores_receipts_before_period_start(db, client_logged_in):
     sender = Warehouse(code="WH-UPC2", name="Склад-отправитель")
     db.session.add(sender)
@@ -117,7 +144,7 @@ def test_upload_ignores_receipts_before_period_start(db, client_logged_in):
     assert line.fulfilled_qty == 0
 
 
-def test_upload_ignores_receipts_after_period_deadline(db, client_logged_in):
+def test_upload_counts_shipments_after_fourteen_day_deadline(db, client_logged_in):
     sender = Warehouse(code="WH-UPC3", name="Склад-отправитель")
     db.session.add(sender)
     db.session.commit()
@@ -125,19 +152,38 @@ def test_upload_ignores_receipts_after_period_deadline(db, client_logged_in):
     db.session.add(item)
     db.session.commit()
 
-    # Период уже давно закрыт (дедлайн = дата распределения + 14 дней).
+    # У даты плана нет верхней границы: все более поздние отгрузки закрывают
+    # потребность до появления листа с новой датой.
     period_start = date.today() - timedelta(days=20)
     sheet_name = f"Распределение ОЗОН ФБС от {period_start.strftime('%d.%m')}"
 
     _upload(client_logged_in, sheet_name, "Город3", item.barcode, 30)
     city = Warehouse.query.filter_by(marketplace="ozon", marketplace_city="Город3").first()
 
-    # Принято уже после дедлайна этого периода (условно — по другому,
-    # более позднему поводу) — к этому плану отношения не имеет.
+    # Принято спустя 20 дней после даты плана — все равно относится к нему.
     late_received_at = datetime.combine(period_start, datetime.min.time()) + timedelta(days=20)
     _make_received_movement(sender, city, item, qty=77, box_number="BOX-UPC301", received_at=late_received_at)
 
     _upload(client_logged_in, sheet_name, "Город3", item.barcode, 30)
 
     line = ShipmentPlanLine.query.filter_by(warehouse_id=city.id, nomenclature_id=item.id).first()
-    assert line.fulfilled_qty == 0
+    assert line.fulfilled_qty == 77
+
+
+def test_repeated_upload_reuses_canonical_city_warehouse(db, client_logged_in):
+    item = Nomenclature(sku="SKU-CITY-NORM", barcode="7770100098", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    sheet_name = f"Распределение ОЗОН ФБС от {date.today().strftime('%d.%m')}"
+
+    assert _upload(client_logged_in, sheet_name, "ОЗОН: МОСКВА", item.barcode, 30).status_code == 302
+    first = Warehouse.query.filter_by(marketplace="ozon").one()
+    assert first.name == "Москва"
+    assert first.marketplace_city == "Москва"
+
+    assert _upload(client_logged_in, sheet_name, "  Москва  ", item.barcode, 40).status_code == 302
+    warehouses = Warehouse.query.filter_by(marketplace="ozon").all()
+    assert len(warehouses) == 1
+    assert warehouses[0].id == first.id
+    line = ShipmentPlanLine.query.filter_by(warehouse_id=first.id, barcode=item.barcode).one()
+    assert line.planned_qty == 40

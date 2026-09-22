@@ -1,9 +1,8 @@
-"""Дашборд плана отгрузок должен показывать, сколько по каждой позиции уже
-"в пути" (отправлено перемещением, но еще не подтверждено кнопкой "Принято
-на складе") — отдельным числом рядом с потребностью. Сама потребность
-(remaining_qty) при этом не меняется: пока товар физически не проверен на
-складе назначения, план по нему остается открытым, ровно как и
-fulfilled_qty, который тоже засчитывается только по факту приемки."""
+"""«В пути» в плане — перемещения, которые транспорт забрал с даты листа."""
+
+import io
+
+from openpyxl import load_workbook
 
 from wms.extensions import db
 from wms.models import (
@@ -47,7 +46,7 @@ def _setup(planned_qty=30):
     return sender, city, item
 
 
-def _ship_box(sender, city, item, qty, box_number, client):
+def _ship_box(sender, city, item, qty, box_number, client, mark_request=True):
     box = Box(box_number=box_number, warehouse_id=sender.id, status="open")
     db.session.add(box)
     db.session.commit()
@@ -63,6 +62,11 @@ def _ship_box(sender, city, item, qty, box_number, client):
     db.session.commit()
 
     client.post(f"/movement/{doc.id}/complete")
+    if mark_request:
+        doc.marketplace_request_number = f"REQ-{box_number}"
+        db.session.commit()
+        client.post(f"/movement/{doc.id}/mark-marketplace-request")
+        client.post(f"/movement/{doc.id}/mark-shipped")
     return doc
 
 
@@ -80,10 +84,54 @@ def test_dashboard_top_summary_shows_in_transit(db, client_logged_in):
     assert "10" in html[idx : idx + 400]
 
 
-def test_picking_list_keeps_full_demand_and_shows_in_transit_separately(db, client_logged_in):
-    """Пока короб не принят на складе назначения, потребность в "Что нужно
-    отправить" остается полной (30, а не 30-10) — "в пути" показывается
-    рядом отдельным числом, а не вычитается."""
+def test_city_in_transit_includes_shipped_sku_missing_from_current_plan(
+    db, client_logged_in
+):
+    """Городская сумма — все отгрузки, а не только совпавшие строки плана."""
+    from datetime import date, timedelta
+
+    sender, city, planned_item = _setup(planned_qty=30)
+    plan = ShipmentPlan.query.filter_by(marketplace="ozon").first()
+    plan.period_start = date.today() - timedelta(days=1)
+    unplanned_item = Nomenclature(
+        sku="SKU-NOT-IN-PLAN",
+        barcode="7770000999",
+        name="Товар вне актуального плана",
+        unit="шт",
+    )
+    db.session.add(unplanned_item)
+    db.session.commit()
+
+    _ship_box(
+        sender,
+        city,
+        planned_item,
+        qty=10,
+        box_number="BOX-PLANNED-CITY-TOTAL",
+        client=client_logged_in,
+    )
+    _ship_box(
+        sender,
+        city,
+        unplanned_item,
+        qty=824,
+        box_number="BOX-UNPLANNED-CITY-TOTAL",
+        client=client_logged_in,
+        mark_request=True,
+    )
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    city_idx = html.find("<td>Город</td>")
+    city_snippet = html[city_idx : city_idx + 300]
+    assert ">834<" in city_snippet
+    top_idx = html.find("в пути")
+    assert "<b>834</b>" in html[top_idx : top_idx + 100]
+
+
+def test_picking_list_shows_plan_and_in_transit_separately(db, client_logged_in):
+    """В таблице остается остаток плана, товар в пути показан в скобках.
+    Защита от лишней отправки применяется отдельно в маршрутизации."""
     sender, city, item = _setup(planned_qty=30)
     _ship_box(sender, city, item, qty=10, box_number="BOX-000002", client=client_logged_in)
 
@@ -94,7 +142,26 @@ def test_picking_list_keeps_full_demand_and_shows_in_transit_separately(db, clie
 
     assert ">30<" in snippet
     assert "(10)" in snippet
-    assert ">20<" not in snippet
+
+
+def test_completed_movement_without_transport_pickup_is_not_in_transit(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    _ship_box(
+        sender,
+        city,
+        item,
+        qty=10,
+        box_number="BOX-NO-REQUEST",
+        client=client_logged_in,
+        mark_request=False,
+    )
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    assert ">30<" in snippet
+    assert "(10)" not in snippet
 
 
 def test_top_summary_shows_in_transit_per_marketplace_and_total(db, client_logged_in):
@@ -157,8 +224,12 @@ def test_top_summary_shows_total_production_since_period_start(db, client_logged
     assert ">1<" in html[idx : idx + 200]
 
 
-def test_marketplace_header_fulfilled_includes_in_transit(db, client_logged_in):
+def test_marketplace_header_uses_only_completed_movement_fact(db, client_logged_in):
+    from datetime import date, timedelta
+
     sender, city, item = _setup(planned_qty=30)
+    plan = ShipmentPlan.query.filter_by(marketplace="ozon").first()
+    plan.period_start = date.today() - timedelta(days=3)
     line = ShipmentPlanLine.query.first()
     line.fulfilled_qty = 5
     db.session.commit()
@@ -166,10 +237,68 @@ def test_marketplace_header_fulfilled_includes_in_transit(db, client_logged_in):
 
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
-    # Выполнено должно быть 5 (принято) + 10 (в пути) = 15, а не просто 5.
-    idx = html.find("выполнено")
+    # Сохраненный старый счетчик 5 не участвует: факт WMS — 10 отправлено.
+    idx = html.find("в пути")
     snippet = html[idx : idx + 200]
-    assert "15" in snippet
+    assert "<b>10</b>" in snippet
+    assert "Пока нет отгрузок" not in html
+    assert "Выполнено" not in html
+
+    city_idx = html.find("<td>Город</td>")
+    city_snippet = html[city_idx : city_idx + 500]
+    assert "Все завершенные перемещения с 00:01 даты листа" in html
+    assert ">10<" in city_snippet
+
+
+def test_dashboard_keeps_sent_qty_after_marketplace_receives_less(
+    db, client_logged_in
+):
+    sender, city, item = _setup(planned_qty=30)
+    doc = _ship_box(
+        sender,
+        city,
+        item,
+        qty=6,
+        box_number="BOX-RECEIVED-FACT",
+        client=client_logged_in,
+    )
+    client_logged_in.post(
+        f"/movement/{doc.id}/receive",
+        data={f"qty_{item.id}": "4"},
+    )
+    line = ShipmentPlanLine.query.first()
+    line.fulfilled_qty = 0
+    db.session.commit()
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("в пути")
+    # Отправлено 6; недовоз 2 ведется отдельно и не уменьшает отгрузку WMS.
+    assert "<b>6</b>" in html[idx : idx + 200]
+
+
+def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    line = ShipmentPlanLine.query.first()
+    line.fulfilled_qty = 5
+    db.session.commit()
+    _ship_box(sender, city, item, qty=10, box_number="BOX-XLSX-1", client=client_logged_in)
+
+    response = client_logged_in.get("/shipment-plan/export.xlsx")
+
+    assert response.status_code == 200
+    workbook = load_workbook(io.BytesIO(response.data), data_only=True)
+    sheet = workbook["План отгрузок"]
+    assert "A1:A2" in {str(cell_range) for cell_range in sheet.merged_cells.ranges}
+    assert sheet["A1"].value == "Артикул"
+    assert sheet["E1"].value == "На разбраковке"
+    assert sheet["H1"].value == "ОЗОН"
+    assert sheet["H2"].value == "Город"
+    assert sheet["A3"].value == "Итого (1 поз.)"
+    assert sheet["G3"].value == 10
+    assert sheet["H3"].value == 30
+    assert sheet["A4"].value == "ART-1"
+    assert sheet["H4"].value == "30 (10)"
 
 
 def test_picking_list_has_totals_row_summing_columns(db, client_logged_in):
@@ -189,7 +318,7 @@ def test_picking_list_has_totals_row_summing_columns(db, client_logged_in):
     snippet = html[idx : idx + 800]
     assert "1 поз." in snippet
     assert ">8<" in snippet  # На разбраковке
-    assert ">30<" in snippet  # Казань remaining_qty (30, полная потребность)
+    assert ">30<" in snippet  # Остаток плана; 10 в пути показаны отдельно
     assert ">10<" in snippet  # В пути
 
 
@@ -215,10 +344,9 @@ def test_totals_row_not_hidden_by_search_filter(db, client_logged_in):
     assert "picking-totals-row" in html
 
 
-def test_picking_list_keeps_item_even_when_fully_in_transit(db, client_logged_in):
-    """Даже если все нужное количество уже едет (в пути >= план), позиция
-    не пропадает из "Что нужно отправить" — потребность закрывается только
-    приемкой ("Принято на складе"), не отправкой."""
+def test_picking_list_keeps_item_when_plan_is_fully_in_transit(db, client_logged_in):
+    """Даже когда весь план уже едет, строка остается видимой как
+    «план (в пути)», но маршрутизация больше не предлагает этот город."""
     sender, city, item = _setup(planned_qty=10)
     _ship_box(sender, city, item, qty=10, box_number="BOX-000003", client=client_logged_in)
 

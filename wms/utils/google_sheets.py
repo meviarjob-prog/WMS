@@ -3,7 +3,7 @@
 import io
 import os
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, time
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
@@ -16,6 +16,7 @@ from .shipment_plan_import import (
     _find_marketplace_barcode_col,
     _find_plan_sheets,
     _to_barcode_str,
+    canonical_marketplace_city,
 )
 
 
@@ -154,17 +155,32 @@ def read_sheet_table(app, spreadsheet_id, sheet_title):
     return headers, rows
 
 
-def _movement_totals():
+def movement_wms_totals(period_start=None):
     totals = defaultdict(
         lambda: {
+            "shipped": 0.0,
             "in_transit": 0.0,
             "received": 0.0,
+            "received_seen": False,
             "warehouse": None,
             "nomenclature": None,
         }
     )
-    documents = MovementDocument.query.filter_by(status="completed").all()
+    documents = MovementDocument.query.filter(
+        MovementDocument.status == "completed",
+        MovementDocument.shipped_at.isnot(None),
+    ).all()
     for document in documents:
+        shipped_at = document.shipped_at
+        # Дата листа задает начало нового плана. Считаем все завершенные
+        # перемещения, фактически переданные транспорту, начиная с 00:01
+        # этой даты. Завершение сборки и заявка МП сами по себе не являются
+        # отгрузкой.
+        if period_start and (
+            not shipped_at
+            or shipped_at < datetime.combine(period_start, time(0, 1))
+        ):
+            continue
         warehouse = document.to_warehouse
         if not warehouse.marketplace:
             continue
@@ -179,6 +195,11 @@ def _movement_totals():
         actual = dict(expected)
         if document.received_at is not None:
             for discrepancy in document.discrepancies:
+                # После приемки с недовозом физический остаток короба уже
+                # уменьшен. Для показателя «отправлено/в пути» восстанавливаем
+                # исходное количество из документа расхождения.
+                expected[discrepancy.nomenclature_id] = discrepancy.expected_qty
+                nomenclature_by_id[discrepancy.nomenclature_id] = discrepancy.nomenclature
                 actual[discrepancy.nomenclature_id] = discrepancy.received_qty
 
         for nomenclature_id, expected_qty in expected.items():
@@ -190,22 +211,24 @@ def _movement_totals():
             key = (warehouse.id, nomenclature.id)
             totals[key]["warehouse"] = warehouse
             totals[key]["nomenclature"] = nomenclature
+            totals[key]["shipped"] += expected_qty
             if document.received_at is None:
                 totals[key]["in_transit"] += expected_qty
             else:
+                totals[key]["received_seen"] = True
                 totals[key]["received"] += actual.get(nomenclature_id, expected_qty)
     return totals
 
 
 def received_wms_totals():
     """Фактически принятые количества по складу и товару."""
-    return {key: value["received"] for key, value in _movement_totals().items()}
+    return {key: value["received"] for key, value in movement_wms_totals().items()}
 
 
 def build_wms_movement_rows():
     """Агрегирует только факт WMS. Повторный экспорт всегда дает тот же
     результат, поэтому сетевой повтор не способен задвоить количество."""
-    totals = _movement_totals()
+    totals = movement_wms_totals()
 
     # Если в плане есть более подходящий артикул, используем его вместо
     # внутреннего SKU номенклатуры.
@@ -244,10 +267,34 @@ def build_wms_movement_rows():
                 name,
                 in_transit,
                 received,
-                in_transit + received,
+                quantities["shipped"],
             ]
         )
     return rows
+
+
+def _current_plan_fact_totals():
+    """Факт для исходных листов: все отправленное по текущему плану.
+
+    Значения плана из Google сюда не входят. Благодаря этому WMS может
+    записывать факт в Google и не читать собственную запись обратно.
+    """
+    movement_totals_by_period = {}
+    totals = {}
+    for line in ShipmentPlanLine.query.all():
+        period_start = line.period_start or (line.plan.period_start if line.plan else None)
+        if period_start not in movement_totals_by_period:
+            movement_totals_by_period[period_start] = movement_wms_totals(period_start)
+        movement_totals = movement_totals_by_period[period_start]
+        city = line.warehouse.marketplace_city if line.warehouse else ""
+        shipped = 0.0
+        if line.nomenclature_id is not None:
+            quantities = movement_totals.get(
+                (line.warehouse_id, line.nomenclature_id), {}
+            )
+            shipped = quantities.get("shipped", 0.0)
+        totals[(line.plan.marketplace, city.casefold(), line.barcode)] = shipped
+    return totals
 
 
 def _fact_ranges_for_sheet(worksheet, marketplace, totals):
@@ -276,7 +323,8 @@ def _fact_ranges_for_sheet(worksheet, marketplace, totals):
         values = []
         for row_number in range(header_row + 1, worksheet.max_row + 1):
             barcode = _to_barcode_str(worksheet.cell(row=row_number, column=barcode_col).value)
-            value = totals.get((marketplace, city.casefold(), barcode), 0.0) if barcode else None
+            city_key = canonical_marketplace_city(city).casefold()
+            value = totals.get((marketplace, city_key, barcode), 0.0) if barcode else None
             values.append([value])
         if values:
             column = get_column_letter(fact_col)
@@ -293,12 +341,8 @@ def _fact_ranges_for_sheet(worksheet, marketplace, totals):
 
 
 def write_distribution_facts(app, workbook_stream):
-    """Пишет «в пути + принято» в колонки «отгружено» исходных листов."""
-    rows = build_wms_movement_rows()
-    totals = {
-        (row[1].casefold(), row[2].casefold(), str(row[3])): row[8]
-        for row in rows
-    }
+    """Пишет рассчитанный WMS факт в колонки «отгружено / в пути»."""
+    totals = _current_plan_fact_totals()
     workbook_stream.seek(0)
     workbook = load_workbook(workbook_stream, data_only=True)
     updates = []
@@ -317,11 +361,11 @@ def write_distribution_facts(app, workbook_stream):
 def _ensure_output_sheet(service, spreadsheet_id):
     metadata = service.spreadsheets().get(
         spreadsheetId=spreadsheet_id,
-        fields="sheets.properties(sheetId,title)",
+        fields="sheets.properties(sheetId,title,gridProperties(rowCount))",
     ).execute()
     for sheet in metadata.get("sheets", []):
         if sheet["properties"]["title"] == OUTPUT_SHEET_TITLE:
-            return sheet["properties"]["sheetId"]
+            return sheet["properties"]
     response = service.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={
@@ -337,15 +381,41 @@ def _ensure_output_sheet(service, spreadsheet_id):
             ]
         },
     ).execute()
-    return response["replies"][0]["addSheet"]["properties"]["sheetId"]
+    return response["replies"][0]["addSheet"]["properties"]
+
+
+def _ensure_output_row_capacity(service, spreadsheet_id, properties, required_rows):
+    row_count = properties.get("gridProperties", {}).get("rowCount", 1000)
+    if required_rows <= row_count:
+        return row_count
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [
+                {
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": properties["sheetId"],
+                            "gridProperties": {"rowCount": required_rows},
+                        },
+                        "fields": "gridProperties.rowCount",
+                    }
+                }
+            ]
+        },
+    ).execute()
+    return required_rows
 
 
 def write_wms_movement_sheet(app):
     service = _service(app)
     spreadsheet_id = app.config["GOOGLE_SHEETS_SPREADSHEET_ID"]
-    _ensure_output_sheet(service, spreadsheet_id)
+    properties = _ensure_output_sheet(service, spreadsheet_id)
     rows = build_wms_movement_rows()
     values = [OUTPUT_HEADERS] + rows
+    row_count = _ensure_output_row_capacity(
+        service, spreadsheet_id, properties, len(values)
+    )
     service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
         range=f"{_a1_sheet(OUTPUT_SHEET_TITLE)}!A1:I{len(values)}",
@@ -353,9 +423,13 @@ def write_wms_movement_sheet(app):
         body={"values": values},
     ).execute()
     # Старые хвостовые строки очищаем только после успешной записи новых.
-    service.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id,
-        range=f"{_a1_sheet(OUTPUT_SHEET_TITLE)}!A{len(values) + 1}:I",
-        body={},
-    ).execute()
+    if len(values) < row_count:
+        service.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=(
+                f"{_a1_sheet(OUTPUT_SHEET_TITLE)}!"
+                f"A{len(values) + 1}:I{row_count}"
+            ),
+            body={},
+        ).execute()
     return len(rows)

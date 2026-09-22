@@ -9,13 +9,17 @@
 """
 
 import secrets
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
+from sqlalchemy import func
 
 from ..extensions import db
-from ..models import AppSetting, InventoryDocument, MovementDocument, ReceivingDocument, SupplierReturn
+from ..models import (
+    AppSetting, InventoryDocument, MovementDocument, OneCQuantityCheck,
+    ReceivingDocument, SupplierReturn,
+)
 
 bp = Blueprint("integration_1c", __name__)
 
@@ -55,9 +59,13 @@ def _to_warehouse_name_for_1c(doc):
         return doc.to_warehouse.fulfillment_1c_name
     return FULFILLMENT_WAREHOUSE_NAME
 
-# Именно эти два endpoint'а обмена с 1С не требуют логина в WMS — только
-# токен (см. проверку в самих view). Импортируется в wms/__init__.py.
-API_1C_PUBLIC_ENDPOINTS = {"integration_1c.export", "integration_1c.export_confirm"}
+# Эти endpoint'ы обмена с 1С не требуют логина в WMS — только токен
+# (см. проверку в самих view). Импортируется в wms/__init__.py.
+API_1C_PUBLIC_ENDPOINTS = {
+    "integration_1c.export",
+    "integration_1c.export_confirm",
+    "integration_1c.reconciliation",
+}
 
 
 def _get_token():
@@ -74,6 +82,8 @@ def _check_token():
 def _pending_movements_query():
     return MovementDocument.query.filter_by(status="completed", synced_to_1c_at=None).filter(
         MovementDocument.marketplace_request_created_at.isnot(None),
+        MovementDocument.marketplace_request_number.isnot(None),
+        MovementDocument.marketplace_request_number != "",
         MovementDocument.accounting_entered_at.is_(None),
     )
 
@@ -180,6 +190,71 @@ def _inventory_payload(doc):
             }
             for line in doc.lines
         ],
+    }
+
+
+def _aggregated_lines(lines):
+    """Сводит одинаковые товары в одну строку для повторной сверки.
+
+    В перемещении один SKU может лежать в нескольких коробах, а в 1С эти
+    строки могут быть объединены. Поэтому ретроспективная сверка сравнивает
+    итог по товару, а не порядок/количество строк табличной части.
+    """
+    grouped = {}
+    for line in lines:
+        barcode = str(line["barcode"] or "").strip()
+        name = str(line["name"] or "").strip()
+        key = barcode or name.casefold()
+        if not key:
+            continue
+        row = grouped.setdefault(key, {"barcode": barcode, "name": name, "qty": 0})
+        row["qty"] += float(line["qty"] or 0)
+    return list(grouped.values())
+
+
+def _movement_reconciliation_payload(doc):
+    lines = _aggregated_lines(
+        {
+            "barcode": item.nomenclature.barcode,
+            "name": item.nomenclature.name,
+            "qty": item.qty,
+        }
+        for movement_line in doc.lines
+        for item in movement_line.box.items
+    )
+    grouped = {(row["barcode"] or row["name"].casefold()): row for row in lines}
+    # После «Принято на складе» недовоз физически убирается из коробов.
+    # Документ перемещения в 1С, однако, отражает именно отправленное
+    # количество. Восстанавливаем его построчно из зафиксированного
+    # расхождения, иначе честный недовоз выглядел бы как ошибка обмена.
+    for discrepancy in doc.discrepancies:
+        item = discrepancy.nomenclature
+        key = str(item.barcode or "").strip() or item.name.strip().casefold()
+        grouped[key] = {
+            "barcode": str(item.barcode or "").strip(),
+            "name": item.name,
+            "qty": float(discrepancy.expected_qty),
+        }
+    return {
+        "id": doc.id,
+        "number": doc.number,
+        "lines": list(grouped.values()),
+    }
+
+
+def _receiving_reconciliation_payload(doc):
+    return {
+        "id": doc.id,
+        "number": doc.number,
+        "invoice_number": doc.number,
+        "lines": _aggregated_lines(
+            {
+                "barcode": line.nomenclature.barcode,
+                "name": line.nomenclature.name,
+                "qty": line.qty,
+            }
+            for line in doc.lines
+        ),
     }
 
 
@@ -374,11 +449,73 @@ def _receiving_adjustments_candidates():
     return result
 
 
+@bp.route("/api/reconciliation")
+def reconciliation():
+    """Отдает актуальный состав уже существующих документов для сверки.
+
+    В отличие от /api/export этот метод ничего не создает и не меняет в
+    1С. Внешняя обработка находит ранее созданные документы, читает их
+    текущий состав и возвращает сравнение через обычный export/confirm.
+    """
+    if not _check_token():
+        return jsonify({"ok": False, "error": "Неверный или отсутствующий токен"}), 401
+
+    today = datetime.utcnow().date()
+    try:
+        date_from = datetime.strptime(
+            request.args.get("date_from") or (today - timedelta(days=30)).isoformat(),
+            "%Y-%m-%d",
+        ).date()
+        date_to = datetime.strptime(
+            request.args.get("date_to") or today.isoformat(), "%Y-%m-%d"
+        ).date()
+    except ValueError:
+        return jsonify({"ok": False, "error": "Даты должны иметь формат ГГГГ-ММ-ДД"}), 400
+    if date_from > date_to:
+        return jsonify({"ok": False, "error": "Дата начала позже даты окончания"}), 400
+
+    period_start = datetime.combine(date_from, time.min)
+    # Верхняя граница исключающая: так дата «по» входит целиком, включая
+    # документы, завершенные в 23:59:59.
+    period_end = datetime.combine(date_to + timedelta(days=1), time.min)
+    movement_date = func.coalesce(MovementDocument.completed_at, MovementDocument.created_at)
+    receiving_date = func.coalesce(ReceivingDocument.completed_at, ReceivingDocument.created_at)
+
+    movements = (
+        MovementDocument.query.filter(
+            MovementDocument.synced_to_1c_at.isnot(None),
+            movement_date >= period_start,
+            movement_date < period_end,
+        )
+        .order_by(MovementDocument.id)
+        .all()
+    )
+    receivings = (
+        ReceivingDocument.query.filter(
+            ReceivingDocument.invoice_file_name.isnot(None),
+            ReceivingDocument.status.in_(("sorting", "completed")),
+            receiving_date >= period_start,
+            receiving_date < period_end,
+        )
+        .order_by(ReceivingDocument.id)
+        .all()
+    )
+    return jsonify(
+        {
+            "ok": True,
+            "period": {"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
+            "movements": [_movement_reconciliation_payload(doc) for doc in movements],
+            "receivings": [_receiving_reconciliation_payload(doc) for doc in receivings],
+        }
+    )
+
+
 @bp.route("/api/export")
 def export():
     """Отдает документы, готовые к переносу в 1С: перемещение — только когда
-    в WMS дошло до статуса "Создана заявка" (marketplace_request_created_at
-    заполнен) — на сборке/собрано еще рано, а ждать "Отгружено" (кнопка
+    в WMS дошло до статуса "Создана заявка" (сохранен номер заявки и
+    заполнен marketplace_request_created_at) — на сборке/собрано еще рано,
+    а ждать "Отгружено" (кнопка
     "Принято на складе", doc.received_at) не нужно: как только заявка на
     маркетплейс создана, документ уже достаточно определен для 1С.
     Инвентаризация — завершенные. Уже выгруженные (synced_to_1c_at заполнен)
@@ -423,6 +560,40 @@ def export_confirm():
     # СоздатьПеремещениеТоваров); документ при этом всё равно создан и
     # подтвержден, только не полностью — показываем "!" в списке.
     movement_warnings = data.get("movement_warnings") or {}
+
+    # 1С может вернуть фактически записанные количества строк. Сохраняем
+    # только расхождения; повторная сверка полностью заменяет результат по
+    # документу, поэтому старое предупреждение не остается висеть.
+    quantity_checks = data.get("quantity_checks") or []
+    checked_documents = set()
+    quantity_mismatches = 0
+    for check in quantity_checks:
+        document_type = str(check.get("document_type") or "movement")[:30]
+        document_id = int(check.get("document_id") or 0)
+        if not document_id:
+            continue
+        key = (document_type, document_id)
+        if key not in checked_documents:
+            OneCQuantityCheck.query.filter_by(
+                document_type=document_type, document_id=document_id
+            ).delete(synchronize_session=False)
+            checked_documents.add(key)
+        wms_qty = float(check.get("wms_qty") or 0)
+        one_c_qty = float(check.get("one_c_qty") or 0)
+        if abs(wms_qty - one_c_qty) < 0.000001:
+            continue
+        db.session.add(
+            OneCQuantityCheck(
+                document_type=document_type,
+                document_id=document_id,
+                document_number=str(check.get("document_number") or document_id),
+                barcode=str(check.get("barcode") or "") or None,
+                item_name=str(check.get("name") or "") or None,
+                wms_qty=wms_qty,
+                one_c_qty=one_c_qty,
+            )
+        )
+        quantity_mismatches += 1
 
     now = datetime.utcnow()
     confirmed_movements = (
@@ -498,6 +669,7 @@ def export_confirm():
                 "supplier_returns": len(confirmed_returns),
                 "receiving_adjustments": len(confirmed_receiving_adjustments),
                 "movement_corrections": len(confirmed_movement_corrections),
+                "quantity_mismatches": quantity_mismatches,
             },
         }
     )

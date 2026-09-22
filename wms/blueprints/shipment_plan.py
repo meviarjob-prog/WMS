@@ -1,6 +1,9 @@
 from datetime import date, datetime, timedelta
 import hmac
+import json
+import os
 import secrets
+import tempfile
 import threading
 
 from flask import (
@@ -36,15 +39,23 @@ from ..models import (
 from ..utils.excel_io import export_shipment_plan_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
-from ..utils.shipment_plan_import import extract_period_start, parse_plan_sheet
+from ..utils.shipment_plan_import import (
+    canonical_marketplace_city,
+    extract_period_start,
+    parse_plan_sheet,
+)
 from ..utils.google_sheets import (
     google_sheets_configured,
     load_distribution_workbook,
+    movement_wms_totals,
     received_wms_totals,
     write_distribution_facts,
     write_wms_movement_sheet,
 )
-from .warehouses import default_fulfillment_1c_name
+from .warehouses import (
+    consolidate_marketplace_warehouses,
+    default_fulfillment_1c_name,
+)
 
 bp = Blueprint("shipment_plan", __name__)
 
@@ -63,12 +74,24 @@ GOOGLE_SHEETS_PUBLIC_ENDPOINTS = {"shipment_plan.google_trigger"}
 
 
 def _get_or_create_city_warehouse(marketplace, city_name):
-    wh = Warehouse.query.filter_by(marketplace=marketplace, marketplace_city=city_name).first()
+    city_name = canonical_marketplace_city(city_name)
+    consolidate_marketplace_warehouses(marketplace)
+    wh = next(
+        (
+            warehouse
+            for warehouse in Warehouse.query.filter_by(marketplace=marketplace).all()
+            if canonical_marketplace_city(warehouse.marketplace_city or warehouse.name)
+            == city_name
+        ),
+        None,
+    )
     if wh:
+        wh.marketplace_city = city_name
+        wh.name = city_name
         return wh
     wh = Warehouse(
         code=next_number("warehouse"),
-        name=f"{MARKETPLACE_LABELS[marketplace]}: {city_name}",
+        name=city_name,
         marketplace=marketplace,
         marketplace_city=city_name,
         # Стартовая догадка склада 1С по городу (см.
@@ -81,10 +104,9 @@ def _get_or_create_city_warehouse(marketplace, city_name):
     return wh
 
 
-def _received_since_by_warehouse_and_item(window_start, window_end):
+def _received_since_by_warehouse_and_item(window_start):
     """{(to_warehouse_id, nomenclature_id): кол-во} — уже ПОДТВЕРЖДЕННАЯ
-    приемка перемещением (received_at) в интервале действия плана
-    [window_start, window_end] — "дата распределения" .. +PERIOD_DAYS.
+    приемка перемещением по отгрузкам, сделанным начиная с даты плана.
     Нужно при загрузке НОВОГО плана: _apply_plan полностью заменяет строки
     старой версии плана (plan.lines.delete()), а вместе с ними и
     накопленный fulfilled_qty — без этой подстраховки уже подтвержденное
@@ -93,23 +115,26 @@ def _received_since_by_warehouse_and_item(window_start, window_end):
     в Google Таблицу (local_received). Приемка за пределами интервала (до
     начала периода или после дедлайна +PERIOD_DAYS) к текущему плану
     отношения не имеет и не учитывается."""
-    rows = (
-        db.session.query(
-            MovementDocument.to_warehouse_id,
-            BoxItem.nomenclature_id,
-            func.sum(BoxItem.qty),
-        )
-        .join(MovementLine, MovementLine.document_id == MovementDocument.id)
-        .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
-        .filter(
-            MovementDocument.received_at.isnot(None),
-            MovementDocument.received_at >= window_start,
-            MovementDocument.received_at <= window_end,
-        )
-        .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
-        .all()
-    )
-    return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
+    totals = {}
+    documents = MovementDocument.query.filter(
+        MovementDocument.received_at.isnot(None),
+        func.coalesce(
+            MovementDocument.shipped_at,
+            MovementDocument.received_at,
+            MovementDocument.created_at,
+        ) >= window_start,
+    ).all()
+    for document in documents:
+        actual = {}
+        for movement_line in document.lines:
+            for item in movement_line.box.items:
+                actual[item.nomenclature_id] = actual.get(item.nomenclature_id, 0) + item.qty
+        for discrepancy in document.discrepancies:
+            actual[discrepancy.nomenclature_id] = discrepancy.received_qty
+        for nomenclature_id, qty in actual.items():
+            key = (document.to_warehouse_id, nomenclature_id)
+            totals[key] = totals.get(key, 0) + qty
+    return totals
 
 
 def _apply_plan(marketplace, parsed, uploaded_by_id=None):
@@ -122,10 +147,18 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
     plan.sheet_name = parsed.sheet_name
     plan.uploaded_by_id = uploaded_by_id
     plan.uploaded_at = datetime.utcnow()
-    plan.period_start = extract_period_start(parsed.sheet_name)
+    row_periods = [row.get("period_start") for row in parsed.rows if row.get("period_start")]
+    # Для общей карточки показываем начало самого раннего листа. При этом
+    # маршрутизация использует дату каждой строки отдельно.
+    plan.period_start = min(row_periods) if row_periods else extract_period_start(parsed.sheet_name)
 
     plan.lines.delete()
 
+    # Все варианты написания направления сводим до создания складов и строк
+    # плана. «Москва 1» и «Москва 2» остаются раздельными ключами.
+    for row in parsed.rows:
+        row["city"] = canonical_marketplace_city(row["city"])
+    parsed.cities = list(dict.fromkeys(canonical_marketplace_city(city) for city in parsed.cities))
     city_warehouses = {
         city: _get_or_create_city_warehouse(marketplace, city) for city in parsed.cities
     }
@@ -137,21 +170,13 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
     }
     # Уже подтвержденное приемкой перемещением в WMS — подстраховка от
     # потери fulfilled_qty при замене строк плана (plan.lines.delete() ниже).
-    # Если у плана известна "дата распределения" — считаем только движения
-    # с датой приемки в интервале действия плана: с самой даты распределения
-    # и до дедлайна +PERIOD_DAYS (см. _received_since_by_warehouse_and_item и
-    # _pace_analysis, где используется тот же дедлайн). Приемка до начала
-    # периода или после дедлайна к текущему плану отношения не имеет. Если
-    # дату из названия листа извлечь не удалось — берем весь накопленный
-    # факт без ограничения по периоду, как было до этого разделения.
-    if plan.period_start:
-        window_start = datetime.combine(plan.period_start, datetime.min.time())
-        window_end = datetime.combine(
-            plan.period_start + timedelta(days=PERIOD_DAYS), datetime.max.time()
+    # Факт пересчитывается отдельно для каждой даты листа. Верхней границы
+    # нет: все отгрузки начиная с даты листа закрывают его потребность.
+    received_by_period = {None: received_wms_totals()}
+    for period_start in set(row_periods):
+        received_by_period[period_start] = _received_since_by_warehouse_and_item(
+            datetime.combine(period_start, datetime.min.time())
         )
-        wms_received = _received_since_by_warehouse_and_item(window_start, window_end)
-    else:
-        wms_received = received_wms_totals()
 
     # Один и тот же штрихкод изредка встречается в файле больше одного раза
     # для одного и того же города (дубль строки при ручном ведении таблицы) —
@@ -163,6 +188,10 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
         if key in merged:
             merged[key]["qty"] += row["qty"]
             merged[key]["fact"] += row["fact"]
+            dates = [d for d in (merged[key].get("period_start"), row.get("period_start")) if d]
+            # Если один SKU-город случайно повторяется в листах разных
+            # периодов, считаем его частью более нового плана.
+            merged[key]["period_start"] = max(dates) if dates else None
         else:
             merged[key] = dict(row)
 
@@ -181,19 +210,17 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
                 article=row["article"],
                 size=row["size"],
                 planned_qty=row["qty"],
-                # Факт "отгружено / в пути" из самого файла плана — уже
-                # известное на момент выгрузки выполнение, а не только то,
-                # что WMS увидит через будущие перемещения. Плюс уже
-                # подтвержденная приемка перемещением в WMS (wms_received,
-                # см. выше) — иначе она терялась бы при замене строк плана.
-                fulfilled_qty=max(
-                    row.get("fact", 0.0),
-                    wms_received.get(
+                # Из Google читаем только план. Факт принадлежит WMS и
+                # восстанавливается по принятым перемещениям; затем WMS
+                # сам записывает его в Google в колонки «отгружено / в пути».
+                fulfilled_qty=(
+                    received_by_period[row.get("period_start")].get(
                         (city_warehouses[row["city"]].id, nomenclature.id), 0.0
                     )
                     if nomenclature
-                    else 0.0,
+                    else 0.0
                 ),
+                period_start=row.get("period_start"),
             )
         )
         created += 1
@@ -226,7 +253,12 @@ def _google_sync_status():
 
 def sync_google_plans_and_movements(uploaded_by_id=None):
     """Читает все листы с признаком «Распределение» и публикует в
-    отдельный лист агрегированный факт перемещений из WMS."""
+    отдельный лист агрегированный факт перемещений из WMS.
+
+    Из Google читаем план, а рассчитанный в WMS факт записываем обратно в
+    колонки «отгружено / в пути». При импорте эти колонки не используются
+    как источник факта, поэтому обратной петли и задвоения нет.
+    """
     workbook, sheet_names = load_distribution_workbook(current_app)
     summary = []
     found_any = False
@@ -300,6 +332,40 @@ function syncWms() {{
 '''
 
 
+def _save_google_credentials(upload):
+    data = upload.read(256 * 1024 + 1)
+    if not data:
+        raise ValueError("Выберите JSON-файл ключа")
+    if len(data) > 256 * 1024:
+        raise ValueError("Файл ключа слишком большой")
+    try:
+        payload = json.loads(data.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Выбранный файл не является корректным JSON-ключом") from exc
+    required = ("type", "project_id", "private_key", "client_email", "token_uri")
+    if payload.get("type") != "service_account" or any(not payload.get(k) for k in required):
+        raise ValueError("Это не ключ сервисного аккаунта Google")
+
+    target = current_app.config["GOOGLE_SERVICE_ACCOUNT_FILE"]
+    directory = os.path.dirname(target)
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix="google-key-", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(data)
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        os.replace(temporary, target)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
 @bp.route("/upload", methods=["GET", "POST"])
 def upload():
     if not current_user.is_admin:
@@ -365,8 +431,8 @@ def sync_google():
         flash(
             "Google Таблица синхронизирована: "
             + "; ".join(summary)
-            + f"; выгружено строк WMS: {exported}; "
-            + f"обновлено ячеек «отгружено»: {updated_cells}; "
+            + f"; выгружено строк на лист «WMS — перемещения»: {exported}; "
+            + f"обновлено ячеек факта: {updated_cells}; "
             + f"листов: {len(sheet_names)}",
             "success",
         )
@@ -399,8 +465,9 @@ def google_trigger():
 
     message = (
         "; ".join(summary)
-        + f"; выгружено строк WMS: {exported}; "
-        + f"обновлено ячеек «отгружено»: {updated_cells}; листов: {len(sheet_names)}"
+        + f"; выгружено строк на лист «WMS — перемещения»: {exported}; "
+        + f"обновлено ячеек факта: {updated_cells}; "
+        + f"листов: {len(sheet_names)}"
     )
     return jsonify(ok=True, message=message)
 
@@ -410,9 +477,19 @@ def google_button_setup():
     if not current_user.is_admin:
         flash("Настраивать кнопку Google Таблицы может только администратор", "danger")
         return redirect(url_for("shipment_plan.dashboard"))
-    token = _get_or_create_google_trigger_token(rotate=request.method == "POST")
-    if request.method == "POST":
+    action = request.form.get("action") if request.method == "POST" else None
+    token = _get_or_create_google_trigger_token(rotate=action == "rotate_token")
+    if action == "rotate_token":
         flash("Код кнопки обновлен. Старый код больше не работает.", "success")
+        return redirect(url_for("shipment_plan.google_button_setup"))
+    if action == "upload_credentials":
+        try:
+            _save_google_credentials(request.files.get("credentials"))
+        except (AttributeError, OSError, ValueError) as exc:
+            flash(f"Не удалось сохранить ключ Google: {exc}", "danger")
+        else:
+            flash("Ключ Google сохранен на сервере. Можно запускать загрузку.", "success")
+        return redirect(url_for("shipment_plan.google_button_setup"))
     return render_template(
         "shipment_plan/google_button.html",
         apps_script=_google_apps_script(token),
@@ -527,36 +604,11 @@ def _production_by_nomenclature(nomenclature_ids, period_start):
     return {nomenclature_id: qty for nomenclature_id, qty in rows}
 
 
-def _in_transit_by_warehouse_and_item():
-    """{(warehouse_id, nomenclature_id): кол-во} товара, уже отправленного
-    перемещением на этот склад-город (документ завершен), но еще не
-    подтвержденного кнопкой "Принято на складе" — висит как "в пути".
-    fulfilled_qty у строки плана дописывается только при приемке (см.
-    movement.receive), поэтому без этой раскладки по товарам "Что нужно
-    отправить" ниже продолжал бы требовать полное количество по плану, как
-    будто ничего еще не выехало — раньше это было видно только в сводке по
-    городу целиком, а не по конкретной позиции."""
-    rows = (
-        db.session.query(
-            MovementDocument.to_warehouse_id,
-            BoxItem.nomenclature_id,
-            func.sum(BoxItem.qty),
-        )
-        .join(MovementLine, MovementLine.document_id == MovementDocument.id)
-        .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
-        .filter(MovementDocument.status == "completed", MovementDocument.received_at.is_(None))
-        .group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id)
-        .all()
-    )
-    return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
-
-
 def _pace_analysis(plan, total_planned, total_fulfilled):
     """Успеваем ли отгрузить план за 14 дней с даты из названия листа, и
     сколько дней потребуется при сегодняшнем темпе. Темп считается как
-    среднее "выполнено / дней с начала периода" — то есть за весь период,
-    включая факт, уже отгруженный на момент выгрузки файла (см.
-    ShipmentPlanLine.fulfilled_qty), а не только то, что прошло через WMS."""
+    среднее "факт WMS / дней с начала периода": принятое плюс товар, по
+    которому уже создана заявка на маркетплейс и который находится в пути."""
     if not plan.period_start:
         return None
 
@@ -593,8 +645,7 @@ def _pace_analysis(plan, total_planned, total_fulfilled):
     }
 
 
-@bp.route("/")
-def dashboard():
+def _dashboard_context():
     plans = {p.marketplace: p for p in ShipmentPlan.query.all()}
     sender_ids = _sender_warehouse_ids()
     stock = _stock_by_nomenclature(sender_ids)
@@ -602,10 +653,7 @@ def dashboard():
     for nomenclature_id, qty in _pending_sorting_by_nomenclature(sender_ids).items():
         stock[nomenclature_id] = stock.get(nomenclature_id, 0) + qty
         unplaced_stock[nomenclature_id] = unplaced_stock.get(nomenclature_id, 0) + qty
-    in_transit_by_item = _in_transit_by_warehouse_and_item()
-    in_transit_by_warehouse = {}
-    for (wh_id, _nom_id), qty in in_transit_by_item.items():
-        in_transit_by_warehouse[wh_id] = in_transit_by_warehouse.get(wh_id, 0) + qty
+    movement_totals_by_period = {}
 
     marketplaces_data = []
     lines_by_marketplace = {}
@@ -620,26 +668,61 @@ def dashboard():
         lines = plan.lines.all()
         lines_by_marketplace[marketplace] = lines
 
-        # Сколько по этой позиции уже едет (отправлено перемещением, но еще
-        # не подтверждено кнопкой "Принято на складе") — показывается
-        # отдельным числом рядом с потребностью, но саму потребность не
-        # уменьшает: пока товар физически не проверен на месте, план по
-        # нему остается открытым (тот же принцип, что и у fulfilled_qty,
-        # которая тоже засчитывается только по факту приемки).
+        # «В пути» — весь товар, который транспорт забрал с 00:01 даты
+        # конкретного листа. Завершение сборки и заявка МП сами по себе
+        # отгрузкой не считаются.
         for line in lines:
-            line.in_transit_qty = in_transit_by_item.get((line.warehouse_id, line.nomenclature_id), 0)
+            period_start = line.period_start or plan.period_start
+            if period_start not in movement_totals_by_period:
+                movement_totals_by_period[period_start] = movement_wms_totals(period_start)
+            quantities = movement_totals_by_period[period_start].get(
+                (line.warehouse_id, line.nomenclature_id), {}
+            )
+            line.current_fulfilled_qty = 0.0
+            line.in_transit_qty = quantities.get("shipped", 0.0)
+            line.fulfilled_with_transit_qty = line.in_transit_qty
+            line.effective_remaining_qty = max(
+                line.planned_qty - line.fulfilled_with_transit_qty,
+                0,
+            )
 
         by_warehouse = {}
         for line in lines:
             row = by_warehouse.setdefault(
                 line.warehouse_id,
-                {"warehouse": line.warehouse, "planned": 0, "fulfilled": 0},
+                {
+                    "warehouse": line.warehouse,
+                    "planned": 0,
+                    "fulfilled_with_transit": 0,
+                    "in_transit": 0,
+                },
             )
             row["planned"] += line.planned_qty
-            row["fulfilled"] += line.fulfilled_qty
+            row["fulfilled_with_transit"] += line.fulfilled_with_transit_qty
+            row["in_transit"] += line.in_transit_qty
+
+        # Карточка города показывает ВСЕ завершенные перемещения на этот
+        # склад с даты плана, в том числе товары, которых уже нет (или еще
+        # нет) среди строк актуального плана. Иначе городская сумма меньше
+        # сводного экспорта перемещений: такие SKU просто не находят
+        # ShipmentPlanLine и выпадают. Позиционная таблица и маршрутизация
+        # выше по-прежнему считают только совпавшие SKU.
+        city_totals = movement_totals_by_period.setdefault(
+            plan.period_start,
+            movement_wms_totals(plan.period_start),
+        )
+        shipped_by_warehouse = {}
+        for (warehouse_id, _nomenclature_id), quantities in city_totals.items():
+            shipped_by_warehouse[warehouse_id] = (
+                shipped_by_warehouse.get(warehouse_id, 0.0)
+                + quantities.get("shipped", 0.0)
+            )
+        for warehouse_id, row in by_warehouse.items():
+            row["in_transit"] = shipped_by_warehouse.get(warehouse_id, 0.0)
+            row["fulfilled_with_transit"] = row["in_transit"]
         cities = sorted(by_warehouse.values(), key=lambda r: r["warehouse"].marketplace_city)
         for row in cities:
-            row["in_transit"] = in_transit_by_warehouse.get(row["warehouse"].id, 0)
+            row["remaining"] = max(row["planned"] - row["fulfilled_with_transit"], 0)
 
         # Штрихкоды с невыполненным остатком, для которых нечем отгружать —
         # только для значка-счетчика на карточке; сам список товаров теперь
@@ -648,14 +731,14 @@ def dashboard():
         problem_barcodes = {
             line.barcode
             for line in lines
-            if line.remaining_qty() > 0
+            if line.effective_remaining_qty > 0
             and (line.nomenclature_id is None or stock.get(line.nomenclature_id, 0) <= 0)
         }
 
         total_planned = sum(line.planned_qty for line in lines)
-        total_fulfilled = sum(line.fulfilled_qty for line in lines)
         total_in_transit = sum(row["in_transit"] for row in cities)
-        pace = _pace_analysis(plan, total_planned, total_fulfilled)
+        total_fulfilled_with_transit = total_in_transit
+        pace = _pace_analysis(plan, total_planned, total_fulfilled_with_transit)
 
         marketplaces_data.append(
             {
@@ -665,14 +748,10 @@ def dashboard():
                 "cities": cities,
                 "problems_count": len(problem_barcodes),
                 "total_planned": total_planned,
-                "total_fulfilled": total_fulfilled,
+                "total_fulfilled": 0,
                 "total_in_transit": total_in_transit,
-                # В шапке карточки "выполнено" теперь учитывает и то, что уже
-                # едет (в пути) — по просьбе: общее выполнение плана должно
-                # включать отправленное, а не только подтвержденное приемкой.
-                # В табличной части ниже (по городам и по товарам) ничего не
-                # меняем — там как было, "потребность (в пути)" отдельно.
-                "total_fulfilled_with_transit": total_fulfilled + total_in_transit,
+                # Для плана факт — все завершенные перемещения за период.
+                "total_fulfilled_with_transit": total_fulfilled_with_transit,
                 "pace": pace,
             }
         )
@@ -717,6 +796,10 @@ def dashboard():
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
+            # В таблице показываем остаток самого плана, а уже едущий товар
+            # — отдельно в скобках. Маршрутизация коробов считает свободную
+            # потребность отдельно и вычитает зарезервированные/собранные/
+            # отправленные короба (см. movement._committed_by_warehouse_and_item).
             product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
             product["in_transit_total"] += line.in_transit_qty
 
@@ -744,12 +827,18 @@ def dashboard():
         "in_transit": sum(p["in_transit_total"] for p in picking_list),
         "ozon": {
             city: sum(
-                p["ozon"][city].remaining_qty() for p in picking_list if city in p["ozon"]
+                p["ozon"][city].remaining_qty()
+                for p in picking_list
+                if city in p["ozon"]
             )
             for city in ozon_cities
         },
         "wb": {
-            city: sum(p["wb"][city].remaining_qty() for p in picking_list if city in p["wb"])
+            city: sum(
+                p["wb"][city].remaining_qty()
+                for p in picking_list
+                if city in p["wb"]
+            )
             for city in wb_cities
         },
     }
@@ -781,22 +870,34 @@ def dashboard():
         "total_production": overall_production,
     }
 
+    return {
+        "marketplaces": marketplaces_data,
+        "picking_list": picking_list,
+        "picking_totals": picking_totals,
+        "ozon_cities": ozon_cities,
+        "wb_cities": wb_cities,
+        "summary": summary,
+    }
+
+
+@bp.route("/")
+def dashboard():
     return render_template(
         "shipment_plan/dashboard.html",
-        marketplaces=marketplaces_data,
-        picking_list=picking_list,
-        picking_totals=picking_totals,
-        ozon_cities=ozon_cities,
-        wb_cities=wb_cities,
-        summary=summary,
+        **_dashboard_context(),
         google_sync=_google_sync_status(),
     )
 
 
 @bp.route("/export.xlsx")
 def export_all():
-    lines = ShipmentPlanLine.query.join(ShipmentPlan).all()
-    data = export_shipment_plan_to_excel(lines)
+    context = _dashboard_context()
+    data = export_shipment_plan_to_excel(
+        context["picking_list"],
+        context["picking_totals"],
+        context["ozon_cities"],
+        context["wb_cities"],
+    )
     fname = f"shipment_plan_{timestamp_for_filename()}.xlsx"
     return Response(
         data,

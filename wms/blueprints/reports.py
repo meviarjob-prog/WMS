@@ -10,7 +10,9 @@ from ..models import (
     BoxItem,
     MovementDocument,
     MovementLine,
+    MovementReceiptDiscrepancy,
     Nomenclature,
+    OneCQuantityCheck,
     PlacementDocument,
     ProductCategory,
     ReceivingDocument,
@@ -232,6 +234,55 @@ def movement_report():
     )
 
 
+@bp.route("/movement-shortages")
+def movement_shortages_report():
+    """Документы перемещения, по которым маркетплейс принял меньше товара.
+
+    Детализация уже хранится в MovementReceiptDiscrepancy после действия
+    «Принято на складе», поэтому отчет не копирует данные в отдельный реестр.
+    """
+    warehouse_id = request.args.get("warehouse_id", type=int)
+    date_from = _parse_date(request.args.get("date_from"))
+    date_to = _parse_date(request.args.get("date_to"))
+
+    query = (
+        MovementDocument.query
+        .join(
+            MovementReceiptDiscrepancy,
+            MovementReceiptDiscrepancy.document_id == MovementDocument.id,
+        )
+        .filter(
+            MovementReceiptDiscrepancy.received_qty
+            < MovementReceiptDiscrepancy.expected_qty
+        )
+    )
+    if warehouse_id:
+        query = query.filter(MovementDocument.to_warehouse_id == warehouse_id)
+    if date_from:
+        query = query.filter(MovementDocument.received_at >= date_from)
+    if date_to:
+        query = query.filter(MovementDocument.received_at < date_to)
+
+    documents = query.order_by(MovementDocument.received_at.desc()).all()
+    warehouses = Warehouse.query.order_by(Warehouse.code).all()
+    return render_template(
+        "reports/movement_shortages.html",
+        documents=documents,
+        warehouses=warehouses,
+        selected_warehouse_id=warehouse_id,
+        date_from=request.args.get("date_from", ""),
+        date_to=request.args.get("date_to", ""),
+    )
+
+
+@bp.route("/one-c-quantity-mismatches")
+def one_c_quantity_mismatches():
+    rows = OneCQuantityCheck.query.order_by(
+        OneCQuantityCheck.checked_at.desc(), OneCQuantityCheck.document_number
+    ).all()
+    return render_template("reports/one_c_quantity_mismatches.html", rows=rows)
+
+
 def _shipped_rows():
     """Сколько и какого товара реально отгружено (перемещение со склада
     отправки завершено — товар физически уехал) по складам назначения, за
@@ -249,14 +300,14 @@ def _shipped_rows():
         )
         .join(MovementLine, MovementLine.document_id == MovementDocument.id)
         .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
-        .filter(MovementDocument.status == "completed")
+        .filter(MovementDocument.shipped_at.isnot(None))
     )
     if warehouse_id:
         query = query.filter(MovementDocument.to_warehouse_id == warehouse_id)
     if date_from:
-        query = query.filter(MovementDocument.completed_at >= date_from)
+        query = query.filter(MovementDocument.shipped_at >= date_from)
     if date_to:
-        query = query.filter(MovementDocument.completed_at < date_to)
+        query = query.filter(MovementDocument.shipped_at < date_to)
 
     grouped = query.group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id).all()
 

@@ -92,6 +92,7 @@ body {
 .status-chip-assembled { background-color: #fd7e14; }
 .status-chip-requested { background-color: #ffc107; color: #000; }
 .status-chip-shipped { background-color: #198754; }
+.status-chip-accepted { background-color: #0d6efd; }
 
 /* Список перемещений: строка окрашивается по маркетплейсу склада
    назначения — визуально отличить ВБ от Озон, не открывая документ.
@@ -108,6 +109,10 @@ body {
 .mp-row-wb a, .mp-row-wb .text-muted { color: #fff !important; text-decoration: underline; }
 .mp-row-ozon, .mp-row-ozon > td { background-color: #3396ff !important; color: #fff !important; }
 .mp-row-ozon a, .mp-row-ozon .text-muted { color: #fff !important; text-decoration: underline; }
+.mp-row-wb a.movement-number,
+.mp-row-ozon a.movement-number,
+.mp-row-wb a.movement-receive-btn,
+.mp-row-ozon a.movement-receive-btn { text-decoration: none; }
 /* Галочка сохранения "№ заявки на МП" (btn-outline-secondary) серая по
    умолчанию — на подсвеченной строке сливается с фоном, поэтому здесь
    белая. */
@@ -120,6 +125,42 @@ body {
 
 /* Широкие таблицы не должны ломать верстку на телефоне — скроллим по горизонтали */
 @media (max-width: 767.98px) {
+  /* Меньше пустого пространства от верхнего меню до содержимого и между
+     основными блоками мобильных списков. */
+  .navbar.mb-4 {
+    margin-bottom: .75rem !important;
+  }
+
+  .mobile-compact-list-page > .mb-4,
+  .mobile-compact-list-page > .mb-3 {
+    margin-bottom: .75rem !important;
+  }
+
+  /* На телефоне оставляем экрану больше полезной ширины: стандартные
+     боковые поля Bootstrap здесь визуально слишком велики. */
+  .app-content {
+    padding-left: .5rem !important;
+    padding-right: .5rem !important;
+  }
+
+  /* Компактнее отступы вокруг списков перемещений и приемок, а также
+     внутри каждой строки. */
+  .movement-list-card,
+  .receiving-list-card {
+    padding-top: .5rem !important;
+    padding-left: .5rem !important;
+    padding-right: .5rem !important;
+    padding-bottom: .5rem !important;
+  }
+
+  .movement-list-item,
+  .receiving-list-item {
+    padding-top: .375rem !important;
+    padding-left: .375rem !important;
+    padding-right: .375rem !important;
+    padding-bottom: .375rem !important;
+  }
+
   .card .table {
     display: block;
     overflow-x: auto;

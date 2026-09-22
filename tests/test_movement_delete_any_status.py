@@ -67,7 +67,10 @@ def test_admin_can_delete_completed_and_received_document_reverts_shipment_fulfi
     db.session.commit()
 
     client_logged_in.post(f"/movement/{doc.id}/complete")
+    doc.marketplace_request_number = "REQ-DEL-2"
+    db.session.commit()
     client_logged_in.post(f"/movement/{doc.id}/mark-marketplace-request")
+    client_logged_in.post(f"/movement/{doc.id}/mark-shipped")
     client_logged_in.post(f"/movement/{doc.id}/receive")
     plan_line = ShipmentPlanLine.query.get(plan_line.id)
     assert plan_line.fulfilled_qty == 7

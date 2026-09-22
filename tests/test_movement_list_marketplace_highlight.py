@@ -3,6 +3,8 @@
 #594CD8 (класс mp-row-ozon), остальные (не маркетплейс, обычный
 внутренний склад) — без подсветки."""
 
+from datetime import datetime
+
 from wms.extensions import db
 from wms.models import MovementDocument, Warehouse
 
@@ -31,6 +33,8 @@ def test_wb_destination_gets_wb_highlight_class(db, client_logged_in):
     row_start = html.index(doc.number)
     row_html = html[max(0, row_start - 400):row_start]
     assert "mp-row-wb" in row_html
+    row_end = html.index("</tr>", row_start)
+    assert ">ВБ</span>" in html[row_start:row_end]
 
 
 def test_ozon_destination_gets_ozon_highlight_class(db, client_logged_in):
@@ -39,6 +43,8 @@ def test_ozon_destination_gets_ozon_highlight_class(db, client_logged_in):
     row_start = html.index(doc.number)
     row_html = html[max(0, row_start - 400):row_start]
     assert "mp-row-ozon" in row_html
+    row_end = html.index("</tr>", row_start)
+    assert ">ОЗОН</span>" in html[row_start:row_end]
 
 
 def test_non_marketplace_destination_gets_no_highlight_class(db, client_logged_in):
@@ -48,3 +54,26 @@ def test_non_marketplace_destination_gets_no_highlight_class(db, client_logged_i
     row_html = html[max(0, row_start - 400):row_start]
     assert "mp-row-wb" not in row_html
     assert "mp-row-ozon" not in row_html
+
+
+def test_movement_opens_only_by_number_and_open_link_is_removed(db, client_logged_in):
+    doc = _make_movement("PER-MPH-4", marketplace="ozon")
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+
+    assert f'class="movement-number text-decoration-none" href="/movement/{doc.id}"' in html
+    assert "movement-clickable-row" not in html
+    assert "data-href=" not in html
+    assert ">Открыть</a>" not in html
+
+
+def test_receive_button_has_no_underline_class(db, client_logged_in):
+    doc = _make_movement("PER-MPH-5", marketplace="wb")
+    doc.status = "completed"
+    doc.completed_at = datetime.utcnow()
+    doc.marketplace_request_number = "REQ-MPH-5"
+    doc.marketplace_request_created_at = datetime.utcnow()
+    doc.shipped_at = datetime.utcnow()
+    db.session.commit()
+
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    assert "movement-receive-btn text-decoration-none" in html

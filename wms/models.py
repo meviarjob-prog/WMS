@@ -122,10 +122,23 @@ class User(UserMixin, db.Model):
     # (см. movement._can_view_movement_document) — без него не добраться до
     # кнопок на детальной странице.
     movement_complete_allowed = db.Column(db.Boolean, nullable=False, default=False)
+    # Отдельное право подтверждать фактическую приемку перемещения на
+    # складе назначения. Не связано с правом завершать сборку.
+    movement_receive_allowed = db.Column(db.Boolean, nullable=True, default=None)
+    # Отдельный доступ к сводной панели руководителя. Операционные отчеты
+    # могут быть доступны сотруднику, но финансово-управленческая сводка
+    # при этом остается скрытой.
+    management_dashboard_allowed = db.Column(db.Boolean, nullable=False, default=False)
+    # Рабочий склад сотрудника. Для перемещений он всегда становится
+    # складом-отправителем, поэтому сотрудник не может случайно собрать
+    # документ от имени другого склада.
+    warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=True)
     # Версия входа используется для принудительного завершения сессий.
     # Она записывается в cookie при авторизации; увеличение значения делает
     # все ранее выданные cookie пользователя недействительными.
     session_version = db.Column(db.Integer, nullable=False, default=0)
+
+    warehouse = db.relationship("Warehouse", foreign_keys=[warehouse_id])
 
     def is_production_only(self):
         return self.role == "production" and not self.is_admin
@@ -155,6 +168,16 @@ class User(UserMixin, db.Model):
 
     def can_complete_movements(self):
         return self.is_admin or self.movement_complete_allowed is True
+
+    def can_receive_movements(self):
+        # NULL — пользователь существовал до разделения старого общего
+        # права; сохраняем прежнее поведение до первого сохранения формы.
+        return self.is_admin or self.movement_receive_allowed is True or (
+            self.movement_receive_allowed is None and self.movement_complete_allowed is True
+        )
+
+    def can_view_management_dashboard(self):
+        return self.is_admin or self.management_dashboard_allowed is True
 
     def has_section_access(self, section):
         """Раздел не из SECTIONS (например, служебные api/boxes/labels) не
@@ -196,9 +219,9 @@ class Warehouse(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     # Заполнено только для складов-городов, созданных автоматически при
     # загрузке плана отгрузок (см. ShipmentPlan) — "ozon"/"wb". У обычных
-    # физических складов оба поля пустые. marketplace_city хранит исходное
-    # название города из файла плана, чтобы при повторной загрузке находить
-    # тот же склад, а не плодить дубликаты каждые 2 недели.
+    # физических складов оба поля пустые. marketplace_city хранит
+    # каноническое направление без префикса площадки; регистр, пробелы и
+    # алиасы нормализуются при импорте плана.
     marketplace = db.Column(db.String(20), nullable=True)
     marketplace_city = db.Column(db.String(100), nullable=True)
     # Свободный текст (название организации/адрес/телефон) — печатается на
@@ -223,6 +246,9 @@ class Warehouse(db.Model):
     fulfillment_1c_name = db.Column(db.String(200), nullable=True)
 
     cells = db.relationship("Cell", backref="warehouse", lazy="dynamic")
+
+    def marketplace_label(self):
+        return {"ozon": "ОЗОН", "wb": "ВБ"}.get(self.marketplace, "")
 
     def __repr__(self):
         return f"<Warehouse {self.code}>"
@@ -589,6 +615,14 @@ class ReceivingDocument(db.Model):
     # см. receiving.send_to_sorting/complete.
     status = db.Column(db.String(20), nullable=False, default="draft")
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    # Если приемка была открыта из инвентаризации пустого короба, после
+    # завершения возвращаем сотрудника в тот же лист.
+    return_inventory_id = db.Column(
+        db.Integer, db.ForeignKey("inventory_documents.id"), nullable=True
+    )
+    return_inventory_box_id = db.Column(
+        db.Integer, db.ForeignKey("boxes.id"), nullable=True
+    )
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     # Когда документ перешел на пересчет/разбраковку — для истории статусов
     # на странице приемки (см. receiving.send_to_recount/send_to_sorting).
@@ -748,7 +782,7 @@ class MovementDocument(db.Model):
     number = db.Column(db.String(30), unique=True, nullable=False)
     from_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False)
     to_warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False, index=True)
-    status = db.Column(db.String(20), nullable=False, default="draft")  # draft | completed | merged
+    status = db.Column(db.String(20), nullable=False, default="draft")  # draft | collected | completed | merged
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
@@ -788,10 +822,12 @@ class MovementDocument(db.Model):
     # от зеленой "1С" — независима от нее и от самой отправки, для
     # отдельного контроля за заявкой на приемку на стороне маркетплейса.
     marketplace_request_created_at = db.Column(db.DateTime, nullable=True)
-    # Номер самой заявки на приемку у маркетплейса — вносится вручную,
-    # когда становится известен (галочка выше могла быть отмечена раньше,
-    # до того как номер стал известен). См. movement.update_marketplace_request_number.
+    # Номер самой заявки на приемку у маркетплейса вносится вручную до
+    # установки галочки выше. См. movement.update_marketplace_request_number.
     marketplace_request_number = db.Column(db.String(50), nullable=True)
+    # Момент, когда транспорт физически забрал товар. Он отделен и от
+    # подачи заявки на МП, и от последующей фактической приемки площадкой.
+    shipped_at = db.Column(db.DateTime, nullable=True)
     # Заполняется, когда состав уже выгруженного в 1С документа меняют
     # (добавили/удалили короб — movement.add_box/delete_line, или поправили
     # количество в коробе, уже уехавшем этим перемещением — boxes.add_item/
@@ -800,6 +836,11 @@ class MovementDocument(db.Model):
     # ничего не нужно. Сбрасывается обратно в NULL, когда 1С подтверждает,
     # что скорректировала документ у себя (см. export_confirm).
     composition_changed_at = db.Column(db.DateTime, nullable=True)
+    # Снимки количества до и после приемки. Нужны, потому что при недовозе
+    # физический остаток коробов корректируется, но документ должен навсегда
+    # показывать, сколько было отправлено и сколько фактически принято.
+    sent_qty_snapshot = db.Column(db.Float, nullable=True)
+    received_qty_snapshot = db.Column(db.Float, nullable=True)
 
     from_warehouse = db.relationship("Warehouse", foreign_keys=[from_warehouse_id])
     to_warehouse = db.relationship("Warehouse", foreign_keys=[to_warehouse_id])
@@ -820,6 +861,38 @@ class MovementDocument(db.Model):
             .filter(BoxItem.box_id.in_(box_ids))
             .scalar()
         ) or 0
+
+    def total_received_qty(self):
+        """Фактически принято на складе назначения с учетом расхождений."""
+        if self.received_at is None:
+            return None
+        if self.received_qty_snapshot is not None:
+            return self.received_qty_snapshot
+        return self.total_item_qty() + sum(
+            discrepancy.received_qty - discrepancy.expected_qty
+            for discrepancy in self.discrepancies
+        )
+
+    def total_sent_qty(self):
+        return self.sent_qty_snapshot if self.sent_qty_snapshot is not None else self.total_item_qty()
+
+    def total_shortage_qty(self):
+        """Сколько товара не принято на складе назначения и нужно найти."""
+        return sum(discrepancy.shortage_qty() for discrepancy in self.discrepancies)
+
+    def total_plan_fact_qty(self):
+        """Количество документа, которое может входить в факт плана.
+
+        До передачи транспорту завершенный документ не считается отгрузкой.
+        В пути учитываем состав коробов, после приемки — фактически принятое.
+        """
+        if self.status != "completed":
+            return 0
+        if self.received_at is not None:
+            return self.total_received_qty()
+        if self.shipped_at is not None:
+            return self.total_item_qty()
+        return 0
 
 
 class MovementReceiptDiscrepancy(db.Model):
@@ -848,6 +921,31 @@ class MovementReceiptDiscrepancy(db.Model):
 
     def diff(self):
         return self.received_qty - self.expected_qty
+
+    def shortage_qty(self):
+        return max(self.expected_qty - self.received_qty, 0)
+
+    def excess_qty(self):
+        return max(self.received_qty - self.expected_qty, 0)
+
+
+class OneCQuantityCheck(db.Model):
+    """Результат сверки количества документа в 1С с тем же документом WMS."""
+
+    __tablename__ = "one_c_quantity_checks"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_type = db.Column(db.String(30), nullable=False, index=True)
+    document_id = db.Column(db.Integer, nullable=False, index=True)
+    document_number = db.Column(db.String(50), nullable=False)
+    barcode = db.Column(db.String(100), nullable=True)
+    item_name = db.Column(db.String(300), nullable=True)
+    wms_qty = db.Column(db.Float, nullable=False, default=0)
+    one_c_qty = db.Column(db.Float, nullable=False, default=0)
+    checked_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def diff(self):
+        return self.one_c_qty - self.wms_qty
 
 
 class MovementLine(db.Model):
@@ -1005,7 +1103,6 @@ class ShipmentPlan(db.Model):
     # см. utils.shipment_plan_import.extract_period_start. Пусто, если в
     # названии листа не нашлось даты. Период считается равным 14 дням.
     period_start = db.Column(db.Date, nullable=True)
-
     uploaded_by = db.relationship("User")
     lines = db.relationship(
         "ShipmentPlanLine", backref="plan", lazy="dynamic", cascade="all, delete-orphan"
@@ -1030,6 +1127,10 @@ class ShipmentPlanLine(db.Model):
     size = db.Column(db.String(50))
     planned_qty = db.Column(db.Float, nullable=False, default=0)
     fulfilled_qty = db.Column(db.Float, nullable=False, default=0)
+    # Дата берется из названия конкретного листа «Распределение». Поэтому
+    # строки одного объединенного плана могут начинаться в разные даты.
+    # Только перемещения с этой даты закрывают потребность строки.
+    period_start = db.Column(db.Date, nullable=True)
 
     warehouse = db.relationship("Warehouse")
     nomenclature = db.relationship("Nomenclature")
@@ -1039,7 +1140,8 @@ class ShipmentPlanLine(db.Model):
     )
 
     def remaining_qty(self):
-        return max(self.planned_qty - self.fulfilled_qty, 0)
+        fulfilled_qty = getattr(self, "current_fulfilled_qty", self.fulfilled_qty)
+        return max(self.planned_qty - fulfilled_qty, 0)
 
 
 class SupplierReturn(db.Model):

@@ -34,6 +34,10 @@ def _ship(client, sender, dest, item, qty, box_number):
     db.session.commit()
     client.post(f"/movement/{doc.id}/boxes/add", data={"box_number": box_number})
     client.post(f"/movement/{doc.id}/complete")
+    doc.marketplace_request_number = f"REQ-{box_number}"
+    doc.marketplace_request_created_at = datetime.utcnow()
+    db.session.commit()
+    client.post(f"/movement/{doc.id}/mark-shipped")
     return MovementDocument.query.get(doc.id)
 
 
@@ -73,7 +77,7 @@ def test_shipped_report_filters_by_date_range(db, client_logged_in):
     item = _make_item("9990000003")
 
     doc = _ship(client_logged_in, sender, dest, item, 8, "BOX-SHIP-5")
-    doc.completed_at = datetime.utcnow() - timedelta(days=10)
+    doc.shipped_at = datetime.utcnow() - timedelta(days=10)
     db.session.commit()
 
     date_from = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")

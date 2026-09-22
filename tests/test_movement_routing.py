@@ -2,6 +2,8 @@
 потребности плана отгрузок, с учетом уже едущих туда (но не принятых)
 коробов — см. обсуждение "нужно 30, отсканировали короб с 10"."""
 
+from datetime import date, datetime, timedelta
+
 from flask import g
 
 from wms.extensions import db
@@ -127,6 +129,39 @@ def test_routing_subtracts_boxes_already_in_transit(db, client_logged_in):
 
     routing = _compute_routing(box2)
     assert routing[0]["total_remaining"] == 20
+
+
+def test_routing_does_not_carry_old_boxes_into_new_dated_plan(db, client_logged_in):
+    """После смены даты листа это новый план: короб, отсканированный в
+    перемещение до новой даты, не уменьшает новую потребность."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    plan = ShipmentPlan.query.filter_by(marketplace="ozon").first()
+    plan.period_start = date.today()
+    line = ShipmentPlanLine.query.filter_by(plan_id=plan.id).first()
+    line.period_start = date.today()
+
+    old_box = _make_box(sender, item, qty=10, box_number="BOX-OLD-PLAN")
+    new_box = _make_box(sender, item, qty=5, box_number="BOX-NEW-PLAN")
+    doc = MovementDocument(
+        number="MOV-OLD-PLAN",
+        from_warehouse_id=sender.id,
+        to_warehouse_id=city.id,
+        status="draft",
+    )
+    db.session.add(doc)
+    db.session.flush()
+    db.session.add(
+        MovementLine(
+            document_id=doc.id,
+            box_id=old_box.id,
+            from_warehouse_id=sender.id,
+            scanned_at=datetime.combine(date.today() - timedelta(days=1), datetime.min.time()),
+        )
+    )
+    db.session.commit()
+
+    routing = _compute_routing(new_box)
+    assert routing[0]["total_remaining"] == 30
 
 
 def test_routing_add_stays_on_scanning_page_not_document(db, client_logged_in):

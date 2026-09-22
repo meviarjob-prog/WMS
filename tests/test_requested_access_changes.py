@@ -206,10 +206,6 @@ def test_non_admin_viewer_can_toggle_marketplace_bookkeeping_marks_on_foreign_mo
     assert resp.status_code == 200
     assert MovementDocument.query.get(movement.id).accounting_entered_at is not None
 
-    resp = client.post(f"/movement/{movement.id}/toggle-marketplace-request", follow_redirects=True)
-    assert resp.status_code == 200
-    assert MovementDocument.query.get(movement.id).marketplace_request_created_at is not None
-
     resp = client.post(
         f"/movement/{movement.id}/marketplace-request-number",
         data={"marketplace_request_number": "REQ-999"},
@@ -217,6 +213,10 @@ def test_non_admin_viewer_can_toggle_marketplace_bookkeeping_marks_on_foreign_mo
     )
     assert resp.status_code == 200
     assert MovementDocument.query.get(movement.id).marketplace_request_number == "REQ-999"
+
+    resp = client.post(f"/movement/{movement.id}/toggle-marketplace-request", follow_redirects=True)
+    assert resp.status_code == 200
+    assert MovementDocument.query.get(movement.id).marketplace_request_created_at is not None
 
     # Реальное изменение документа (не просто пометка) чужим не-админом
     # по-прежнему запрещено.
@@ -269,6 +269,7 @@ def test_admin_can_grant_warehouse_mapping_permission_in_user_settings(
     worker = _user("mapping-settings-worker")
     html = client_logged_in.get("/users").get_data(as_text=True)
     assert "Разрешить сопоставление складов с 1С" in html
+    assert "Панель руководителя" in html
 
     client_logged_in.post(
         f"/users/{worker.id}/sections",
@@ -278,11 +279,13 @@ def test_admin_can_grant_warehouse_mapping_permission_in_user_settings(
             "warehouse_mapping": "on",
             "movement_view": "on",
             "movement_complete": "on",
+            "management_dashboard": "on",
         },
     )
     assert User.query.get(worker.id).warehouse_mapping_allowed is True
     assert User.query.get(worker.id).movement_view_allowed is True
     assert User.query.get(worker.id).movement_complete_allowed is True
+    assert User.query.get(worker.id).management_dashboard_allowed is True
 
     # Не отмечена — снимается (а не остается как было), как и остальные
     # галочки этой формы.
@@ -291,6 +294,7 @@ def test_admin_can_grant_warehouse_mapping_permission_in_user_settings(
         data={"mode": "full"},
     )
     assert User.query.get(worker.id).movement_complete_allowed is False
+    assert User.query.get(worker.id).management_dashboard_allowed is False
 
 
 def test_admin_can_toggle_admin_rights_for_other_user(db, client_logged_in):
@@ -353,7 +357,10 @@ def test_movement_complete_permission_allows_completing_foreign_movement(db, cli
     assert resp.status_code == 200
     assert MovementDocument.query.get(movement.id).status == "completed"
 
+    movement.marketplace_request_number = "REQ-COMPLETE-1"
+    db.session.commit()
     client.post(f"/movement/{movement.id}/mark-marketplace-request")
+    client.post(f"/movement/{movement.id}/mark-shipped")
 
     resp = client.post(f"/movement/{movement.id}/receive", follow_redirects=True)
     assert resp.status_code == 200

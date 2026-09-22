@@ -55,6 +55,19 @@ def _ensure_columns():
                             )
                         )
                     print("[schema] movement_documents.received_at заполнен для уже завершенных документов")
+                if table.name == "movement_documents" and column.name == "shipped_at":
+                    # Исторические принятые документы точно были переданы
+                    # транспорту. Точное время неизвестно, поэтому для них
+                    # используем завершение сборки как наиболее близкую
+                    # доступную отметку; новые документы фиксируются кнопкой.
+                    with db.engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                "UPDATE movement_documents SET shipped_at = completed_at "
+                                "WHERE received_at IS NOT NULL AND shipped_at IS NULL"
+                            )
+                        )
+                    print("[schema] movement_documents.shipped_at заполнен для исторических приемок")
                 if table.name == "warehouses" and column.name == "fulfillment_1c_name":
                     # Известные соответствия "город -> склад 1С" (см.
                     # wms.blueprints.warehouses.FULFILLMENT_1C_DEFAULTS) —
@@ -139,6 +152,24 @@ def _ensure_columns():
                         "[schema] users.movement_view_allowed заполнен "
                         "для уже существующих пользователей"
                     )
+                if table.name == "users" and column.name == "movement_receive_allowed":
+                    with db.engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                "UPDATE users SET movement_receive_allowed = movement_complete_allowed "
+                                "WHERE movement_receive_allowed IS NULL"
+                            )
+                        )
+                    print("[schema] users.movement_receive_allowed заполнен для существующих пользователей")
+                if table.name == "users" and column.name == "management_dashboard_allowed":
+                    with db.engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                "UPDATE users SET management_dashboard_allowed = 0 "
+                                "WHERE management_dashboard_allowed IS NULL"
+                            )
+                        )
+                    print("[schema] users.management_dashboard_allowed заполнен для существующих пользователей")
             except Exception as exc:  # noqa: BLE001
                 print(f"[schema] Не удалось добавить {table.name}.{column.name}: {exc}")
 
@@ -293,6 +324,7 @@ def create_app(config_class=Config):
     from .blueprints.integration_1c import bp as integration_1c_bp
     from .blueprints.onboarding import bp as onboarding_bp
     from .blueprints.marketplace_export import bp as marketplace_export_bp
+    from .blueprints.management import bp as management_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
@@ -312,6 +344,7 @@ def create_app(config_class=Config):
     app.register_blueprint(integration_1c_bp, url_prefix="/integrations/1c")
     app.register_blueprint(onboarding_bp, url_prefix="/onboarding")
     app.register_blueprint(marketplace_export_bp, url_prefix="/marketplace-export")
+    app.register_blueprint(management_bp, url_prefix="/management")
 
     with app.app_context():
         from . import models  # noqa: F401

@@ -7,10 +7,24 @@
 
 {% if not google_configured %}
 <div class="alert alert-warning">
-  WMS пока не видит ключ Google. На компьютере, где запущена WMS, положите файл ключа в
-  <code>instance\google-service-account.json</code>, затем перезапустите WMS.
+  WMS пока не видит ключ Google. Загрузите ниже JSON-файл сервисного аккаунта, который вы скачали из Google Cloud.
 </div>
 {% endif %}
+
+<div class="card p-3 mb-4">
+  <h5>Ключ Google</h5>
+  {% if google_configured %}
+  <p class="text-success">Ключ установлен на сервере.</p>
+  {% endif %}
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="action" value="upload_credentials">
+    <div class="input-group">
+      <input class="form-control" type="file" name="credentials" accept="application/json,.json" required>
+      <button class="btn btn-primary" type="submit">Загрузить ключ</button>
+    </div>
+  </form>
+  <div class="form-text">Файл хранится только на сервере WMS и не загружается в GitHub.</div>
+</div>
 
 <ol class="mb-4">
   <li>Откройте Google Таблицу и выберите <b>Расширения → Apps Script</b>.</li>
@@ -25,6 +39,7 @@
 
 <hr class="my-4">
 <form method="post" onsubmit="return confirm('Старый код кнопки перестанет работать. Продолжить?')">
+  <input type="hidden" name="action" value="rotate_token">
   <button class="btn btn-outline-danger" type="submit">Создать новый защищенный код</button>
 </form>
 {% endblock %}

@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Недовозы по перемещениям{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('reports.index') }}">&larr; Отчеты</a></p>
+<h3 class="mb-1">Недовозы по перемещениям</h3>
+<p class="text-muted small mb-4">
+  Список перемещений, по которым маркетплейс принял меньше товара, чем было отправлено.
+  Нажмите номер перемещения, чтобы увидеть штрихкод, наименование и количество товара, которое нужно найти.
+</p>
+
+<div class="card p-3 mb-4">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label">Склад назначения</label>
+      <select name="warehouse_id" class="form-select">
+        <option value="">Все склады</option>
+        {% for wh in warehouses %}
+          <option value="{{ wh.id }}" {% if selected_warehouse_id == wh.id %}selected{% endif %}>{{ wh.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label">Принято с даты</label>
+      <input type="date" name="date_from" class="form-control" value="{{ date_from }}">
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label">По дату</label>
+      <input type="date" name="date_to" class="form-control" value="{{ date_to }}">
+    </div>
+    <div class="col-md-2">
+      <button type="submit" class="btn btn-primary w-100">Показать</button>
+    </div>
+  </form>
+</div>
+
+<div class="card p-3">
+  <h5 class="mb-2">Документы: {{ documents|length }}</h5>
+  <table class="table table-sm table-mobile-compact d-none d-md-table align-middle">
+    <thead>
+      <tr>
+        <th>Перемещение</th>
+        <th>Дата приемки</th>
+        <th>Куда</th>
+        <th>Отправлено</th>
+        <th>Принято на МП</th>
+        <th>Недовоз</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for d in documents %}
+      {% set sent_qty = d.total_item_qty() %}
+      {% set accepted_qty = d.total_received_qty() %}
+      <tr>
+        <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}" class="fw-bold">{{ d.number }}</a></td>
+        <td>{{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') if d.received_at else '—' }}</td>
+        <td>{% if d.to_warehouse.marketplace %}<span class="badge bg-secondary">{{ d.to_warehouse.marketplace_label() }}</span> {% endif %}{{ d.to_warehouse.name }}</td>
+        <td>{{ sent_qty | int if sent_qty == sent_qty | int else sent_qty | round(3) }}</td>
+        <td>{{ accepted_qty | int if accepted_qty == accepted_qty | int else accepted_qty | round(3) }}</td>
+        <td class="text-danger fw-bold">{{ d.total_shortage_qty() | int if d.total_shortage_qty() == d.total_shortage_qty() | int else d.total_shortage_qty() | round(3) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="text-muted">Недовозов не найдено</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="list-group d-md-none">
+    {% for d in documents %}
+      {% set sent_qty = d.total_item_qty() %}
+      {% set accepted_qty = d.total_received_qty() %}
+      <a href="{{ url_for('movement.detail', doc_id=d.id) }}" class="list-group-item list-group-item-action py-2 px-2 text-decoration-none text-body">
+        <div class="d-flex justify-content-between gap-2">
+          <span class="fw-bold">{{ d.number }}</span>
+          <span class="badge bg-warning text-dark">Недовоз {{ d.total_shortage_qty() | round(3) }}</span>
+        </div>
+        <div class="small text-muted">{% if d.to_warehouse.marketplace %}{{ d.to_warehouse.marketplace_label() }} · {% endif %}{{ d.to_warehouse.name }}</div>
+        <div class="small">Отправлено {{ sent_qty | round(3) }} · принято {{ accepted_qty | round(3) }}</div>
+      </a>
+    {% else %}
+      <div class="list-group-item text-muted">Недовозов не найдено</div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

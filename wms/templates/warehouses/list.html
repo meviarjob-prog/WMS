@@ -41,7 +41,7 @@
         {% for wh in warehouses %}
           <tr>
             <td>{{ wh.code }}</td>
-            <td>{{ wh.name }}</td>
+            <td>{% if wh.marketplace %}<span class="badge bg-secondary">{{ wh.marketplace_label() }}</span> {% endif %}{{ wh.name }}</td>
             <td>{{ wh.address or '' }}</td>
             <td>{% if wh.is_active %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}</td>
             <td>
@@ -60,6 +60,12 @@
               <form method="post" action="{{ url_for('warehouses.toggle_warehouse', warehouse_id=wh.id) }}" class="d-inline">
                 <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if wh.is_active else 'Включить' }}</button>
               </form>
+              {% if current_user.is_admin and wh.marketplace %}
+              <form method="post" action="{{ url_for('warehouses.delete_warehouse', warehouse_id=wh.id) }}" class="d-inline"
+                    onsubmit="return confirm('Удалить склад «{{ wh.marketplace_label() }} · {{ wh.name }}» и его строки плана? Действие нельзя отменить.')">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Удалить</button>
+              </form>
+              {% endif %}
             </td>
           </tr>
         {% else %}
@@ -72,7 +78,7 @@
         {% for wh in warehouses %}
           <div class="list-group-item py-2 px-2">
             <div class="d-flex justify-content-between align-items-center gap-2">
-              <a href="{{ url_for('warehouses.cells', warehouse_id=wh.id) }}" class="fw-bold text-decoration-none">{{ wh.code }} — {{ wh.name }}</a>
+              <a href="{{ url_for('warehouses.cells', warehouse_id=wh.id) }}" class="fw-bold text-decoration-none">{{ wh.code }} — {% if wh.marketplace %}{{ wh.marketplace_label() }} · {% endif %}{{ wh.name }}</a>
               {% if wh.is_active %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}
             </div>
             {% if wh.address %}<div class="small text-muted">{{ wh.address }}</div>{% endif %}
@@ -86,9 +92,17 @@
                   {% endif %}
                 {% endif %}
               </div>
-              <form method="post" action="{{ url_for('warehouses.toggle_warehouse', warehouse_id=wh.id) }}">
-                <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if wh.is_active else 'Включить' }}</button>
-              </form>
+              <div class="d-flex flex-wrap justify-content-end gap-1">
+                <form method="post" action="{{ url_for('warehouses.toggle_warehouse', warehouse_id=wh.id) }}">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary">{{ 'Отключить' if wh.is_active else 'Включить' }}</button>
+                </form>
+                {% if current_user.is_admin and wh.marketplace %}
+                <form method="post" action="{{ url_for('warehouses.delete_warehouse', warehouse_id=wh.id) }}"
+                      onsubmit="return confirm('Удалить склад «{{ wh.marketplace_label() }} · {{ wh.name }}» и его строки плана? Действие нельзя отменить.')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger">Удалить</button>
+                </form>
+                {% endif %}
+              </div>
             </div>
           </div>
         {% else %}
@@ -109,7 +123,7 @@
     <tbody>
     {% for wh in fulfillment_warehouses %}
       <tr>
-        <td>{{ wh.name }}</td>
+        <td><span class="badge bg-secondary">{{ wh.marketplace_label() }}</span> {{ wh.name }}</td>
         <td style="min-width:340px">
           <form method="post" action="{{ url_for('warehouses.update_fulfillment_1c_name', warehouse_id=wh.id) }}" class="d-flex gap-1">
             <input type="text" name="fulfillment_1c_name" value="{{ wh.fulfillment_1c_name or '' }}" class="form-control form-control-sm" placeholder="Товары в пути ФФ ...">

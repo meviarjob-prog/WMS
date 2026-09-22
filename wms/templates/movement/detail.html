@@ -2,6 +2,7 @@
 {% block title %}Перемещение {{ doc.number }}{% endblock %}
 {% block content %}
 {% set can_manage_document = current_user.is_admin or current_user.can_complete_movements() or doc.created_by_id == current_user.id %}
+{% set can_receive_document = current_user.can_receive_movements() %}
 <p><a href="{{ url_for('movement.list_documents') }}">&larr; Перемещение</a></p>
 
 <div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
@@ -14,16 +15,29 @@
       <span class="status-chips" role="group" aria-label="Статус перемещения">
         <span class="status-chip status-chip-wide status-chip-onassembly status-chip-reached"
               title="На сборке: {{ (doc.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Сб</span>
-        <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if doc.completed_at else '' }}"
-              title="Собрано: {{ (doc.completed_at|msk).strftime('%d.%m.%Y %H:%M') if doc.completed_at else 'еще не наступило' }}">Со</span>
-        <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at else '' }}"
+        <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if doc.status in ('collected', 'completed') else '' }}"
+              title="Собрано{{ ': автоматически при 30 коробах' if doc.status == 'collected' else '' }}">Со</span>
+        <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at and doc.marketplace_request_number else '' }}"
               title="Создана заявка: {{ (doc.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if doc.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
-        <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.received_at else '' }}"
-              title="Отгружено: {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') if doc.received_at else 'еще не наступило' }}">От</span>
+        <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.shipped_at else '' }}"
+              title="Транспорт забрал: {{ (doc.shipped_at|msk).strftime('%d.%m.%Y %H:%M') if doc.shipped_at else 'еще не наступило' }}">От</span>
+        <span class="status-chip status-chip-wide status-chip-accepted{{ ' status-chip-reached' if doc.received_at else '' }}"
+              title="Принято на МП: {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') if doc.received_at else 'еще не наступило' }}">Пр</span>
       </span>
       {% endif %}
     </h3>
     <div class="text-muted">{{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
+    {% if current_user.is_admin and doc.status in ('draft', 'collected') %}
+    <form method="post" action="{{ url_for('movement.change_sender', doc_id=doc.id) }}" class="d-flex gap-1 align-items-center mt-2">
+      <label class="small text-muted text-nowrap" for="senderWarehouse{{ doc.id }}">Склад-отправитель:</label>
+      <select id="senderWarehouse{{ doc.id }}" name="from_warehouse_id" class="form-select form-select-sm" style="max-width:300px">
+        {% for wh in warehouses %}
+        <option value="{{ wh.id }}" {% if wh.id == doc.from_warehouse_id %}selected{% endif %}>{{ wh.code }} — {{ wh.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-sm btn-outline-secondary">Сохранить</button>
+    </form>
+    {% endif %}
   </div>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
@@ -38,19 +52,38 @@
     <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
       <button type="submit" class="btn btn-success">📦 Собрано</button>
     </form>
-    {% elif can_manage_document and doc.status == 'completed' and not doc.received_at %}
-      {% if not doc.marketplace_request_created_at %}
+    {% elif can_manage_document and doc.status == 'collected' %}
+    <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
+      <button type="submit" class="btn btn-success">📦 Завершить сборку</button>
+    </form>
+    {% elif (can_manage_document or can_receive_document) and doc.status == 'completed' and not doc.received_at %}
+      {% if not doc.marketplace_request_number %}
+      <form method="post" action="{{ url_for('movement.update_marketplace_request_number', doc_id=doc.id) }}" class="d-inline-flex gap-1 align-items-center">
+        <input type="hidden" name="return_to" value="detail">
+        <input type="text" name="marketplace_request_number" class="form-control form-control-sm" style="width:150px" placeholder="№ заявки на МП" required>
+        <button type="submit" class="btn btn-outline-primary">Сохранить номер</button>
+      </form>
+      <span class="text-muted small d-block mt-1">Сначала сохраните номер заявки — до этого галочка «Заявка на МП» недоступна.</span>
+      {% elif not doc.marketplace_request_created_at %}
       <form method="post" action="{{ url_for('movement.mark_marketplace_request', doc_id=doc.id) }}" class="d-inline">
         <button type="submit" class="btn btn-primary" title="Отметить: заявка на маркетплейс создана">🔖 Отметить: заявка на МП создана</button>
       </form>
-      <span class="text-muted small d-block mt-1">Обязательный шаг перед приемкой — после отметки появится кнопка «Принято на складе».</span>
+      <span class="text-muted small d-block mt-1">После подачи заявки нужно отдельно отметить передачу товара транспорту.</span>
+      {% elif not doc.shipped_at %}
+      {% if can_manage_document %}
+      <form method="post" action="{{ url_for('movement.mark_shipped', doc_id=doc.id) }}" class="d-inline">
+        <button type="submit" class="btn btn-primary">🚚 Транспорт забрал</button>
+      </form>
+      <span class="text-muted small d-block mt-1">После этого товар получит статус «В пути».</span>
+      {% else %}<span class="text-warning-emphasis">Ожидает транспорт</span>{% endif %}
       {% else %}
-      <a class="btn btn-warning" href="{{ url_for('movement.receive', doc_id=doc.id) }}"
-         title="До этой кнопки товар считается «в пути» и не засчитывается в план отгрузок">📥 Принято на складе</a>
+      {% if can_receive_document %}<a class="btn btn-warning" href="{{ url_for('movement.receive', doc_id=doc.id) }}"
+         title="Зафиксировать фактическое количество, принятое маркетплейсом">📥 Принято на складе МП</a>
+      {% else %}<span class="text-warning-emphasis">В пути</span>{% endif %}
       {% endif %}
     {% elif doc.status == 'completed' and doc.received_at %}
-    <span class="badge bg-success">Отгружено {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
-    {% if doc.discrepancies %}<span class="badge bg-warning text-dark">С расхождением</span>{% endif %}
+    <span class="badge bg-success">Принято МП {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
+    {% if doc.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ doc.total_shortage_qty() | round(3) }}</span>{% elif doc.discrepancies %}<span class="badge bg-info text-dark">Излишек при приемке</span>{% endif %}
     {% elif doc.status == 'completed' %}
     <span class="text-warning-emphasis">В пути</span>
     {% endif %}
@@ -70,30 +103,37 @@
 {% endif %}
 
 {% set can_edit = can_manage_document and (doc.status == 'draft' or current_user.is_admin) %}
-{% if doc.status != 'draft' and current_user.is_admin %}
+{% if doc.status not in ('draft', 'collected') and current_user.is_admin %}
 <div class="alert alert-warning">
   ⚠ Документ уже завершен. Как администратор вы можете добавлять/убирать короба и менять ячейку назначения —
   изменения сразу же применяются к реальному расположению короба (и к выполнению плана отгрузок, если перемещение уже принято на складе).
 </div>
 {% endif %}
 
-{% if doc.discrepancies %}
+{% if doc.total_shortage_qty() %}
 <div class="card p-3 mb-4 border-warning">
-  <h5>⚠️ Расхождения при приемке</h5>
+  <h5>⚠️ Недовоз — товар нужно найти</h5>
   <table class="table table-sm mb-0">
-    <thead><tr><th>Товар</th><th>Отправлено</th><th>Принято</th><th>Расхождение</th></tr></thead>
+    <thead><tr><th>Штрихкод</th><th>Наименование</th><th>Отправлено</th><th>Принято на МП</th><th>Нужно найти</th></tr></thead>
     <tbody>
     {% for d in doc.discrepancies %}
+      {% if d.shortage_qty() %}
       <tr>
-        <td>{{ d.nomenclature.name }} <span class="text-muted">({{ d.nomenclature.sku }})</span></td>
+        <td>{{ d.nomenclature.barcode or '—' }}</td>
+        <td>{{ d.nomenclature.name }}</td>
         <td>{{ d.expected_qty | round(3) }}</td>
         <td>{{ d.received_qty | round(3) }}</td>
-        <td class="{{ 'text-danger' if d.diff() < 0 else 'text-success' }}">{{ '%+g' % d.diff() }}</td>
+        <td class="text-danger fw-bold">{{ d.shortage_qty() | round(3) }}</td>
       </tr>
+      {% endif %}
     {% endfor %}
     </tbody>
   </table>
 </div>
+{% endif %}
+
+{% if doc.discrepancies and not doc.total_shortage_qty() %}
+<div class="alert alert-info">При приемке зафиксирован излишек товара.</div>
 {% endif %}
 
 {% if can_edit %}
@@ -112,10 +152,19 @@
 {% endif %}
 
 <div class="card p-3">
-  <h5>Короба в списке</h5>
+  <div class="d-flex justify-content-between align-items-center gap-2">
+    <h5>Короба в списке</h5>
+    {% if can_manage_document and doc.status in ('draft', 'collected') and lines|length > 1 %}
+    <form id="splitMovementForm" method="post" action="{{ url_for('movement.split_document', doc_id=doc.id) }}"
+          onsubmit="return confirm('Перенести выбранные короба в отдельное перемещение?');">
+      <button class="btn btn-sm btn-outline-primary" type="submit">Разделить выбранные</button>
+    </form>
+    {% endif %}
+  </div>
   <table class="table table-sm align-middle">
     <thead>
       <tr>
+        {% if can_manage_document and doc.status in ('draft', 'collected') and lines|length > 1 %}<th></th>{% endif %}
         <th>Короб</th>
         <th>Товары</th>
         <th>Откуда</th>
@@ -125,6 +174,7 @@
     <tbody>
     {% for line in lines %}
       <tr>
+        {% if can_manage_document and doc.status in ('draft', 'collected') and lines|length > 1 %}<td><input type="checkbox" name="line_ids" value="{{ line.id }}" form="splitMovementForm" class="form-check-input"></td>{% endif %}
         <td>
           <a href="{{ url_for('boxes.detail', box_id=line.box.id) }}"><b>{{ line.box.box_number }}</b></a>
           <div><a target="_blank" href="{{ url_for('labels.box_label', box_id=line.box.id) }}">🖨 этикетка</a></div>
