@@ -213,8 +213,10 @@
                       title="Собрано: {{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else 'еще не наступило' }}">Со</span>
                 <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if d.marketplace_request_created_at and d.marketplace_request_number else '' }}"
                       title="Создана заявка: {{ (d.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if d.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
-                <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if d.received_at else '' }}"
-                      title="Отгружено: {{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') if d.received_at else 'еще не наступило' }}">От</span>
+                <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if d.shipped_at else '' }}"
+                      title="Транспорт забрал: {{ (d.shipped_at|msk).strftime('%d.%m.%Y %H:%M') if d.shipped_at else 'еще не наступило' }}">От</span>
+                <span class="status-chip status-chip-wide status-chip-accepted{{ ' status-chip-reached' if d.received_at else '' }}"
+                      title="Принято на МП: {{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') if d.received_at else 'еще не наступило' }}">Пр</span>
               </span>
               {% if d.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ d.total_shortage_qty() | round(3) }}</span>{% elif d.discrepancies %}<span class="badge bg-info text-dark">Излишек</span>{% endif %}
             {% endif %}
@@ -223,10 +225,12 @@
             {% if d.status != 'completed' %}
               <span class="text-muted">—</span>
             {% elif d.received_at %}
-              <span class="badge bg-success" title="{{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') }}">Отгружено {{ (d.received_at|msk).strftime('%d.%m') }}</span>
-            {% elif current_user.can_receive_movements() and d.marketplace_request_created_at and d.marketplace_request_number %}
+              <span class="badge bg-success" title="{{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') }}">Принято МП {{ (d.received_at|msk).strftime('%d.%m') }}</span>
+            {% elif current_user.can_receive_movements() and d.shipped_at %}
               <a class="btn btn-sm btn-warning movement-receive-btn text-decoration-none" href="{{ url_for('movement.receive', doc_id=d.id) }}"
-                 title="Товар считается «в пути», пока не нажата эта кнопка">📥 Принято на складе</a>
+                 title="Зафиксировать количество, принятое маркетплейсом">📥 Принято на МП</a>
+            {% elif d.marketplace_request_created_at and d.marketplace_request_number %}
+              <span class="text-warning-emphasis small">Ожидает транспорт</span>
             {% elif can_manage_document %}
               <span class="text-muted small" title="Сначала отметьте: заявка на маркетплейс создана">Ждет заявки на МП</span>
             {% else %}
@@ -285,7 +289,9 @@
           {% if d.status == 'merged' %}
             <span class="badge badge-status-merged">Объединен</span>
           {% elif d.received_at %}
-            <span class="badge status-chip-shipped">Отгружено</span>
+            <span class="badge status-chip-accepted">Принято МП</span>
+          {% elif d.shipped_at %}
+            <span class="badge status-chip-shipped">В пути</span>
           {% elif d.marketplace_request_created_at and d.marketplace_request_number %}
             <span class="badge status-chip-requested">Создана заявка</span>
           {% elif d.status in ('collected', 'completed') %}
@@ -299,7 +305,7 @@
         <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }} · {{ d.lines.count() }} короб. · {{ mobile_total_qty | int if mobile_total_qty == mobile_total_qty | int else mobile_total_qty | round(3) }} шт.{% if d.received_at %}{% set mobile_accepted_qty = d.total_received_qty() %} (принято {{ mobile_accepted_qty | int if mobile_accepted_qty == mobile_accepted_qty | int else mobile_accepted_qty | round(3) }}){% endif %}{% if d.created_by %} · Автор: {{ d.created_by.display_name() }}{% endif %}</div>
         {% if d.status == 'completed' and not d.received_at %}
           <div class="mt-1">
-            <span class="text-warning-emphasis small">В пути</span>
+            <span class="text-warning-emphasis small">{{ 'В пути' if d.shipped_at else ('Ожидает транспорт' if d.marketplace_request_created_at else 'Ждет заявки на МП') }}</span>
           </div>
         {% endif %}
       </a>

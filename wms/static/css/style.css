@@ -92,6 +92,7 @@ body {
 .status-chip-assembled { background-color: #fd7e14; }
 .status-chip-requested { background-color: #ffc107; color: #000; }
 .status-chip-shipped { background-color: #198754; }
+.status-chip-accepted { background-color: #0d6efd; }
 
 /* Список перемещений: строка окрашивается по маркетплейсу склада
    назначения — визуально отличить ВБ от Озон, не открывая документ.

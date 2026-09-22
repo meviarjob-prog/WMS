@@ -211,6 +211,7 @@ def update_sections(user_id):
     user.movement_view_allowed = request.form.get("movement_view") == "on"
     user.movement_complete_allowed = request.form.get("movement_complete") == "on"
     user.movement_receive_allowed = request.form.get("movement_receive") == "on"
+    user.management_dashboard_allowed = request.form.get("management_dashboard") == "on"
     db.session.commit()
     flash(f"Доступ к разделам для «{user.username}» обновлен", "success")
     return redirect(url_for("auth.users"))

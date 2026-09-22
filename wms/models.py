@@ -125,6 +125,10 @@ class User(UserMixin, db.Model):
     # Отдельное право подтверждать фактическую приемку перемещения на
     # складе назначения. Не связано с правом завершать сборку.
     movement_receive_allowed = db.Column(db.Boolean, nullable=True, default=None)
+    # Отдельный доступ к сводной панели руководителя. Операционные отчеты
+    # могут быть доступны сотруднику, но финансово-управленческая сводка
+    # при этом остается скрытой.
+    management_dashboard_allowed = db.Column(db.Boolean, nullable=False, default=False)
     # Рабочий склад сотрудника. Для перемещений он всегда становится
     # складом-отправителем, поэтому сотрудник не может случайно собрать
     # документ от имени другого склада.
@@ -171,6 +175,9 @@ class User(UserMixin, db.Model):
         return self.is_admin or self.movement_receive_allowed is True or (
             self.movement_receive_allowed is None and self.movement_complete_allowed is True
         )
+
+    def can_view_management_dashboard(self):
+        return self.is_admin or self.management_dashboard_allowed is True
 
     def has_section_access(self, section):
         """Раздел не из SECTIONS (например, служебные api/boxes/labels) не
@@ -818,6 +825,9 @@ class MovementDocument(db.Model):
     # Номер самой заявки на приемку у маркетплейса вносится вручную до
     # установки галочки выше. См. movement.update_marketplace_request_number.
     marketplace_request_number = db.Column(db.String(50), nullable=True)
+    # Момент, когда транспорт физически забрал товар. Он отделен и от
+    # подачи заявки на МП, и от последующей фактической приемки площадкой.
+    shipped_at = db.Column(db.DateTime, nullable=True)
     # Заполняется, когда состав уже выгруженного в 1С документа меняют
     # (добавили/удалили короб — movement.add_box/delete_line, или поправили
     # количество в коробе, уже уехавшем этим перемещением — boxes.add_item/
@@ -873,16 +883,14 @@ class MovementDocument(db.Model):
     def total_plan_fact_qty(self):
         """Количество документа, которое может входить в факт плана.
 
-        До создания заявки завершенный документ не считается отгрузкой.
+        До передачи транспорту завершенный документ не считается отгрузкой.
         В пути учитываем состав коробов, после приемки — фактически принятое.
         """
         if self.status != "completed":
             return 0
         if self.received_at is not None:
             return self.total_received_qty()
-        if self.marketplace_request_created_at is not None and (
-            self.marketplace_request_number or ""
-        ).strip():
+        if self.shipped_at is not None:
             return self.total_item_qty()
         return 0
 

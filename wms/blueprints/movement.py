@@ -75,7 +75,7 @@ BOOKKEEPING_ENDPOINTS = {
 # User.movement_complete_allowed, настраивается в «Настройки» → доступ к
 # разделам) — например, заведующему складом назначения, который принимает
 # чужие перемещения.
-COMPLETION_ENDPOINTS = {"movement.complete"}
+COMPLETION_ENDPOINTS = {"movement.complete", "movement.mark_shipped"}
 RECEIVING_ENDPOINTS = {"movement.receive"}
 
 
@@ -728,7 +728,7 @@ def _revert_line_effects(doc, line):
     (см. delete_line, delete_document)."""
     box = line.box
     if doc.received_at is not None:
-        _revert_shipment_fulfillment(box, doc.to_warehouse_id, doc.completed_at)
+        _revert_shipment_fulfillment(box, doc.to_warehouse_id, doc.shipped_at)
     box.warehouse_id = line.from_warehouse_id
     box.cell_id = line.from_cell_id
     box.status = "stored" if line.from_cell_id else "open"
@@ -813,7 +813,7 @@ def add_box(doc_id):
         box.cell_id = None
         box.status = "open"
         if doc.received_at is not None:
-            _apply_shipment_fulfillment(box, doc.to_warehouse_id, doc.completed_at)
+            _apply_shipment_fulfillment(box, doc.to_warehouse_id, doc.shipped_at)
 
     db.session.commit()
     if doc.status == "collected":
@@ -999,6 +999,25 @@ def complete(doc_id):
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
+@bp.route("/<int:doc_id>/mark-shipped", methods=["POST"])
+def mark_shipped(doc_id):
+    """Фиксирует момент, когда транспорт физически забрал товар."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status != "completed":
+        flash("Сначала завершите сборку перемещения", "danger")
+    elif not doc.marketplace_request_created_at or not (
+        doc.marketplace_request_number or ""
+    ).strip():
+        flash("Сначала внесите номер и отметьте подачу заявки на МП", "danger")
+    elif doc.shipped_at is not None:
+        flash("Передача транспорту уже зафиксирована", "warning")
+    else:
+        doc.shipped_at = datetime.utcnow()
+        db.session.commit()
+        flash(f"Перемещение {doc.number} передано транспорту", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
 def _expected_qty_by_nomenclature(doc):
     """Сколько какого товара по факту едет в этом перемещении — сумма по
     всем коробам документа."""
@@ -1046,7 +1065,7 @@ def _revert_document_receipt(doc):
         plan_line = ShipmentPlanLine.query.filter_by(
             warehouse_id=doc.to_warehouse_id, nomenclature_id=nomenclature_id
         ).first()
-        if plan_line and _shipment_is_in_plan(plan_line, doc.completed_at):
+        if plan_line and _shipment_is_in_plan(plan_line, doc.shipped_at or doc.completed_at):
             plan_line.fulfilled_qty = max(plan_line.fulfilled_qty - actual_qty, 0)
 
     for discrepancy in doc.discrepancies:
@@ -1083,9 +1102,9 @@ def receive(doc_id):
     нужные строки. Именно введенное здесь количество, а не то, что было
     упаковано в коробах, зачисляется в выполнение плана отгрузок; настоящее
     расхождение сохраняется отдельной строкой (см. MovementReceiptDiscrepancy)
-    для учета, а не молча теряется. Только после этой кнопки документ
-    считается статусом "Отгружено" и становится доступен для выгрузки в 1С
-    (см. integration_1c.export_data)."""
+    для учета, а не молча теряется. Статус "Отгружено" фиксируется раньше
+    отдельной кнопкой "Транспорт забрал"; здесь подтверждается именно
+    фактическая приемка маркетплейсом."""
     doc = MovementDocument.query.get_or_404(doc_id)
     if doc.status != "completed":
         flash("Сначала завершите перемещение", "danger")
@@ -1103,6 +1122,10 @@ def receive(doc_id):
             "оба шага обязательны перед приемкой на складе",
             "danger",
         )
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if doc.shipped_at is None:
+        flash("Сначала отметьте, что товар забрал транспорт", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
     expected = _expected_qty_by_nomenclature(doc)
@@ -1136,7 +1159,7 @@ def receive(doc_id):
         plan_line = ShipmentPlanLine.query.filter_by(
             warehouse_id=doc.to_warehouse_id, nomenclature_id=nomenclature_id
         ).first()
-        if plan_line and _shipment_is_in_plan(plan_line, doc.completed_at):
+        if plan_line and _shipment_is_in_plan(plan_line, doc.shipped_at):
             plan_line.fulfilled_qty += received_qty
 
         if received_qty != expected_qty:
@@ -1170,7 +1193,7 @@ def receive(doc_id):
             "warning",
         )
     else:
-        flash(f"Перемещение {doc.number} отгружено — принято на складе «{doc.to_warehouse.name}»", "success")
+        flash(f"Перемещение {doc.number} принято на складе МП «{doc.to_warehouse.name}»", "success")
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 

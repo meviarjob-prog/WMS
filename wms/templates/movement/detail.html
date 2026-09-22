@@ -19,8 +19,10 @@
               title="Собрано{{ ': автоматически при 30 коробах' if doc.status == 'collected' else '' }}">Со</span>
         <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at and doc.marketplace_request_number else '' }}"
               title="Создана заявка: {{ (doc.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if doc.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
-        <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.received_at else '' }}"
-              title="Отгружено: {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') if doc.received_at else 'еще не наступило' }}">От</span>
+        <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.shipped_at else '' }}"
+              title="Транспорт забрал: {{ (doc.shipped_at|msk).strftime('%d.%m.%Y %H:%M') if doc.shipped_at else 'еще не наступило' }}">От</span>
+        <span class="status-chip status-chip-wide status-chip-accepted{{ ' status-chip-reached' if doc.received_at else '' }}"
+              title="Принято на МП: {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') if doc.received_at else 'еще не наступило' }}">Пр</span>
       </span>
       {% endif %}
     </h3>
@@ -52,7 +54,7 @@
     </form>
     {% elif can_manage_document and doc.status == 'collected' %}
     <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
-      <button type="submit" class="btn btn-success">🚚 Подтвердить отправку</button>
+      <button type="submit" class="btn btn-success">📦 Завершить сборку</button>
     </form>
     {% elif (can_manage_document or can_receive_document) and doc.status == 'completed' and not doc.received_at %}
       {% if not doc.marketplace_request_number %}
@@ -66,14 +68,21 @@
       <form method="post" action="{{ url_for('movement.mark_marketplace_request', doc_id=doc.id) }}" class="d-inline">
         <button type="submit" class="btn btn-primary" title="Отметить: заявка на маркетплейс создана">🔖 Отметить: заявка на МП создана</button>
       </form>
-      <span class="text-muted small d-block mt-1">Обязательный шаг перед приемкой — после отметки появится кнопка «Принято на складе».</span>
+      <span class="text-muted small d-block mt-1">После подачи заявки нужно отдельно отметить передачу товара транспорту.</span>
+      {% elif not doc.shipped_at %}
+      {% if can_manage_document %}
+      <form method="post" action="{{ url_for('movement.mark_shipped', doc_id=doc.id) }}" class="d-inline">
+        <button type="submit" class="btn btn-primary">🚚 Транспорт забрал</button>
+      </form>
+      <span class="text-muted small d-block mt-1">После этого товар получит статус «В пути».</span>
+      {% else %}<span class="text-warning-emphasis">Ожидает транспорт</span>{% endif %}
       {% else %}
       {% if can_receive_document %}<a class="btn btn-warning" href="{{ url_for('movement.receive', doc_id=doc.id) }}"
-         title="До этой кнопки товар считается «в пути» и не засчитывается в план отгрузок">📥 Принято на складе</a>
+         title="Зафиксировать фактическое количество, принятое маркетплейсом">📥 Принято на складе МП</a>
       {% else %}<span class="text-warning-emphasis">В пути</span>{% endif %}
       {% endif %}
     {% elif doc.status == 'completed' and doc.received_at %}
-    <span class="badge bg-success">Отгружено {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
+    <span class="badge bg-success">Принято МП {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
     {% if doc.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ doc.total_shortage_qty() | round(3) }}</span>{% elif doc.discrepancies %}<span class="badge bg-info text-dark">Излишек при приемке</span>{% endif %}
     {% elif doc.status == 'completed' %}
     <span class="text-warning-emphasis">В пути</span>

@@ -138,6 +138,7 @@ def test_summary_export_separates_boxed_and_actually_received_qty(db, client_log
         completed_at=now,
         marketplace_request_number="REQ-MSUM-5",
         marketplace_request_created_at=now,
+        shipped_at=now,
         received_at=now,
     )
     box_item = doc.lines.first().box.items.first()

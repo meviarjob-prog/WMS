@@ -1,7 +1,4 @@
-"""«В пути» в плане — все завершенные перемещения с даты листа.
-
-Заявка на МП и последующая приемка не меняют факт отправки из WMS.
-"""
+"""«В пути» в плане — перемещения, которые транспорт забрал с даты листа."""
 
 import io
 
@@ -69,6 +66,7 @@ def _ship_box(sender, city, item, qty, box_number, client, mark_request=True):
         doc.marketplace_request_number = f"REQ-{box_number}"
         db.session.commit()
         client.post(f"/movement/{doc.id}/mark-marketplace-request")
+        client.post(f"/movement/{doc.id}/mark-shipped")
     return doc
 
 
@@ -119,7 +117,7 @@ def test_city_in_transit_includes_shipped_sku_missing_from_current_plan(
         qty=824,
         box_number="BOX-UNPLANNED-CITY-TOTAL",
         client=client_logged_in,
-        mark_request=False,
+        mark_request=True,
     )
 
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
@@ -146,7 +144,7 @@ def test_picking_list_shows_plan_and_in_transit_separately(db, client_logged_in)
     assert "(10)" in snippet
 
 
-def test_completed_movement_without_marketplace_request_is_in_transit(db, client_logged_in):
+def test_completed_movement_without_transport_pickup_is_not_in_transit(db, client_logged_in):
     sender, city, item = _setup(planned_qty=30)
     _ship_box(
         sender,
@@ -163,7 +161,7 @@ def test_completed_movement_without_marketplace_request_is_in_transit(db, client
     idx = html.find("ART-1")
     snippet = html[idx : idx + 3000]
     assert ">30<" in snippet
-    assert "(10)" in snippet
+    assert "(10)" not in snippet
 
 
 def test_top_summary_shows_in_transit_per_marketplace_and_total(db, client_logged_in):

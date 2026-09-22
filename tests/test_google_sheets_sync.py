@@ -74,6 +74,7 @@ def test_wms_rows_separate_in_transit_and_received(db):
             from_warehouse_id=sender.id,
             to_warehouse_id=target.id,
             status="completed",
+            shipped_at=datetime.utcnow(),
             received_at=datetime.utcnow() if received else None,
             marketplace_request_created_at=datetime.utcnow(),
         )
@@ -111,8 +112,8 @@ def test_wms_rows_separate_in_transit_and_received(db):
     assert _current_plan_fact_totals()[("ozon", "москва", item.barcode)] == 10
 
 
-def test_wms_rows_count_completed_movement_without_request_checkbox(db):
-    """Для факта отгрузки достаточно завершенного перемещения."""
+def test_wms_rows_count_only_explicit_transport_pickup(db):
+    """Факт отгрузки начинается с отдельной отметки передачи транспорту."""
     sender = Warehouse(code="SYNC-NUM-FROM", name="Основной")
     target = Warehouse(
         code="SYNC-NUM-TO",
@@ -127,6 +128,7 @@ def test_wms_rows_count_completed_movement_without_request_checkbox(db):
         from_warehouse=sender,
         to_warehouse=target,
         status="completed",
+        shipped_at=datetime.utcnow(),
     )
     db.session.add_all([sender, target, item, box, document])
     db.session.flush()
@@ -166,6 +168,7 @@ def test_period_totals_sum_all_cities_from_0001_and_keep_sent_qty_on_shortage(db
             to_warehouse=warehouse,
             status="completed",
             completed_at=completed_at,
+            shipped_at=completed_at,
             received_at=(completed_at + timedelta(days=1)) if received_qty is not None else None,
         )
         db.session.add_all([box, document])

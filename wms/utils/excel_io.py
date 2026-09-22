@@ -359,7 +359,7 @@ def export_movement_summary_to_excel(documents) -> bytes:
                 if doc.marketplace_request_created_at
                 and (doc.marketplace_request_number or "").strip()
                 else "Нет",
-                doc.completed_at.strftime("%Y-%m-%d %H:%M") if doc.completed_at else "",
+                doc.shipped_at.strftime("%Y-%m-%d %H:%M") if doc.shipped_at else "",
                 doc.received_at.strftime("%Y-%m-%d %H:%M") if doc.received_at else "",
                 doc.lines.count(),
                 doc.total_item_qty(),

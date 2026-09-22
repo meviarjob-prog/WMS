@@ -112,12 +112,16 @@ def movement_wms_totals(period_start=None):
             "nomenclature": None,
         }
     )
-    documents = MovementDocument.query.filter_by(status="completed").all()
+    documents = MovementDocument.query.filter(
+        MovementDocument.status == "completed",
+        MovementDocument.shipped_at.isnot(None),
+    ).all()
     for document in documents:
-        shipped_at = document.completed_at or document.received_at or document.created_at
+        shipped_at = document.shipped_at
         # Дата листа задает начало нового плана. Считаем все завершенные
-        # перемещения начиная с 00:01 этой даты — независимо от заявки на
-        # МП и последующей приемки на складе назначения.
+        # перемещения, фактически переданные транспорту, начиная с 00:01
+        # этой даты. Завершение сборки и заявка МП сами по себе не являются
+        # отгрузкой.
         if period_start and (
             not shipped_at
             or shipped_at < datetime.combine(period_start, time(0, 1))

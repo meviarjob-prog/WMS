@@ -119,7 +119,7 @@ def _received_since_by_warehouse_and_item(window_start):
     documents = MovementDocument.query.filter(
         MovementDocument.received_at.isnot(None),
         func.coalesce(
-            MovementDocument.completed_at,
+            MovementDocument.shipped_at,
             MovementDocument.received_at,
             MovementDocument.created_at,
         ) >= window_start,
@@ -668,9 +668,9 @@ def _dashboard_context():
         lines = plan.lines.all()
         lines_by_marketplace[marketplace] = lines
 
-        # «В пути» — весь товар из завершенных перемещений с 00:01 даты
-        # конкретного листа. Галочка/номер заявки и приемка на МП на этот
-        # показатель не влияют: это факт отправки из WMS.
+        # «В пути» — весь товар, который транспорт забрал с 00:01 даты
+        # конкретного листа. Завершение сборки и заявка МП сами по себе
+        # отгрузкой не считаются.
         for line in lines:
             period_start = line.period_start or plan.period_start
             if period_start not in movement_totals_by_period:

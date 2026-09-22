@@ -141,6 +141,11 @@
                             <label class="form-check-label" for="movementReceive{{ u.id }}">Кнопка «Принято на складе»</label>
                             <div class="text-muted small">Разрешает подтвердить фактическое количество и зафиксировать недовоз.</div>
                           </div>
+                          <div class="form-check mt-3">
+                            <input class="form-check-input" type="checkbox" name="management_dashboard" id="managementDashboard{{ u.id }}" {% if u.management_dashboard_allowed %}checked{% endif %}>
+                            <label class="form-check-label" for="managementDashboard{{ u.id }}">Панель руководителя</label>
+                            <div class="text-muted small">Открывает сводные показатели эффективности, узкие места и проблемные процессы.</div>
+                          </div>
                         </div>
                         <div class="modal-footer">
                           <button type="submit" class="btn btn-primary btn-sm">Сохранить</button>

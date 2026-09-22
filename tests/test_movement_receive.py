@@ -54,6 +54,7 @@ def _make_completed_document(qty=10, marketplace_request_created=True):
 
         doc.marketplace_request_created_at = datetime.utcnow()
         doc.marketplace_request_number = "REQ-D0001"
+        doc.shipped_at = datetime.utcnow()
     db.session.add(doc)
     db.session.commit()
     db.session.add(
@@ -213,6 +214,8 @@ def test_marking_marketplace_request_unblocks_receive(db, client_logged_in):
 
     client_logged_in.post(f"/movement/{doc.id}/mark-marketplace-request")
     assert MovementDocument.query.get(doc.id).marketplace_request_created_at is not None
+    client_logged_in.post(f"/movement/{doc.id}/mark-shipped")
+    assert MovementDocument.query.get(doc.id).shipped_at is not None
 
     resp = client_logged_in.post(
         f"/movement/{doc.id}/receive", data={f"qty_{item.id}": "10"}, follow_redirects=True

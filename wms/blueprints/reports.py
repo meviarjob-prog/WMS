@@ -300,14 +300,14 @@ def _shipped_rows():
         )
         .join(MovementLine, MovementLine.document_id == MovementDocument.id)
         .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
-        .filter(MovementDocument.status == "completed")
+        .filter(MovementDocument.shipped_at.isnot(None))
     )
     if warehouse_id:
         query = query.filter(MovementDocument.to_warehouse_id == warehouse_id)
     if date_from:
-        query = query.filter(MovementDocument.completed_at >= date_from)
+        query = query.filter(MovementDocument.shipped_at >= date_from)
     if date_to:
-        query = query.filter(MovementDocument.completed_at < date_to)
+        query = query.filter(MovementDocument.shipped_at < date_to)
 
     grouped = query.group_by(MovementDocument.to_warehouse_id, BoxItem.nomenclature_id).all()
 
