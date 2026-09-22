@@ -7,9 +7,20 @@ read_sheet_tables/resolve_sheet_title подменяются моком, как 
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from wms.extensions import db
 from wms.models import AppSetting, ProductionOrder, User
 from wms.utils.production_orders_import import map_columns, match_stage
+
+
+@pytest.fixture(autouse=True)
+def _unhide_production_orders(monkeypatch):
+    """Раздел временно скрыт в проде (см. чат — HIDDEN_WORK_IN_PROGRESS в
+    wms/blueprints/production_orders.py), но сами тесты продолжают
+    проверять реальное поведение страниц, независимо от временного
+    тумблера."""
+    monkeypatch.setattr("wms.blueprints.production_orders.HIDDEN_WORK_IN_PROGRESS", False)
 
 
 def _login_as_worker(client, db):
@@ -350,3 +361,26 @@ def test_settings_page_requires_admin(db, client):
     _login_as_worker(client, db)
     response = client.get("/production-orders/settings")
     assert response.status_code == 302
+
+
+def test_hidden_while_in_progress_redirects_away_but_google_trigger_still_works(
+    client_logged_in, client, db, monkeypatch
+):
+    """Флаг из чата ("пока скрой... будем доделывать") — по умолчанию True в
+    самом модуле; проверяем это отдельно от остальных тестов файла (которые
+    его отключают). google_trigger нарочно не блокируется — синхронизация
+    из уже настроенной кнопки в таблице должна продолжать тихо работать."""
+    monkeypatch.setattr("wms.blueprints.production_orders.HIDDEN_WORK_IN_PROGRESS", True)
+
+    assert client_logged_in.get("/production-orders/").status_code == 302
+    assert client_logged_in.get("/production-orders/settings").status_code == 302
+
+    db.session.add(AppSetting(key="production_sheet_token", value="secret-token"))
+    db.session.commit()
+    monkeypatch.setattr(
+        "wms.blueprints.production_orders.sync_production_orders", lambda: (0, 0, "диагностика")
+    )
+    response = client.post(
+        "/production-orders/google-trigger", headers={"X-WMS-Sync-Token": "secret-token"}
+    )
+    assert response.status_code == 200

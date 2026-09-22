@@ -42,6 +42,21 @@ DIAGNOSTICS_KEY = "production_sheet_diagnostics"
 
 GOOGLE_SHEETS_PUBLIC_ENDPOINTS = {"production_orders.google_trigger"}
 
+# Временно скрыто по просьбе в чате ("пока скрой... будем доделывать") —
+# раздел еще дорабатывается. Переключить обратно на False, когда будете
+# готовы показать снова (ссылка в base.html скрыта отдельно). google_trigger
+# нарочно не блокируется — если синхронизация уже настроена в самой
+# таблице, пусть продолжает тихо работать в фоне, не показываясь в UI.
+HIDDEN_WORK_IN_PROGRESS = True
+
+
+@bp.before_request
+def _hide_pages_while_in_progress():
+    if HIDDEN_WORK_IN_PROGRESS and request.endpoint != "production_orders.google_trigger":
+        flash("Заказы на производство временно скрыты — дорабатывается", "warning")
+        return redirect(url_for("main.index"))
+    return None
+
 
 def _get_setting(key, default=None):
     setting = AppSetting.query.get(key)

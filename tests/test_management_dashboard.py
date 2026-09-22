@@ -1,7 +1,17 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from wms.extensions import db
 from wms.models import MovementDocument, ProductionOrder, User, Warehouse
+
+
+@pytest.fixture(autouse=True)
+def _unhide_management_dashboard(monkeypatch):
+    """Раздел временно скрыт в проде (см. чат — HIDDEN_WORK_IN_PROGRESS в
+    wms/blueprints/management.py), но сами тесты продолжают проверять
+    реальное поведение страницы, независимо от временного тумблера."""
+    monkeypatch.setattr("wms.blueprints.management.HIDDEN_WORK_IN_PROGRESS", False)
 
 
 def test_admin_sees_visual_management_dashboard(client_logged_in):
@@ -114,3 +124,14 @@ def test_process_flow_uses_real_production_order_counts_after_sync(db, client_lo
     assert "ожидает подключение" not in html
     # "Образец и согласование" объединяет sample_sewing и sample_approval — 2 заказа.
     assert '<div class="process-value">2</div>' in html
+
+
+def test_hidden_while_in_progress_redirects_away(client_logged_in, monkeypatch):
+    """Флаг из чата ("пока скрой панель руководителя... будем доделывать") —
+    по умолчанию True в самом модуле; здесь проверяем реальное поведение
+    тумблера отдельно от остальных тестов файла (которые его отключают)."""
+    monkeypatch.setattr("wms.blueprints.management.HIDDEN_WORK_IN_PROGRESS", True)
+
+    response = client_logged_in.get("/management/")
+
+    assert response.status_code == 302

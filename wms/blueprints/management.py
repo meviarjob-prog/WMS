@@ -21,9 +21,18 @@ from ..models import (
 
 bp = Blueprint("management", __name__)
 
+# Временно скрыто по просьбе в чате ("пока скрой панель руководителя... будем
+# доделывать") — раздел еще дорабатывается совместно с parallel-веткой
+# ArturLee. Переключить обратно на False, когда будете готовы показать снова
+# (ссылка в base.html скрыта отдельно тем же условием).
+HIDDEN_WORK_IN_PROGRESS = True
+
 
 @bp.before_request
 def require_management_access():
+    if HIDDEN_WORK_IN_PROGRESS:
+        flash("Панель руководителя временно скрыта — дорабатывается", "warning")
+        return redirect(url_for("main.index"))
     if not current_user.can_view_management_dashboard():
         flash("Панель руководителя вам не доступна", "danger")
         return redirect(url_for("main.index"))
