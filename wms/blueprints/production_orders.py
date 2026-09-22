@@ -22,11 +22,11 @@ bp = Blueprint("production_orders", __name__)
 SHEET_ID_KEY = "production_sheet_id"
 SHEET_GID_KEY = "production_sheet_gid"
 # Подставляются по умолчанию в форму настроек, пока их явно не сохранили —
-# это ID и gid таблицы из ссылки, которую прислали в чате при обсуждении
-# панели руководителя. Нажатие "Сохранить" без изменений зафиксирует их
-# как обычную настройку — ничего не подключается сама по себе.
-DEFAULT_SHEET_ID = "16YT7RrIA0aEWInlzlHjtXxE2bUzoeeBIq1ezzDqY4uA"
-DEFAULT_SHEET_GID = "1394565223"
+# это ID и gid таблицы заказов на производство и статусов, которую прислали
+# в чате. Нажатие "Сохранить" без изменений зафиксирует их как обычную
+# настройку — ничего не подключается сама по себе.
+DEFAULT_SHEET_ID = "1Pakv6rjDxXtObySNkED2KzF9XFgCXUILOA8SmCDUPWA"
+DEFAULT_SHEET_GID = "307807198"
 SYNC_TOKEN_KEY = "production_sheet_token"
 SYNC_AT_KEY = "production_sheet_synced_at"
 SYNC_ERROR_KEY = "production_sheet_error"
