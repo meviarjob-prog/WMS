@@ -45,8 +45,14 @@ def extract_period_start(sheet_name, today=None):
 _SUBCOLUMN_MARKERS = (
     "остат", "отгруж", "путь", "факт", "план", "%", "gtin", "sku",
     "коробе", "производств", "хватает", "всего", "раскладк", "продаж",
-    "дней", "поставк", "склад", "приорит",
+    "дней", "поставк", "склад", "приорит", "коммент", "примечан", "закупщ",
 )
+
+# Колонка с комментарием закупщиков — расположение в файле заранее не
+# известно (может быть как слева от штрихкода, рядом с артикулом/размером,
+# так и отдельной колонкой правее всех городов), поэтому ищем по всей
+# строке заголовка, а не только с одной стороны.
+_COMMENT_KEYWORDS = ("коммент", "примечан", "закупщ")
 
 _SHEET_ALIASES = {
     "ozon": ("озон",),
@@ -127,6 +133,16 @@ def _find_label_col(ws, header_row, barcode_col, keyword):
     for c in range(1, barcode_col):
         v = _norm(ws.cell(row=header_row, column=c).value).lower()
         if keyword in v:
+            return c
+    return None
+
+
+def _find_comment_col(ws, header_row, max_col=None):
+    """Колонка с комментарием закупщиков — см. _COMMENT_KEYWORDS."""
+    max_col = max_col or ws.max_column
+    for c in range(1, max_col + 1):
+        v = _norm(ws.cell(row=header_row, column=c).value).lower()
+        if any(keyword in v for keyword in _COMMENT_KEYWORDS):
             return c
     return None
 
@@ -226,6 +242,7 @@ def _parse_one_sheet(ws):
 
     article_col = _find_label_col(ws, header_row, barcode_col, "артикул")
     size_col = _find_label_col(ws, header_row, barcode_col, "размер")
+    comment_col = _find_comment_col(ws, header_row)
     city_columns = _find_city_columns(ws, header_row, barcode_col + 1)
 
     cities = [name for _, name, _ in city_columns]
@@ -238,6 +255,7 @@ def _parse_one_sheet(ws):
 
         article = _norm(ws.cell(row=r, column=article_col).value) if article_col else ""
         size = _norm(ws.cell(row=r, column=size_col).value) if size_col else ""
+        comment = _norm(ws.cell(row=r, column=comment_col).value) if comment_col else ""
 
         for col, city, fact_col in city_columns:
             qty = _to_qty(ws.cell(row=r, column=col).value)
@@ -262,6 +280,7 @@ def _parse_one_sheet(ws):
                     "city": city,
                     "qty": qty or 0.0,
                     "fact": fact,
+                    "comment": comment,
                     "_source_row": r,
                 }
             )
@@ -412,6 +431,7 @@ def _parse_combined_marketplace_sheet(ws, marketplace):
 
     article_col = _find_label_col(ws, header_row, barcode_col, "артикул")
     size_col = _find_label_col(ws, header_row, barcode_col, "размер")
+    comment_col = _find_comment_col(ws, header_row, end_col)
     city_columns = _find_city_columns(ws, header_row, start_col, end_col)
 
     cities = [name for _, name, _ in city_columns]
@@ -424,6 +444,7 @@ def _parse_combined_marketplace_sheet(ws, marketplace):
 
         article = _norm(ws.cell(row=r, column=article_col).value) if article_col else ""
         size = _norm(ws.cell(row=r, column=size_col).value) if size_col else ""
+        comment = _norm(ws.cell(row=r, column=comment_col).value) if comment_col else ""
 
         for col, city, fact_col in city_columns:
             qty = _to_qty(ws.cell(row=r, column=col).value)
@@ -438,6 +459,7 @@ def _parse_combined_marketplace_sheet(ws, marketplace):
                     "city": city,
                     "qty": qty or 0.0,
                     "fact": fact,
+                    "comment": comment,
                 }
             )
 

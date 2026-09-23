@@ -188,6 +188,8 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
         if key in merged:
             merged[key]["qty"] += row["qty"]
             merged[key]["fact"] += row["fact"]
+            if not merged[key].get("comment") and row.get("comment"):
+                merged[key]["comment"] = row["comment"]
             dates = [d for d in (merged[key].get("period_start"), row.get("period_start")) if d]
             # Если один SKU-город случайно повторяется в листах разных
             # периодов, считаем его частью более нового плана.
@@ -221,6 +223,7 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
                     else 0.0
                 ),
                 period_start=row.get("period_start"),
+                buyer_comment=row.get("comment") or None,
             )
         )
         created += 1
@@ -793,6 +796,14 @@ def _dashboard_context():
                     "wb": {},
                     "max_remaining": 0,
                     "in_transit_total": 0,
+                    # Сумма плана и невыполненного остатка по ВСЕМ городам
+                    # обоих маркетплейсов для этого штрихкода — в отличие
+                    # от max_remaining (только для отсечения выполненных
+                    # позиций из picking_list), это то, что нужно показать
+                    # построчно как общую потребность/нехватку по товару.
+                    "total_planned": 0,
+                    "total_remaining": 0,
+                    "comment": "",
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
@@ -802,6 +813,10 @@ def _dashboard_context():
             # отправленные короба (см. movement._committed_by_warehouse_and_item).
             product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
             product["in_transit_total"] += line.in_transit_qty
+            product["total_planned"] += line.planned_qty
+            product["total_remaining"] += line.remaining_qty()
+            if not product["comment"] and line.buyer_comment:
+                product["comment"] = line.buyer_comment
 
     picking_list = sorted(
         (p for p in products.values() if p["max_remaining"] > 0),
@@ -822,6 +837,8 @@ def _dashboard_context():
     # город), чтобы сразу видеть общий объем не пролистывая/не считая
     # вручную по строкам.
     picking_totals = {
+        "total_planned": sum(p["total_planned"] for p in picking_list),
+        "total_remaining": sum(p["total_remaining"] for p in picking_list),
         "unplaced": sum(p["unplaced"] for p in picking_list),
         "ready_to_ship": sum(p["ready_to_ship"] for p in picking_list),
         "in_transit": sum(p["in_transit_total"] for p in picking_list),

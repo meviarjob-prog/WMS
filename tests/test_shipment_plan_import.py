@@ -56,6 +56,41 @@ def test_parse_single_sheet():
     assert all(r["period_start"].strftime("%d.%m") == "01.09" for r in plan.rows)
 
 
+def test_parse_reads_buyer_comment_column():
+    """Комментарий закупщиков может стоять и до штрихкода (как
+    артикул/размер), и после городов — ищем по всей строке заголовка."""
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБС от 01.09": [
+                ["Артикул", "Размер", "Баркод", "Москва", "Питер", "Комментарий закупщика"],
+                ["A1", "46", "1111", 5, 2, "Задержка поставки"],
+            ]
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    comments = {r["city"]: r["comment"] for r in plan.rows}
+    assert comments == {"Москва": "Задержка поставки", "Питер": "Задержка поставки"}
+
+
+def test_parse_comment_column_does_not_get_mistaken_for_a_city():
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБС от 01.09": [
+                ["Артикул", "Размер", "Баркод", "Примечание", "Москва"],
+                ["A1", "46", "1111", "коммент", 5],
+            ]
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    assert plan.cities == ["Москва"]
+
+
 def test_regular_sheet_excludes_nested_block_missing_from_control_total():
     """Верхний итог листа — контроль плана; вложенный блок вне него не
     должен повторно увеличивать городские суммы (реальный блок «Лейла»)."""

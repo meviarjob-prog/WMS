@@ -462,7 +462,7 @@ def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_
     ws.title = "План отгрузок"
     ws.sheet_view.showGridLines = False
     ws.sheet_view.zoomScale = 85
-    ws.freeze_panes = "H4"
+    ws.freeze_panes = "J4"
     ws.print_options.horizontalCentered = False
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
@@ -473,6 +473,8 @@ def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_
         "Размер",
         "Штрихкод",
         "",
+        "Общий план",
+        "Не хватает по плану",
         "На разбраковке",
         "Готово к отгрузке",
         "В пути",
@@ -517,7 +519,17 @@ def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_
                 ws.cell(row, column).fill = fill
         next_column = end_column + 1
 
-    last_column = max(next_column - 1, len(common_headers))
+    # Последняя колонка с числами (общие показатели + города) — все, что
+    # правее нее, это уже "Комментарий закупщиков", свободный текст без
+    # суммы и без правого выравнивания/числового формата.
+    last_numeric_column = max(next_column - 1, len(common_headers))
+    comment_column = last_numeric_column + 1
+    ws.merge_cells(start_row=1, start_column=comment_column, end_row=2, end_column=comment_column)
+    comment_header = ws.cell(1, comment_column, "Комментарий закупщиков")
+    comment_header.font = Font(name="Arial", size=10, bold=True)
+    comment_header.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    last_column = comment_column
+
     for row in (1, 2):
         for column in range(1, last_column + 1):
             cell = ws.cell(row, column)
@@ -525,18 +537,22 @@ def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_
 
     total_row = 3
     ws.cell(total_row, 1, f"Итого ({len(picking_list)} поз.)")
-    ws.cell(total_row, 5, picking_totals["unplaced"])
-    ws.cell(total_row, 6, picking_totals["ready_to_ship"])
-    ws.cell(total_row, 7, picking_totals["in_transit"])
+    ws.cell(total_row, 5, picking_totals["total_planned"])
+    ws.cell(total_row, 6, picking_totals["total_remaining"])
+    ws.cell(total_row, 7, picking_totals["unplaced"])
+    ws.cell(total_row, 8, picking_totals["ready_to_ship"])
+    ws.cell(total_row, 9, picking_totals["in_transit"])
     for (marketplace, city), column in city_columns.items():
         ws.cell(total_row, column, picking_totals[marketplace][city])
     for column in range(1, last_column + 1):
         cell = ws.cell(total_row, column)
         cell.fill = total_fill
         cell.font = Font(name="Arial", size=9, bold=True)
-        cell.alignment = Alignment(horizontal="right" if column >= 5 else "left", vertical="center")
+        cell.alignment = Alignment(
+            horizontal="right" if 5 <= column <= last_numeric_column else "left", vertical="center"
+        )
         cell.border = Border(bottom=medium_gray)
-        if column >= 5:
+        if 5 <= column <= last_numeric_column:
             cell.number_format = '#,##0;-#,##0;—'
 
     for row_number, product in enumerate(picking_list, start=4):
@@ -544,9 +560,12 @@ def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_
         ws.cell(row_number, 2, product["size"])
         ws.cell(row_number, 3, product["barcode"])
         ws.cell(row_number, 4, "нет на складе" if product["no_stock"] else "")
-        ws.cell(row_number, 5, product["unplaced"])
-        ws.cell(row_number, 6, product["ready_to_ship"])
-        ws.cell(row_number, 7, product["in_transit_total"])
+        ws.cell(row_number, 5, product["total_planned"])
+        ws.cell(row_number, 6, product["total_remaining"])
+        ws.cell(row_number, 7, product["unplaced"])
+        ws.cell(row_number, 8, product["ready_to_ship"])
+        ws.cell(row_number, 9, product["in_transit_total"])
+        ws.cell(row_number, comment_column, product.get("comment") or "")
 
         for (marketplace, city), column in city_columns.items():
             line = product[marketplace].get(city)
@@ -562,13 +581,13 @@ def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_
             cell = ws.cell(row_number, column)
             cell.font = Font(name="Arial", size=9)
             cell.alignment = Alignment(
-                horizontal="right" if column >= 5 else "left",
+                horizontal="right" if 5 <= column <= last_numeric_column else "left",
                 vertical="center",
             )
             cell.border = Border(bottom=thin_gray)
             if product["no_stock"]:
                 cell.fill = no_stock_fill
-            if column >= 5 and not isinstance(cell.value, str):
+            if 5 <= column <= last_numeric_column and not isinstance(cell.value, str):
                 cell.number_format = '#,##0;-#,##0;—'
 
         if product["no_stock"]:
@@ -577,7 +596,7 @@ def export_shipment_plan_to_excel(picking_list, picking_totals, ozon_cities, wb_
             badge.font = Font(name="Arial", size=8, bold=True, color="FFFFFF")
             badge.alignment = Alignment(horizontal="center", vertical="center")
 
-    widths = {1: 30, 2: 12, 3: 19, 4: 16, 5: 18, 6: 22, 7: 12}
+    widths = {1: 30, 2: 12, 3: 19, 4: 16, 5: 14, 6: 16, 7: 18, 8: 22, 9: 12, comment_column: 32}
     for column, width in widths.items():
         ws.column_dimensions[get_column_letter(column)].width = width
     ws.row_dimensions[1].height = 20

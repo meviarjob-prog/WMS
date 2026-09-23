@@ -1137,6 +1137,11 @@ class ShipmentPlanLine(db.Model):
     # строки одного объединенного плана могут начинаться в разные даты.
     # Только перемещения с этой даты закрывают потребность строки.
     period_start = db.Column(db.Date, nullable=True)
+    # Комментарий закупщиков из той же строки файла плана (см.
+    # utils.shipment_plan_import._find_comment_col) — например, причина
+    # задержки поставки конкретного SKU. Читается из Google/Excel заново
+    # при каждой загрузке плана, как и planned_qty.
+    buyer_comment = db.Column(db.Text)
 
     warehouse = db.relationship("Warehouse")
     nomenclature = db.relationship("Nomenclature")

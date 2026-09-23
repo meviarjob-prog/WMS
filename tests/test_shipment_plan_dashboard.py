@@ -291,14 +291,47 @@ def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, cli
     sheet = workbook["План отгрузок"]
     assert "A1:A2" in {str(cell_range) for cell_range in sheet.merged_cells.ranges}
     assert sheet["A1"].value == "Артикул"
-    assert sheet["E1"].value == "На разбраковке"
-    assert sheet["H1"].value == "ОЗОН"
-    assert sheet["H2"].value == "Город"
+    assert sheet["E1"].value == "Общий план"
+    assert sheet["F1"].value == "Не хватает по плану"
+    assert sheet["G1"].value == "На разбраковке"
+    assert sheet["J1"].value == "ОЗОН"
+    assert sheet["J2"].value == "Город"
+    assert sheet["K1"].value == "Комментарий закупщиков"
     assert sheet["A3"].value == "Итого (1 поз.)"
-    assert sheet["G3"].value == 10
-    assert sheet["H3"].value == 30
+    assert sheet["E3"].value == 30
+    assert sheet["I3"].value == 10
+    assert sheet["J3"].value == 30
     assert sheet["A4"].value == "ART-1"
-    assert sheet["H4"].value == "30 (10)"
+    assert sheet["J4"].value == "30 (10)"
+
+
+def test_picking_list_shows_total_planned_and_shortfall_columns(db, client_logged_in):
+    """«Общий план» и «Не хватает по плану» — построчно по товару, сумма по
+    всем городам обоих маркетплейсов, а не по одному городу."""
+    sender, city, item = _setup(planned_qty=30)
+    _ship_box(sender, city, item, qty=10, box_number="BOX-TOTALS-1", client=client_logged_in)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    assert "Общий план" in html
+    assert "Не хватает по плану" in html
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    # План всего 30 на единственный город; товар еще не принят на МП, поэтому
+    # остаток плана (без учета уже едущих 10) все еще 30 — они лишь в пути.
+    assert ">30<" in snippet
+
+
+def test_picking_list_shows_buyer_comment_column(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    line = ShipmentPlanLine.query.first()
+    line.buyer_comment = "Поставка задерживается на неделю"
+    db.session.commit()
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    assert "Комментарий закупщиков" in html
+    assert "Поставка задерживается на неделю" in html
 
 
 def test_picking_list_has_totals_row_summing_columns(db, client_logged_in):
