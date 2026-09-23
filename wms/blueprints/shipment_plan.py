@@ -814,7 +814,12 @@ def _dashboard_context():
             product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
             product["in_transit_total"] += line.in_transit_qty
             product["total_planned"] += line.planned_qty
-            product["total_remaining"] += line.remaining_qty()
+            # "Не хватает по плану" — план минус то, что уже в пути (не
+            # минус remaining_qty(): та величина намеренно игнорирует
+            # transit, см. current_fulfilled_qty=0.0 выше, — используется
+            # только для колонок по городам, где "в пути" показывается
+            # отдельно в скобках).
+            product["total_remaining"] += line.effective_remaining_qty
             if not product["comment"] and line.buyer_comment:
                 product["comment"] = line.buyer_comment
 

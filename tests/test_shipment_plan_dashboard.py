@@ -307,7 +307,8 @@ def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, cli
 
 def test_picking_list_shows_total_planned_and_shortfall_columns(db, client_logged_in):
     """«Общий план» и «Не хватает по плану» — построчно по товару, сумма по
-    всем городам обоих маркетплейсов, а не по одному городу."""
+    всем городам обоих маркетплейсов. «Не хватает» = план минус то, что уже
+    в пути (не меньше нуля), а не просто остаток плана без учета транзита."""
     sender, city, item = _setup(planned_qty=30)
     _ship_box(sender, city, item, qty=10, box_number="BOX-TOTALS-1", client=client_logged_in)
 
@@ -317,9 +318,20 @@ def test_picking_list_shows_total_planned_and_shortfall_columns(db, client_logge
     assert "Не хватает по плану" in html
     idx = html.find("ART-1")
     snippet = html[idx : idx + 3000]
-    # План всего 30 на единственный город; товар еще не принят на МП, поэтому
-    # остаток плана (без учета уже едущих 10) все еще 30 — они лишь в пути.
-    assert ">30<" in snippet
+    assert ">30<" in snippet  # Общий план
+    assert ">20<" in snippet  # Не хватает: 30 - 10 в пути
+
+
+def test_shortfall_column_floors_at_zero_when_transit_covers_plan(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=10)
+    _ship_box(sender, city, item, qty=10, box_number="BOX-TOTALS-2", client=client_logged_in)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    assert ">10<" in snippet  # Общий план и «в пути» совпадают
+    assert "text-muted\">0<" in snippet  # Не хватает: max(10 - 10, 0) = 0
 
 
 def test_picking_list_shows_buyer_comment_column(db, client_logged_in):
