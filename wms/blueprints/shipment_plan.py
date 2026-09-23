@@ -911,6 +911,26 @@ def dashboard():
     )
 
 
+@bp.route("/comment/<path:barcode>", methods=["POST"])
+def update_comment(barcode):
+    """Комментарий закупщиков редактируется прямо в WMS (не только приходит
+    из файла плана). Строка picking_list одна на штрихкод, но под ним может
+    быть несколько ShipmentPlanLine (разные города/маркетплейсы) — правим
+    комментарий сразу во всех, иначе он "потеряется" при следующем показе
+    другого города/площадки того же товара. Следующая загрузка плана все
+    равно перезапишет это значение тем, что в файле (см. _apply_plan) —
+    как и остальные данные из плана."""
+    lines = ShipmentPlanLine.query.filter_by(barcode=barcode).all()
+    if not lines:
+        flash("Товар с таким штрихкодом не найден в текущем плане", "danger")
+        return redirect(url_for("shipment_plan.dashboard"))
+    comment = request.form.get("comment", "").strip() or None
+    for line in lines:
+        line.buyer_comment = comment
+    db.session.commit()
+    return redirect(url_for("shipment_plan.dashboard"))
+
+
 @bp.route("/export.xlsx")
 def export_all():
     context = _dashboard_context()

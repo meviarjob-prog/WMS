@@ -335,6 +335,8 @@ def test_shortfall_column_floors_at_zero_when_transit_covers_plan(db, client_log
 
 
 def test_picking_list_shows_buyer_comment_column(db, client_logged_in):
+    """Комментарий показан как поле ввода (можно править прямо в WMS), а не
+    просто текстом — со значением из buyer_comment."""
     sender, city, item = _setup(planned_qty=30)
     line = ShipmentPlanLine.query.first()
     line.buyer_comment = "Поставка задерживается на неделю"
@@ -343,7 +345,88 @@ def test_picking_list_shows_buyer_comment_column(db, client_logged_in):
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
     assert "Комментарий закупщиков" in html
-    assert "Поставка задерживается на неделю" in html
+    assert 'value="Поставка задерживается на неделю"' in html
+
+
+def test_comment_column_is_positioned_right_after_barcode(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    barcode_idx = html.index(">Штрихкод<")
+    comment_idx = html.index("Комментарий закупщиков")
+    total_planned_idx = html.index("Общий план")
+    assert barcode_idx < comment_idx < total_planned_idx
+
+
+def test_update_comment_endpoint_saves_buyer_comment(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+
+    response = client_logged_in.post(
+        f"/shipment-plan/comment/{item.barcode}",
+        data={"comment": "Уточнить у поставщика"},
+    )
+
+    assert response.status_code == 302
+    line = ShipmentPlanLine.query.first()
+    assert line.buyer_comment == "Уточнить у поставщика"
+
+
+def test_update_comment_endpoint_clears_comment_on_empty_input(db, client_logged_in):
+    sender, city, item = _setup(planned_qty=30)
+    line = ShipmentPlanLine.query.first()
+    line.buyer_comment = "Старый комментарий"
+    db.session.commit()
+
+    client_logged_in.post(f"/shipment-plan/comment/{item.barcode}", data={"comment": "   "})
+
+    line = ShipmentPlanLine.query.first()
+    assert line.buyer_comment is None
+
+
+def test_update_comment_endpoint_updates_all_lines_sharing_barcode(db, client_logged_in):
+    """Один штрихкод может встречаться в нескольких строках плана (разные
+    города и площадки) — комментарий один на товар, должен обновиться сразу
+    во всех, иначе "потеряется" при показе другого направления того же
+    товара."""
+    sender, city, item = _setup(planned_qty=30)
+    other_city = Warehouse(
+        code="WH-D3", name="ВБ: Город2", marketplace="wb", marketplace_city="Город2"
+    )
+    db.session.add(other_city)
+    db.session.commit()
+    wb_plan = ShipmentPlan(marketplace="wb")
+    db.session.add(wb_plan)
+    db.session.commit()
+    db.session.add(
+        ShipmentPlanLine(
+            plan_id=wb_plan.id,
+            warehouse_id=other_city.id,
+            nomenclature_id=item.id,
+            barcode=item.barcode,
+            article="ART-1",
+            planned_qty=10,
+        )
+    )
+    db.session.commit()
+
+    client_logged_in.post(
+        f"/shipment-plan/comment/{item.barcode}", data={"comment": "Общий комментарий"}
+    )
+
+    comments = {
+        line.buyer_comment
+        for line in ShipmentPlanLine.query.filter_by(barcode=item.barcode).all()
+    }
+    assert comments == {"Общий комментарий"}
+
+
+def test_update_comment_endpoint_unknown_barcode_flashes_error(db, client_logged_in):
+    response = client_logged_in.post(
+        "/shipment-plan/comment/0000000000000", data={"comment": "test"}, follow_redirects=True
+    )
+
+    assert "не найден" in response.get_data(as_text=True)
 
 
 def test_picking_list_has_totals_row_summing_columns(db, client_logged_in):
