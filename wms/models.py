@@ -274,6 +274,12 @@ class Zone(db.Model):
 
     warehouse = db.relationship("Warehouse")
     cells = db.relationship("Cell", backref="zone", lazy="dynamic")
+    # Короба, размещенные СРАЗУ в ряду, без конкретной ячейки — для
+    # помещений, где нет возможности завести ячейки (см. чат). Ряд с нулем
+    # ячеек уже можно было создать и раньше (cell_count=0 в форме), но до
+    # этого поля разместить в него короб было нечем — только в ячейку.
+    # У самого ряда, в отличие от ячейки, нет ограничения по вместимости.
+    boxes = db.relationship("Box", backref="zone", lazy="dynamic")
 
     __table_args__ = (
         db.UniqueConstraint("warehouse_id", "code", name="uq_zone_warehouse_code"),
@@ -491,6 +497,12 @@ class Box(db.Model):
     box_number = db.Column(db.String(30), unique=True, nullable=False)
     warehouse_id = db.Column(db.Integer, db.ForeignKey("warehouses.id"), nullable=False, index=True)
     cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"), nullable=True, index=True)
+    # Ряд, в который короб размещен НАПРЯМУЮ, без конкретной ячейки — для
+    # помещений без возможности завести ячейки (см. чат). Взаимоисключимо с
+    # cell_id: расставленный короб имеет ЛИБО cell_id, ЛИБО zone_id, никогда
+    # оба сразу (см. placement._place_box). Оба пустые — короб еще не
+    # расставлен вовсе (как и раньше).
+    zone_id = db.Column(db.Integer, db.ForeignKey("zones.id"), nullable=True, index=True)
     placement_document_id = db.Column(
         db.Integer, db.ForeignKey("placement_documents.id"), nullable=True, index=True
     )
@@ -511,6 +523,20 @@ class Box(db.Model):
 
     def total_qty(self):
         return sum(item.qty for item in self.items)
+
+    def is_placed(self):
+        return self.cell_id is not None or self.zone_id is not None
+
+    def location_label(self):
+        """Куда короб расставлен, для использования в середине фразы
+        ("короб размещен в " + location_label()) — "ячейке <код>" либо, для
+        короба напрямую в ряду без ячейки (см. zone_id), "ряду <код>".
+        None — еще не расставлен."""
+        if self.cell_id:
+            return f"ячейке {self.cell.code}"
+        if self.zone_id:
+            return f"ряду {self.zone.code}"
+        return None
 
     def mark_scanned(self, user):
         self.last_scanned_at = datetime.utcnow()
@@ -1041,9 +1067,16 @@ class InventoryDocument(db.Model):
     # эту ячейку (см. inventory.add_box) — по сути инвентаризация ячейки
     # одновременно и есть ее фактическое размещение.
     cell_id = db.Column(db.Integer, db.ForeignKey("cells.id"), nullable=True)
+    # Аналогично cell_id, но выборочная инвентаризация целого РЯДА без
+    # ячеек (см. чат — помещения, где ячейки завести нельзя): сравнение
+    # идет с тем, что стоит в рядy напрямую (Box.zone_id), а сканирование
+    # короба сразу переставляет его в этот ряд (см. inventory.add_box).
+    # Взаимоисключимо с cell_id — заполнено только одно из двух, либо ни одно.
+    zone_id = db.Column(db.Integer, db.ForeignKey("zones.id"), nullable=True)
 
     warehouse = db.relationship("Warehouse")
     cell = db.relationship("Cell")
+    zone = db.relationship("Zone")
     created_by = db.relationship("User")
     merged_into = db.relationship("InventoryDocument", remote_side=[id], backref="merged_from")
     lines = db.relationship(

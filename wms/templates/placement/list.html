@@ -106,7 +106,7 @@
             <td>
               <form method="post" action="{{ url_for('placement.place_box_standalone', box_id=box.id) }}" class="d-flex gap-1">
                 <input type="hidden" name="next" value="{{ url_for('placement.list_documents', boxes_page=boxes_pagination.page) }}">
-                <input type="text" name="cell_code" value="{{ suggestion.cell.code if suggestion else '' }}" class="form-control form-control-sm" placeholder="Код ячейки" required style="max-width:140px">
+                <input type="text" name="cell_code" value="{{ suggestion.cell.code if suggestion else '' }}" class="form-control form-control-sm" placeholder="Код ячейки или ряда" required style="max-width:140px">
                 <button type="submit" class="btn btn-sm btn-outline-primary">OK</button>
               </form>
             </td>

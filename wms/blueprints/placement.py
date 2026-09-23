@@ -12,7 +12,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user
-from sqlalchemy import func
+from sqlalchemy import and_, func
 
 from ..extensions import db
 from ..models import (
@@ -27,6 +27,7 @@ from ..models import (
     UnplacedStock,
     UnplacedStockLot,
     Warehouse,
+    Zone,
 )
 from ..utils.excel_io import export_placement_to_excel, timestamp_for_filename
 from ..utils.document_access import ensure_view_document_access, owned_query
@@ -82,10 +83,13 @@ def _cell_suggestion_context(warehouse_id):
     # (bulk) и не закончился ли он. Группировка по (nomenclature_id, box_id) —
     # именно короб, а не ячейка, иначе несколько неразмещенных коробов с
     # одним товаром (все с cell_id=None) схлопнулись бы в одну строку.
+    # "Не размещен" — ни в ячейке, ни напрямую в ряду (см. Box.zone_id).
     warehouse_nom_counts = {}
     unplaced_nom_counts = {}
     for nid, box_id, is_unplaced in (
-        db.session.query(BoxItem.nomenclature_id, Box.id, Box.cell_id.is_(None))
+        db.session.query(
+            BoxItem.nomenclature_id, Box.id, and_(Box.cell_id.is_(None), Box.zone_id.is_(None))
+        )
         .join(Box, BoxItem.box_id == Box.id)
         .filter(Box.warehouse_id == warehouse_id)
         .distinct()
@@ -163,7 +167,7 @@ def _suggest_cell_from_context(ctx, box, box_items=None):
     for nid in nomenclature_ids:
         if nid in warehouse_nom_counts:
             warehouse_nom_counts[nid] -= 1
-        if box.cell_id is None and nid in unplaced_nom_counts:
+        if box.cell_id is None and box.zone_id is None and nid in unplaced_nom_counts:
             unplaced_nom_counts[nid] -= 1
 
     def is_bulk(nid):
@@ -246,7 +250,7 @@ def suggest_cells_for_boxes(warehouse_id, boxes):
     Состав коробов (BoxItem) тоже загружается одним batch-запросом сразу
     по всем переданным коробам — box.items сам по себе lazy="dynamic" и
     иначе слал бы отдельный SELECT на каждый короб."""
-    unplaced_boxes = [box for box in boxes if box.cell_id is None]
+    unplaced_boxes = [box for box in boxes if box.cell_id is None and box.zone_id is None]
     ctx = _cell_suggestion_context(warehouse_id)
 
     items_by_box_id = {}
@@ -285,7 +289,7 @@ def list_documents():
 
     boxes_page = request.args.get("boxes_page", 1, type=int)
     boxes_pagination = (
-        Box.query.filter_by(cell_id=None)
+        Box.query.filter_by(cell_id=None, zone_id=None)
         .join(Warehouse, Box.warehouse_id == Warehouse.id)
         .order_by(Warehouse.code, Box.box_number)
         .paginate(page=boxes_page, per_page=PLACEMENT_PAGE_SIZE, error_out=False)
@@ -362,7 +366,7 @@ def scan_box():
         box = Box.find_by_scanned_code(box_number)
         if not box:
             not_found = True
-        elif box.cell_id is not None:
+        elif box.is_placed():
             already_placed = True
         elif box.items.count() == 0:
             empty_box = True
@@ -387,13 +391,18 @@ def scan_cell():
     потом сканируют в нее короба один за другим без повторного ввода ячейки
     каждый раз. Удобно, когда несколько коробов подряд едут в одно и то же
     место. Код ячейки уникален только в пределах склада (см. Cell.
-    __table_args__), поэтому склад выбирается явно, не по одному скану."""
+    __table_args__), поэтому склад выбирается явно, не по одному скану.
+
+    Если введенный код — не ячейка, а РЯД (см. чат — помещения без
+    возможности завести ячейки), работает так же, только без ограничения
+    по вместимости и без конкретной ячейки (см. Box.zone_id, _place_box)."""
     warehouse_id = request.args.get("warehouse_id", type=int)
     cell_code = request.args.get("cell_code", "").strip()
 
     warehouses = Warehouse.query.filter_by(is_active=True).order_by(Warehouse.code).all()
     warehouse = None
     cell = None
+    zone = None
     cell_not_found = False
 
     if warehouse_id:
@@ -401,6 +410,8 @@ def scan_cell():
         if warehouse and cell_code:
             cell = Cell.query.filter_by(warehouse_id=warehouse_id, code=cell_code).first()
             if not cell:
+                zone = Zone.query.filter_by(warehouse_id=warehouse_id, code=cell_code).first()
+            if not cell and not zone:
                 cell_not_found = True
 
     return render_template(
@@ -410,6 +421,7 @@ def scan_cell():
         warehouse_id=warehouse_id,
         cell_code=cell_code,
         cell=cell,
+        zone=zone,
         cell_not_found=cell_not_found,
         CELL_CAPACITY=CELL_CAPACITY,
     )
@@ -446,7 +458,7 @@ def scan_cell_add_box():
     if error:
         flash(error, "danger")
     else:
-        flash(f"Короб {box.box_number} размещен в ячейке {cell_code}", "success")
+        flash(f"Короб {box.box_number} размещен в {box.location_label()}", "success")
     return redirect(back_url)
 
 
@@ -477,7 +489,7 @@ def detail(doc_id):
     doc = PlacementDocument.query.get_or_404(doc_id)
     unpacked_lines = doc.lines.filter_by(box_id=None).all()
     boxes = doc.boxes.order_by(Box.created_at.asc()).all()
-    open_boxes = Box.query.filter_by(warehouse_id=doc.warehouse_id, cell_id=None).all()
+    open_boxes = Box.query.filter_by(warehouse_id=doc.warehouse_id, cell_id=None, zone_id=None).all()
     # Пустые короба (заготовлены массовой печатью, но еще ничем не
     # заполнены) не показываем как "неразмещенные" — размещать в ячейку
     # там пока нечего, только замусоривают список. Кол-во товара в коробе
@@ -760,22 +772,38 @@ def pack_line(doc_id, line_id):
     return redirect(url_for("placement.detail", doc_id=doc.id))
 
 
-def _place_box(box, cell_code, expected_warehouse_id):
-    if not cell_code:
-        return "Укажите или отсканируйте код ячейки"
+def _place_box(box, location_code, expected_warehouse_id):
+    """Расставляет короб по коду ячейки — а если такой ячейки на складе нет,
+    пробует найти РЯД с этим кодом и поставить короб прямо в него, без
+    конкретной ячейки (см. чат — помещения, где ячейки завести нельзя;
+    Box.zone_id). У ряда, в отличие от ячейки, нет предела вместимости.
+    Код ячейки и код ряда — разные пространства имен (ячейки получают код
+    вида "<ряд><NNNN>", см. warehouses._generate_cells), так что
+    неоднозначности между ними не бывает."""
+    if not location_code:
+        return "Укажите или отсканируйте код ячейки или ряда"
 
-    cell = Cell.query.filter_by(warehouse_id=expected_warehouse_id, code=cell_code).first()
-    if not cell:
-        return f"Ячейка '{cell_code}' не найдена на этом складе"
+    cell = Cell.query.filter_by(warehouse_id=expected_warehouse_id, code=location_code).first()
+    if cell:
+        if cell.id != box.cell_id and cell.free_space() <= 0:
+            return f"Ячейка '{location_code}' заполнена (вмещает {CELL_CAPACITY} коробов)"
+        box.cell_id = cell.id
+        box.zone_id = None
+        box.status = "stored"
+        box.mark_scanned(current_user)
+        db.session.commit()
+        return None
 
-    if cell.id != box.cell_id and cell.free_space() <= 0:
-        return f"Ячейка '{cell_code}' заполнена (вмещает {CELL_CAPACITY} коробов)"
+    zone = Zone.query.filter_by(warehouse_id=expected_warehouse_id, code=location_code).first()
+    if zone:
+        box.zone_id = zone.id
+        box.cell_id = None
+        box.status = "stored"
+        box.mark_scanned(current_user)
+        db.session.commit()
+        return None
 
-    box.cell_id = cell.id
-    box.status = "stored"
-    box.mark_scanned(current_user)
-    db.session.commit()
-    return None
+    return f"Ячейка или ряд '{location_code}' не найдены на этом складе"
 
 
 @bp.route("/<int:doc_id>/boxes/<int:box_id>/place", methods=["POST"])
@@ -790,7 +818,7 @@ def place_box(doc_id, box_id):
     if error:
         flash(error, "danger")
     else:
-        flash(f"Короб {box.box_number} размещен в ячейке {box.cell.code}", "success")
+        flash(f"Короб {box.box_number} размещен в {box.location_label()}", "success")
     return redirect(url_for("placement.detail", doc_id=doc.id))
 
 
@@ -805,7 +833,7 @@ def place_box_standalone(box_id):
     if error:
         flash(error, "danger")
     else:
-        flash(f"Короб {box.box_number} размещен в ячейке {box.cell.code}", "success")
+        flash(f"Короб {box.box_number} размещен в {box.location_label()}", "success")
     return redirect(next_url)
 
 
@@ -864,10 +892,10 @@ def complete(doc_id):
         flash("Нет коробов для завершения размещения", "danger")
         return redirect(url_for("placement.detail", doc_id=doc.id))
 
-    unplaced = [b for b in doc.boxes if b.cell_id is None]
+    unplaced = [b for b in doc.boxes if b.cell_id is None and b.zone_id is None]
     if unplaced:
         names = ", ".join(b.box_number for b in unplaced)
-        flash(f"Не все короба размещены в ячейках: {names}", "danger")
+        flash(f"Не все короба размещены в ячейках или рядах: {names}", "danger")
         return redirect(url_for("placement.detail", doc_id=doc.id))
 
     doc.status = "completed"

@@ -24,6 +24,8 @@
           <label class="btn btn-outline-primary" for="modeGeneral">Весь склад</label>
           <input type="radio" class="btn-check" name="mode" id="modeCell" value="cell" autocomplete="off">
           <label class="btn btn-outline-primary" for="modeCell">По ячейке</label>
+          <input type="radio" class="btn-check" name="mode" id="modeZone" value="zone" autocomplete="off">
+          <label class="btn btn-outline-primary" for="modeZone">По ряду</label>
         </div>
       </div>
 
@@ -31,6 +33,12 @@
         <label class="form-label">Код ячейки</label>
         <input type="text" name="cell_code" id="cellCodeInput" class="form-control" placeholder="Отсканируйте или введите код ячейки">
         <div class="form-text">Сравниваться будет не весь учётный остаток склада, а только то, что сейчас числится в этой ячейке. Сканирование короба в этом листе сразу же переставит его в эту ячейку.</div>
+      </div>
+
+      <div class="mb-3 d-none" id="zoneCodeGroup">
+        <label class="form-label">Код ряда</label>
+        <input type="text" name="cell_code" id="zoneCodeInput" class="form-control" placeholder="Отсканируйте или введите код ряда">
+        <div class="form-text">Для помещений, где нет возможности завести ячейки: сравниваться будет то, что сейчас числится в ряду напрямую, без ячейки. Сканирование короба в этом листе сразу же переставит его в этот ряд.</div>
       </div>
 
       <p class="text-muted small">Все короба, которые вы отсканируете в этом листе, должны быть на выбранном складе.</p>
@@ -45,11 +53,18 @@
 (function () {
   var cellGroup = document.getElementById("cellCodeGroup");
   var cellInput = document.getElementById("cellCodeInput");
+  var zoneGroup = document.getElementById("zoneCodeGroup");
+  var zoneInput = document.getElementById("zoneCodeInput");
   document.querySelectorAll('input[name="mode"]').forEach(function (radio) {
     radio.addEventListener("change", function () {
       var isCell = document.getElementById("modeCell").checked;
+      var isZone = document.getElementById("modeZone").checked;
       cellGroup.classList.toggle("d-none", !isCell);
+      zoneGroup.classList.toggle("d-none", !isZone);
+      cellInput.disabled = !isCell;
+      zoneInput.disabled = !isZone;
       if (isCell) { cellInput.focus(); }
+      if (isZone) { zoneInput.focus(); }
     });
   });
 })();

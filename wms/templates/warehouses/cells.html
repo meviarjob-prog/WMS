@@ -34,14 +34,16 @@
   <div class="col-md-7">
     <div class="card p-3">
       <h5>Ряды склада</h5>
+      <p class="text-muted small">«Коробов напрямую» — короба, размещенные прямо в ряду без ячейки (для помещений, где ячейки завести нельзя, см. «Размещение» и «Инвентаризация»).</p>
       <table class="table table-sm table-mobile-compact">
-        <thead><tr><th>Ряд</th><th>Описание</th><th>Ячеек</th><th>Статус</th><th></th></tr></thead>
+        <thead><tr><th>Ряд</th><th>Описание</th><th>Ячеек</th><th>Коробов напрямую</th><th>Статус</th><th></th></tr></thead>
         <tbody>
         {% for zone in zones %}
           <tr>
             <td><b>{{ zone.code }}</b></td>
             <td>{{ zone.name or '' }}</td>
             <td>{{ zone.cells.count() }}</td>
+            <td>{{ zone.boxes.count() }}</td>
             <td>{% if zone.is_active %}<span class="badge bg-success">Активен</span>{% else %}<span class="badge bg-secondary">Отключен</span>{% endif %}</td>
             <td class="text-nowrap">
               <a class="btn btn-sm btn-outline-primary d-none d-md-inline-block" target="_blank" href="{{ url_for('labels.zone_label', zone_id=zone.id) }}">🖨 A4-этикетка ряда</a>
@@ -56,7 +58,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="5" class="text-muted">Ряды еще не созданы</td></tr>
+          <tr><td colspan="6" class="text-muted">Ряды еще не созданы</td></tr>
         {% endfor %}
         </tbody>
       </table>

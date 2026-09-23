@@ -135,7 +135,7 @@
             <select name="box_id" class="form-select form-select-sm" required>
               <option value="">Короб...</option>
               {% for box in boxes %}
-                <option value="{{ box.id }}">{{ box.box_number }}{% if box.cell %} (в ячейке {{ box.cell.code }}){% endif %}</option>
+                <option value="{{ box.id }}">{{ box.box_number }}{% if box.cell %} (в ячейке {{ box.cell.code }}){% elif box.zone %} (в ряду {{ box.zone.code }}){% endif %}</option>
               {% endfor %}
               {% for box in open_boxes if box.placement_document_id != doc.id %}
                 <option value="{{ box.id }}">{{ box.box_number }}</option>
@@ -166,8 +166,9 @@
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
       <div>
         <a href="{{ url_for('boxes.detail', box_id=box.id) }}"><b>{{ box.box_number }}</b></a>
-        <span class="badge badge-status-{{ box.status }}">{{ 'В ячейке' if box.status == 'stored' else 'Открыт' }}</span>
-        {% if box.cell %}<span class="text-muted">— ячейка <a href="{{ url_for('warehouses.cell_detail', cell_id=box.cell.id) }}">{{ box.cell.code }}</a></span>{% endif %}
+        <span class="badge badge-status-{{ box.status }}">{{ 'Расставлен' if box.status == 'stored' else 'Открыт' }}</span>
+        {% if box.cell %}<span class="text-muted">— ячейка <a href="{{ url_for('warehouses.cell_detail', cell_id=box.cell.id) }}">{{ box.cell.code }}</a></span>
+        {% elif box.zone %}<span class="text-muted">— ряд {{ box.zone.code }} (без ячейки)</span>{% endif %}
       </div>
       <div>
         {% if doc.status == 'draft' and not (active_box and box.id == active_box.id) %}
@@ -191,7 +192,7 @@
       </tbody>
     </table>
 
-    {% if not box.cell %}
+    {% if not box.cell and not box.zone %}
     {% set suggestion = cell_suggestions.get(box.id) %}
     {% if suggestion %}
     <p class="text-muted small mb-1">
@@ -200,9 +201,9 @@
     </p>
     {% endif %}
     <form method="post" action="{{ url_for('placement.place_box', doc_id=doc.id, box_id=box.id) }}" class="d-flex gap-2">
-      <input type="text" id="cellCodeInput{{ box.id }}" name="cell_code" class="form-control form-control-sm" placeholder="Отсканируйте / введите код ячейки" style="max-width:280px" required>
+      <input type="text" id="cellCodeInput{{ box.id }}" name="cell_code" class="form-control form-control-sm" placeholder="Отсканируйте / введите код ячейки или ряда" style="max-width:280px" required>
       <button type="button" class="btn btn-sm btn-outline-primary" data-camera-scan-target="#cellCodeInput{{ box.id }}" title="Сканировать камерой">📷</button>
-      <button type="submit" class="btn btn-sm btn-primary">Разместить в ячейке</button>
+      <button type="submit" class="btn btn-sm btn-primary">Разместить</button>
     </form>
     {% endif %}
   </div>
@@ -226,7 +227,7 @@
         <td>
           <form method="post" action="{{ url_for('placement.place_box_standalone', box_id=box.id) }}" class="d-flex gap-1">
             <input type="hidden" name="next" value="{{ url_for('placement.detail', doc_id=doc.id) }}">
-            <input type="text" name="cell_code" value="{{ suggestion.cell.code if suggestion else '' }}" class="form-control form-control-sm" placeholder="Код ячейки" required style="max-width:180px">
+            <input type="text" name="cell_code" value="{{ suggestion.cell.code if suggestion else '' }}" class="form-control form-control-sm" placeholder="Код ячейки или ряда" required style="max-width:180px">
             <button type="submit" class="btn btn-sm btn-outline-primary">OK</button>
           </form>
         </td>

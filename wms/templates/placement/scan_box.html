@@ -22,7 +22,7 @@
       <div class="alert alert-danger mt-3 mb-0">Короб «{{ box_number }}» не найден.</div>
     {% elif already_placed %}
       <div class="alert alert-secondary mt-3 mb-0">
-        Короб <b>{{ box.box_number }}</b> уже расставлен в ячейке <b>{{ box.cell.code }}</b>.
+        Короб <b>{{ box.box_number }}</b> уже расставлен в {{ box.location_label() }}.
       </div>
     {% elif empty_box %}
       <div class="alert alert-secondary mt-3 mb-0">
@@ -39,7 +39,7 @@
         <form method="post" action="{{ url_for('placement.place_box_standalone', box_id=box.id) }}" class="d-flex gap-2">
           <input type="hidden" name="next" value="{{ url_for('placement.scan_box', box_number=box.box_number) }}">
           <input type="text" name="cell_code" class="form-control form-control-lg"
-                 value="{{ suggestion.cell.code if suggestion else '' }}" placeholder="Код ячейки" required autofocus>
+                 value="{{ suggestion.cell.code if suggestion else '' }}" placeholder="Код ячейки или ряда" required autofocus>
           <button type="submit" class="btn btn-success">Разместить</button>
         </form>
         {% if suggestion %}

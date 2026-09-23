@@ -5,7 +5,7 @@
 place_box_standalone)."""
 
 from wms.extensions import db
-from wms.models import Box, BoxItem, Cell, Nomenclature, Warehouse
+from wms.models import Box, BoxItem, Cell, Nomenclature, Warehouse, Zone
 
 
 def _make_warehouse(suffix):
@@ -103,3 +103,60 @@ def test_scan_empty_box_shows_nothing_to_place(db, client_logged_in):
     html = client_logged_in.get(f"/placement/scan-box?box_number={box.box_number}").get_data(as_text=True)
 
     assert "пуст" in html
+
+
+def test_place_box_by_row_code_when_no_cell_matches(db, client_logged_in):
+    """Помещения без возможности завести ячейки (см. чат) — код ряда
+    работает в том же поле, что и код ячейки: сначала ищем ячейку, не
+    находим — пробуем ряд."""
+    warehouse = _make_warehouse("5")
+    item = _make_item("5")
+    zone = Zone(warehouse_id=warehouse.id, code="ROW-X")
+    db.session.add(zone)
+    db.session.commit()
+    box = _make_box(warehouse, item, "BOX-SCANBOX-5", qty=1)
+
+    resp = client_logged_in.post(
+        f"/placement/box/{box.id}/place",
+        data={"cell_code": "ROW-X", "next": f"/placement/scan-box?box_number={box.box_number}"},
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    placed = Box.query.get(box.id)
+    assert placed.cell_id is None
+    assert placed.zone_id == zone.id
+    assert placed.status == "stored"
+    assert "ряду ROW-X" in resp.get_data(as_text=True)
+
+
+def test_scan_already_placed_in_row_shows_row(db, client_logged_in):
+    warehouse = _make_warehouse("6")
+    item = _make_item("6")
+    zone = Zone(warehouse_id=warehouse.id, code="ROW-Y")
+    db.session.add(zone)
+    db.session.commit()
+    box = _make_box(warehouse, item, "BOX-SCANBOX-6", qty=1)
+    box.zone_id = zone.id
+    box.status = "stored"
+    db.session.commit()
+
+    html = client_logged_in.get(f"/placement/scan-box?box_number={box.box_number}").get_data(as_text=True)
+
+    assert "уже расставлен" in html
+    assert "ряду ROW-Y" in html
+
+
+def test_unknown_location_code_reports_neither_cell_nor_row(db, client_logged_in):
+    warehouse = _make_warehouse("7")
+    item = _make_item("7")
+    box = _make_box(warehouse, item, "BOX-SCANBOX-7", qty=1)
+
+    resp = client_logged_in.post(
+        f"/placement/box/{box.id}/place",
+        data={"cell_code": "NOWHERE", "next": f"/placement/scan-box?box_number={box.box_number}"},
+        follow_redirects=True,
+    )
+
+    assert Box.query.get(box.id).cell_id is None
+    assert "Ячейка или ряд" in resp.get_data(as_text=True)

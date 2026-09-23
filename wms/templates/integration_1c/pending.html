@@ -45,7 +45,7 @@
       <tr>
         <td><a href="{{ url_for('inventory.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
         <td>{{ (d.completed_at|msk).strftime('%d.%m.%Y %H:%M') if d.completed_at else '—' }}</td>
-        <td>{{ d.warehouse.name if d.warehouse else '—' }}{% if d.cell %} / ячейка {{ d.cell.code }}{% endif %}</td>
+        <td>{{ d.warehouse.name if d.warehouse else '—' }}{% if d.cell %} / ячейка {{ d.cell.code }}{% elif d.zone %} / ряд {{ d.zone.code }}{% endif %}</td>
         <td class="text-end">
           <form method="post" action="{{ url_for('integration_1c.toggle_inventory', doc_id=d.id) }}"
                 onsubmit="return confirm('Убрать инвентаризацию {{ d.number }} из очереди выгрузки в 1С?');">

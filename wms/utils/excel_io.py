@@ -252,7 +252,8 @@ def export_placement_to_excel(documents) -> bytes:
                     line.qty,
                     line.nomenclature.unit if line.nomenclature else "",
                     line.box.box_number if line.box else "",
-                    line.box.cell.code if (line.box and line.box.cell) else "",
+                    line.box.cell.code if (line.box and line.box.cell)
+                    else (f"ряд {line.box.zone.code}" if (line.box and line.box.zone) else ""),
                 ]
             )
 

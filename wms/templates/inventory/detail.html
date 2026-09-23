@@ -10,7 +10,7 @@
         {{ {'draft': 'Черновик', 'completed': 'Завершен', 'merged': 'Объединен'}.get(doc.status, doc.status) }}
       </span>
     </h3>
-    <div class="text-muted">Склад: {{ doc.warehouse.name }}{% if doc.cell %} · Ячейка: <b>{{ doc.cell.code }}</b>{% endif %}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
+    <div class="text-muted">Склад: {{ doc.warehouse.name }}{% if doc.cell %} · Ячейка: <b>{{ doc.cell.code }}</b>{% elif doc.zone %} · Ряд: <b>{{ doc.zone.code }}</b>{% endif %}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
     {% if doc.status == 'merged' and doc.merged_into %}
     <div class="text-muted small">Сведен в итоговый документ: <a href="{{ url_for('inventory.detail', doc_id=doc.merged_into_id) }}">{{ doc.merged_into.number }}</a></div>
     {% endif %}
@@ -48,6 +48,8 @@
   <h5>Сканировать короб</h5>
   {% if doc.cell %}
   <p class="text-muted small mb-2">Короб должен быть на складе «{{ doc.warehouse.name }}» — весь товар внутри него автоматически добавится в список. Короб сразу же будет размещен в ячейку <b>{{ doc.cell.code }}</b> (даже если сейчас он в другой ячейке или не размещен), без отдельного подтверждения.</p>
+  {% elif doc.zone %}
+  <p class="text-muted small mb-2">Короб должен быть на складе «{{ doc.warehouse.name }}» — весь товар внутри него автоматически добавится в список. Короб сразу же будет размещен в ряд <b>{{ doc.zone.code }}</b> напрямую, без ячейки (даже если сейчас он в другом месте), без отдельного подтверждения.</p>
   {% else %}
   <p class="text-muted small mb-2">Короб должен быть на складе «{{ doc.warehouse.name }}» — весь товар внутри него автоматически добавится в список, одинаковые товары из разных коробов суммируются.</p>
   {% endif %}
@@ -61,7 +63,7 @@
   </form>
 </div>
 
-{% if not doc.cell %}
+{% if not doc.cell and not doc.zone %}
 <div class="card p-3 mb-4">
   <h5>Учесть товар без короба</h5>
   <p class="text-muted small mb-2">Для неразмещенного остатка, который лежит россыпью, а не в коробе — иначе он никогда не попадет в подсчет и будет вечно висеть недостачей в сличительной ведомости справа.</p>
@@ -139,6 +141,8 @@
       </div>
       {% if doc.cell %}
       <p class="text-muted small mb-2">То, что сейчас числится в ячейке <b>{{ doc.cell.code }}</b>, против того, что насчитано в этом листе.</p>
+      {% elif doc.zone %}
+      <p class="text-muted small mb-2">То, что сейчас числится в ряду <b>{{ doc.zone.code }}</b> напрямую (без ячейки), против того, что насчитано в этом листе.</p>
       {% else %}
       <p class="text-muted small mb-2">Учётный остаток склада «{{ doc.warehouse.name }}» на сейчас против того, что насчитано в этом листе.</p>
       {% endif %}

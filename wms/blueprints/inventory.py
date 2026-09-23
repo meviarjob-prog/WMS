@@ -16,6 +16,7 @@ from ..models import (
     ReceivingDocument,
     UnplacedStock,
     Warehouse,
+    Zone,
 )
 from ..utils.excel_io import export_inventory_to_excel, timestamp_for_filename
 from ..utils.document_access import ensure_view_document_access, owned_query
@@ -74,6 +75,24 @@ def _cell_stock_by_nomenclature(cell_id):
     return stock
 
 
+def _zone_stock_by_nomenclature(zone_id):
+    """Аналог _cell_stock_by_nomenclature для выборочной инвентаризации
+    целого РЯДА без ячеек (см. чат — помещения, где ячейки завести нельзя):
+    сумма по коробам, стоящим в ряду напрямую (Box.zone_id), без учета
+    коробов, расставленных в ячейках внутри этого же ряда — этот режим
+    предназначен именно для рядов, в которых ячеек нет вовсе."""
+    stock = {}
+    for nomenclature_id, qty in (
+        db.session.query(BoxItem.nomenclature_id, func.sum(BoxItem.qty))
+        .join(Box, BoxItem.box_id == Box.id)
+        .filter(Box.zone_id == zone_id)
+        .group_by(BoxItem.nomenclature_id)
+        .all()
+    ):
+        stock[nomenclature_id] = stock.get(nomenclature_id, 0) + (qty or 0)
+    return stock
+
+
 @bp.route("/")
 def list_documents():
     documents = owned_query(InventoryDocument).order_by(InventoryDocument.created_at.desc()).all()
@@ -104,19 +123,21 @@ def merge_documents():
     if len(warehouse_ids) > 1:
         flash("Выбранные листы относятся к разным складам — объединять можно только листы одного склада", "danger")
         return redirect(url_for("inventory.list_documents"))
-    cell_ids = {d.cell_id for d in docs}
-    if len(cell_ids) > 1:
+    scopes = {(d.cell_id, d.zone_id) for d in docs}
+    if len(scopes) > 1:
         flash(
-            "Выбранные листы относятся к разным ячейкам (или к ячейке и складу целиком) — "
+            "Выбранные листы относятся к разным ячейкам/рядам (или к участку и складу целиком) — "
             "объединять можно только листы одного и того же участка",
             "danger",
         )
         return redirect(url_for("inventory.list_documents"))
+    cell_id, zone_id = scopes.pop()
 
     merged = InventoryDocument(
         number=next_number("inventory"),
         warehouse_id=warehouse_ids.pop(),
-        cell_id=cell_ids.pop(),
+        cell_id=cell_id,
+        zone_id=zone_id,
         created_by_id=current_user.id,
     )
     db.session.add(merged)
@@ -173,11 +194,15 @@ def new_document():
         return redirect(url_for("inventory.new_document"))
 
     cell = None
+    zone = None
     cell_code = request.form.get("cell_code", "").strip()
-    # Выборочная инвентаризация по ячейке (см. чат) — только когда явно
-    # выбран этот режим, чтобы случайно введенный текст в поле (если бы оно
-    # было видно всегда) не превращал общую инвентаризацию в ячеечную.
-    if request.form.get("mode") == "cell":
+    mode = request.form.get("mode")
+    # Выборочная инвентаризация по ячейке или по ряду целиком (см. чат —
+    # ряд без ячеек, для помещений, где ячейки завести нельзя) — только
+    # когда явно выбран режим, чтобы случайно введенный текст в поле (если
+    # бы оно было видно всегда) не превращал общую инвентаризацию в
+    # выборочную.
+    if mode == "cell":
         if not cell_code:
             flash("Укажите код ячейки для выборочной инвентаризации", "danger")
             return redirect(url_for("inventory.new_document"))
@@ -185,17 +210,28 @@ def new_document():
         if not cell:
             flash(f"Ячейка «{cell_code}» не найдена на выбранном складе", "danger")
             return redirect(url_for("inventory.new_document"))
+    elif mode == "zone":
+        if not cell_code:
+            flash("Укажите код ряда для выборочной инвентаризации", "danger")
+            return redirect(url_for("inventory.new_document"))
+        zone = Zone.query.filter_by(warehouse_id=warehouse_id, code=cell_code).first()
+        if not zone:
+            flash(f"Ряд «{cell_code}» не найден на выбранном складе", "danger")
+            return redirect(url_for("inventory.new_document"))
 
     doc = InventoryDocument(
         number=next_number("inventory"),
         warehouse_id=warehouse_id,
         cell_id=cell.id if cell else None,
+        zone_id=zone.id if zone else None,
         created_by_id=current_user.id,
     )
     db.session.add(doc)
     db.session.commit()
     if cell:
         flash(f"Лист инвентаризации {doc.number} создан для ячейки {cell.code} — сканируйте короба", "success")
+    elif zone:
+        flash(f"Лист инвентаризации {doc.number} создан для ряда {zone.code} — сканируйте короба", "success")
     else:
         flash(f"Лист инвентаризации {doc.number} создан — сканируйте короба", "success")
     return redirect(url_for("inventory.detail", doc_id=doc.id))
@@ -211,9 +247,12 @@ def detail(doc_id):
     # что реально насчитали в этом документе — по объединению обоих
     # списков товаров, чтобы не пропустить ни то, что есть на складе, но не
     # попало в подсчет, ни то, что посчитали, а на складе по учету нет.
-    stock_by_item = (
-        _cell_stock_by_nomenclature(doc.cell_id) if doc.cell_id else _warehouse_stock_by_nomenclature(doc.warehouse_id)
-    )
+    if doc.cell_id:
+        stock_by_item = _cell_stock_by_nomenclature(doc.cell_id)
+    elif doc.zone_id:
+        stock_by_item = _zone_stock_by_nomenclature(doc.zone_id)
+    else:
+        stock_by_item = _warehouse_stock_by_nomenclature(doc.warehouse_id)
     counted_by_item = {line.nomenclature_id: line.qty for line in lines}
     nomenclature_ids = set(stock_by_item) | set(counted_by_item)
     nomenclatures = (
@@ -236,7 +275,7 @@ def detail(doc_id):
 
     empty_box = None
     empty_box_id = request.args.get("empty_box", type=int)
-    if empty_box_id and doc.cell_id:
+    if empty_box_id and (doc.cell_id or doc.zone_id):
         empty_box = Box.query.filter_by(
             id=empty_box_id, warehouse_id=doc.warehouse_id
         ).first()
@@ -272,17 +311,23 @@ def add_box(doc_id):
         flash(f"Короб {box.box_number} уже учтен в этом листе", "danger")
         return redirect(url_for("inventory.detail", doc_id=doc.id))
 
-    if doc.cell_id and box.items.count() == 0:
+    if (doc.cell_id or doc.zone_id) and box.items.count() == 0:
         flash(f"Короб {box.box_number} пуст. Можно сразу принять товар в него.", "warning")
         return redirect(url_for("inventory.detail", doc_id=doc.id, empty_box=box.id))
 
     moved_from = None
-    if doc.cell_id:
-        # Выборочная инвентаризация ячейки — сканирование короба сразу же и
-        # есть его фактическое размещение в эту ячейку (см. чат), без
-        # отдельного подтверждения, даже если короб был в другой ячейке.
-        moved_from = box.cell.code if box.cell_id and box.cell_id != doc.cell_id else None
-        error = _place_box(box, doc.cell.code, doc.warehouse_id)
+    if doc.cell_id or doc.zone_id:
+        # Выборочная инвентаризация ячейки/ряда — сканирование короба сразу
+        # же и есть его фактическое размещение туда (см. чат — ряд без
+        # ячеек), без отдельного подтверждения, даже если короб был в
+        # другом месте. _place_box сам разбирает, ячейка это или ряд.
+        already_here = (doc.cell_id and box.cell_id == doc.cell_id) or (
+            doc.zone_id and box.zone_id == doc.zone_id
+        )
+        if box.is_placed() and not already_here:
+            moved_from = f"ячейки {box.cell.code}" if box.cell_id else f"ряда {box.zone.code}"
+        target_code = doc.cell.code if doc.cell_id else doc.zone.code
+        error = _place_box(box, target_code, doc.warehouse_id)
         if error:
             flash(error, "danger")
             return redirect(url_for("inventory.detail", doc_id=doc.id))
@@ -304,8 +349,8 @@ def add_box(doc_id):
     box.mark_scanned(current_user)
     db.session.commit()
 
-    move_note = f" (перемещен из ячейки {moved_from})" if moved_from else (
-        f" (размещен в ячейке {doc.cell.code})" if doc.cell_id and not moved_from and box.cell_id else ""
+    move_note = f" (перемещен из {moved_from})" if moved_from else (
+        f" (размещен в {box.location_label()})" if (doc.cell_id or doc.zone_id) and not moved_from else ""
     )
     if items:
         flash(f"Короб {box.box_number} учтен{move_note}: {len(items)} позиция(й)", "success")
@@ -318,7 +363,7 @@ def add_box(doc_id):
 def receive_into_empty_box(doc_id, box_id):
     doc = InventoryDocument.query.get_or_404(doc_id)
     box = Box.query.filter_by(id=box_id, warehouse_id=doc.warehouse_id).first_or_404()
-    if doc.status != "draft" or not doc.cell_id or box.items.count() != 0:
+    if doc.status != "draft" or not (doc.cell_id or doc.zone_id) or box.items.count() != 0:
         flash("Короб уже заполнен либо инвентаризация завершена", "danger")
         return redirect(url_for("inventory.detail", doc_id=doc.id))
     receiving = ReceivingDocument(

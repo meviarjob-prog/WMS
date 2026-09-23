@@ -25,12 +25,16 @@
     <div class="card p-3">
       <h5>В коробах</h5>
       <table class="table table-sm table-mobile-compact">
-        <thead><tr><th>Склад</th><th>Ячейка</th><th>Короб</th><th>Кол-во</th></tr></thead>
+        <thead><tr><th>Склад</th><th>Ячейка/Ряд</th><th>Короб</th><th>Кол-во</th></tr></thead>
         <tbody>
         {% for bi in box_rows %}
           <tr>
             <td>{{ bi.box.warehouse.name }}</td>
-            <td>{% if bi.box.cell %}{{ bi.box.cell.code }}{% else %}<span class="text-muted">не расставлен</span>{% endif %}</td>
+            <td>
+              {% if bi.box.cell %}{{ bi.box.cell.code }}
+              {% elif bi.box.zone %}ряд {{ bi.box.zone.code }}
+              {% else %}<span class="text-muted">не расставлен</span>{% endif %}
+            </td>
             <td><a href="{{ url_for('boxes.detail', box_id=bi.box.id) }}">{{ bi.box.box_number }}</a></td>
             <td>{{ bi.qty | round(0) }} {{ item.unit }}</td>
           </tr>

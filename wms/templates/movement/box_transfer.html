@@ -18,7 +18,7 @@
 {% if source_box %}
 <div class="card p-3">
   <h5>{{ source_box.box_number }}</h5>
-  <div class="text-muted small mb-3">Склад: {{ source_box.warehouse.name }}{% if source_box.cell %} · Ячейка: {{ source_box.cell.code }}{% endif %}</div>
+  <div class="text-muted small mb-3">Склад: {{ source_box.warehouse.name }}{% if source_box.cell %} · Ячейка: {{ source_box.cell.code }}{% elif source_box.zone %} · Ряд: {{ source_box.zone.code }}{% endif %}</div>
   <table class="table table-sm align-middle">
     <thead><tr><th>Товар</th><th>В коробе</th><th>Короб-получатель</th><th>Перенести</th><th></th></tr></thead>
     <tbody>

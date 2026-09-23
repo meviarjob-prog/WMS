@@ -79,6 +79,8 @@ def box_by_number(box_number):
             "warehouse_id": box.warehouse_id,
             "cell": box.cell.code if box.cell else None,
             "cell_id": box.cell_id,
+            "zone": box.zone.code if box.zone else None,
+            "zone_id": box.zone_id,
             "total_qty": box.total_qty(),
         }
     )

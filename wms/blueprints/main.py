@@ -26,7 +26,7 @@ def index():
         .filter(UnplacedStock.qty > 0)
         .scalar()
         or 0,
-        "open_boxes": Box.query.filter_by(cell_id=None).count(),
+        "open_boxes": Box.query.filter_by(cell_id=None, zone_id=None).count(),
     }
     recent_receiving = (
         ReceivingDocument.query.order_by(ReceivingDocument.created_at.desc()).limit(5).all()

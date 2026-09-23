@@ -5,7 +5,7 @@
 только в пределах склада, поэтому склад выбирается явно."""
 
 from wms.extensions import db
-from wms.models import Box, BoxItem, Cell, Nomenclature, Warehouse
+from wms.models import Box, BoxItem, Cell, Nomenclature, Warehouse, Zone
 
 
 def _make_warehouse(suffix):
@@ -51,13 +51,15 @@ def test_warehouse_selected_shows_cell_input(db, client_logged_in):
 
 
 def test_unknown_cell_code_shows_not_found(db, client_logged_in):
+    """Код может оказаться ни ячейкой, ни рядом (см. чат — ряд без ячеек) —
+    сообщение теперь охватывает оба варианта."""
     warehouse = _make_warehouse("3")
 
     html = client_logged_in.get(
         f"/placement/scan-cell?warehouse_id={warehouse.id}&cell_code=NOPE"
     ).get_data(as_text=True)
 
-    assert "не найдена" in html
+    assert "не найдены" in html
 
 
 def test_valid_cell_shows_box_scan_form_and_existing_boxes(db, client_logged_in):
@@ -150,3 +152,49 @@ def test_add_unknown_box_is_rejected(db, client_logged_in):
     )
 
     assert "не найден" in resp.get_data(as_text=True)
+
+
+def test_scan_cell_code_matching_a_row_shows_row_screen(db, client_logged_in):
+    """Помещения без возможности завести ячейки (см. чат) — если введенный
+    код совпадает не с ячейкой, а с рядом, экран переключается на ряд."""
+    warehouse = _make_warehouse("9")
+    item = _make_item("9")
+    zone = Zone(warehouse_id=warehouse.id, code="ROW-A")
+    db.session.add(zone)
+    db.session.commit()
+    existing_box = _make_box(warehouse, item, "BOX-SCANCELL-9A", qty=1)
+    existing_box.zone_id = zone.id
+    existing_box.status = "stored"
+    db.session.commit()
+
+    html = client_logged_in.get(
+        f"/placement/scan-cell?warehouse_id={warehouse.id}&cell_code=ROW-A"
+    ).get_data(as_text=True)
+
+    assert "Ряд ROW-A" in html
+    assert "без ограничения по вместимости" in html
+    assert existing_box.box_number in html
+    assert 'name="box_number"' in html
+
+
+def test_add_box_with_row_code_places_it_directly_in_the_row(db, client_logged_in):
+    warehouse = _make_warehouse("10")
+    item = _make_item("10")
+    zone = Zone(warehouse_id=warehouse.id, code="ROW-B")
+    db.session.add(zone)
+    db.session.commit()
+    box = _make_box(warehouse, item, "BOX-SCANCELL-10", qty=2)
+
+    resp = client_logged_in.post(
+        "/placement/scan-cell/add-box",
+        data={"warehouse_id": warehouse.id, "cell_code": "ROW-B", "box_number": box.box_number},
+        follow_redirects=True,
+    )
+
+    assert resp.status_code == 200
+    placed = Box.query.get(box.id)
+    assert placed.cell_id is None
+    assert placed.zone_id == zone.id
+    assert placed.status == "stored"
+    html = resp.get_data(as_text=True)
+    assert "ряду ROW-B" in html

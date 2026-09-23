@@ -71,12 +71,12 @@
             <td>
               <a href="{{ url_for('boxes.detail', box_id=box.id) }}">{{ box.box_number }}</a>
               <div class="small text-muted d-md-none">
-                {{ box.warehouse.name if box.warehouse else '' }} · {{ 'В ячейке' if box.cell_id else 'Открыт' }}
+                {{ box.warehouse.name if box.warehouse else '' }} · {{ 'Расставлен' if box.cell_id or box.zone_id else 'Открыт' }}
                 {% if item_count == 0 %}· <span class="badge bg-warning text-dark">Пусто</span>{% else %}· {{ item_count }} поз.{% endif %}
               </div>
             </td>
             <td class="d-none d-md-table-cell">{{ box.warehouse.name if box.warehouse else '' }}</td>
-            <td class="d-none d-md-table-cell">{{ 'В ячейке' if box.cell_id else 'Открыт' }}</td>
+            <td class="d-none d-md-table-cell">{{ 'Расставлен' if box.cell_id or box.zone_id else 'Открыт' }}</td>
             <td class="d-none d-md-table-cell">
               {% if item_count == 0 %}
                 <span class="badge bg-warning text-dark" title="Ничего не отсканировано в этот короб — возможно, пропущен">Пусто</span>

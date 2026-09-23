@@ -2,14 +2,16 @@
 {% block title %}Короб {{ box.box_number }}{% endblock %}
 {% block content %}
 <h3 class="mb-1">Короб {{ box.box_number }}
-  <span class="badge badge-status-{{ box.status }}">{{ 'В ячейке' if box.status == 'stored' else 'Открыт' }}</span>
+  <span class="badge badge-status-{{ box.status }}">{{ 'Расставлен' if box.status == 'stored' else 'Открыт' }}</span>
 </h3>
 <div class="text-muted mb-4">
   Склад: {{ box.warehouse.name if box.warehouse else '—' }}
   {% if box.cell %}
     · Ячейка: <a href="{{ url_for('warehouses.cell_detail', cell_id=box.cell.id) }}">{{ box.cell.code }}</a>
+  {% elif box.zone %}
+    · Ряд: {{ box.zone.code }} (без ячейки)
   {% else %}
-    · без ячейки
+    · не расставлен
   {% endif %}
   {% if box.last_scanned_at %}
     · Последнее сканирование: {{ (box.last_scanned_at|msk).strftime('%d.%m.%Y %H:%M') }}{% if box.last_scanned_by %} ({{ box.last_scanned_by.display_name() }}){% endif %}
