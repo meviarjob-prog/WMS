@@ -116,6 +116,26 @@
   {% endif %}
 </div>
 
+<div class="card p-3 mb-3">
+  <!-- Поиск идет по запросу к БД (см. movement._apply_movement_search), а
+       не JS-фильтром по уже загруженным строкам — находит совпадение по
+       ВСЕМ перемещениям, а не только на текущей странице (см. чат). -->
+  <form method="get" action="{{ url_for('movement.list_documents') }}" class="d-flex flex-wrap gap-2">
+    <input type="text" name="q" class="form-control" style="max-width:360px"
+           placeholder="Поиск: номер, короб, склад, автор, № заявки на МП"
+           value="{{ request.args.get('q', '') }}">
+    <select name="mp_request" class="form-select" style="max-width:200px">
+      <option value="">Заявка на МП: все</option>
+      <option value="yes" {% if request.args.get('mp_request') == 'yes' %}selected{% endif %}>Есть заявка</option>
+      <option value="no" {% if request.args.get('mp_request') == 'no' %}selected{% endif %}>Нет заявки</option>
+    </select>
+    <button type="submit" class="btn btn-primary">Найти</button>
+    {% if request.args.get('q') or request.args.get('mp_request') %}
+      <a class="btn btn-outline-secondary" href="{{ url_for('movement.list_documents') }}">Сбросить</a>
+    {% endif %}
+  </form>
+</div>
+
 <div class="card p-3 movement-list-card">
   <!-- Массовый выбор/печать и полная таблица со всеми колонками — только
        на широком экране; на телефоне вместо этого компактный список ниже
@@ -148,34 +168,6 @@
     <table class="table">
       <thead>
         <tr><th></th><th>Номер</th><th>Дата</th><th>Откуда</th><th>Куда</th><th>Коробов</th><th>Кол-во товара</th><th>Автор</th><th>Статус</th><th>Приемка</th><th class="text-center">1С</th><th class="text-center">Заявка на МП</th><th>№ заявки на МП</th>{% if current_user.is_admin %}<th class="text-center">Отгружено</th>{% endif %}<th></th></tr>
-        <!-- Фильтр по каждой колонке — текстовое поле, ищет по подстроке в
-             видимом тексте ячейки (см. applyColumnFilters в scripts ниже).
-             "Заявка на МП" — выпадающий список (Да/Нет), т.к. там всего два
-             осмысленных значения; остальные чекбоксы/иконки/колонка действий
-             текстом не фильтруются — там нечего искать подстрокой. -->
-        <tr class="table-filter-row">
-          <th></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="1" placeholder="Фильтр"></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="2" placeholder="Фильтр"></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="3" placeholder="Фильтр"></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="4" placeholder="Фильтр"></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="5" placeholder="Фильтр"></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="6" placeholder="Фильтр"></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="7" placeholder="Фильтр"></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="8" placeholder="Фильтр"></th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="9" placeholder="Фильтр"></th>
-          <th></th>
-          <th>
-            <select class="form-select form-select-sm col-filter" data-col="11">
-              <option value="">Все</option>
-              <option value="✔">Есть заявка</option>
-              <option value="☐">Нет заявки</option>
-            </select>
-          </th>
-          <th><input type="text" class="form-control form-control-sm col-filter" data-col="12" placeholder="Фильтр"></th>
-          {% if current_user.is_admin %}<th></th>{% endif %}
-          <th></th>
-        </tr>
       </thead>
       <tbody>
       {% for d in documents %}
@@ -332,22 +324,25 @@
   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3">
     <div class="text-muted small">Страница {{ pagination.page }} из {{ pagination.pages }} · всего перемещений: {{ pagination.total }}</div>
     <div class="d-flex gap-2">
+      {% set search_args = {} %}
+      {% if request.args.get("q") %}{% set _ = search_args.update({"q": request.args.get("q")}) %}{% endif %}
+      {% if request.args.get("mp_request") %}{% set _ = search_args.update({"mp_request": request.args.get("mp_request")}) %}{% endif %}
       {% if pagination.has_prev %}
         {% if request.endpoint == 'movement.route_box' %}
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.route_box', page=pagination.prev_num, box_number=route_box_number) }}">&larr; Назад</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.route_box', page=pagination.prev_num, box_number=route_box_number, **search_args) }}">&larr; Назад</a>
         {% elif request.endpoint == 'movement.find_box' %}
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.find_box', page=pagination.prev_num, box_number=find_box_number) }}">&larr; Назад</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.find_box', page=pagination.prev_num, box_number=find_box_number, **search_args) }}">&larr; Назад</a>
         {% else %}
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.list_documents', page=pagination.prev_num) }}">&larr; Назад</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.list_documents', page=pagination.prev_num, **search_args) }}">&larr; Назад</a>
         {% endif %}
       {% endif %}
       {% if pagination.has_next %}
         {% if request.endpoint == 'movement.route_box' %}
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.route_box', page=pagination.next_num, box_number=route_box_number) }}">Вперед &rarr;</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.route_box', page=pagination.next_num, box_number=route_box_number, **search_args) }}">Вперед &rarr;</a>
         {% elif request.endpoint == 'movement.find_box' %}
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.find_box', page=pagination.next_num, box_number=find_box_number) }}">Вперед &rarr;</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.find_box', page=pagination.next_num, box_number=find_box_number, **search_args) }}">Вперед &rarr;</a>
         {% else %}
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.list_documents', page=pagination.next_num) }}">Вперед &rarr;</a>
+          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('movement.list_documents', page=pagination.next_num, **search_args) }}">Вперед &rarr;</a>
         {% endif %}
       {% endif %}
     </div>
@@ -435,32 +430,6 @@
         })
         .finally(() => { btn.disabled = false; });
     });
-  });
-
-  // Фильтр по каждой колонке таблицы — текстовое поле под заголовком,
-  // ищет по подстроке (без учета регистра) в видимом тексте ячейки той же
-  // позиции в каждой строке; строка видна, только если совпали ВСЕ
-  // заполненные фильтры сразу (а не хотя бы один).
-  const colFilters = Array.from(document.querySelectorAll(".col-filter"));
-  const filterableRows = () =>
-    Array.from(document.querySelectorAll("#waybillsForm table.table > tbody > tr"));
-
-  function applyColumnFilters() {
-    const active = colFilters
-      .map((input) => ({ col: parseInt(input.dataset.col, 10), value: input.value.trim().toLowerCase() }))
-      .filter((f) => f.value !== "");
-    filterableRows().forEach((row) => {
-      const visible = active.every((f) => {
-        const cell = row.children[f.col];
-        return cell && cell.textContent.toLowerCase().includes(f.value);
-      });
-      row.style.display = visible ? "" : "none";
-    });
-  }
-
-  colFilters.forEach((input) => {
-    input.addEventListener("input", applyColumnFilters);
-    input.addEventListener("change", applyColumnFilters);
   });
 
 </script>

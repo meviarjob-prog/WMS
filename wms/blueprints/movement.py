@@ -16,6 +16,7 @@ from ..models import (
     MovementReceiptDiscrepancy,
     Nomenclature,
     ShipmentPlanLine,
+    User,
     Warehouse,
     UnplacedStock,
 )
@@ -27,7 +28,7 @@ from ..utils.timezone import to_moscow
 from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
-MOVEMENTS_PAGE_SIZE = 50
+MOVEMENTS_PAGE_SIZE = 200
 
 
 def _can_view_movement_document(doc):
@@ -136,11 +137,44 @@ def _visible_movement_query():
     )
 
 
+def _apply_movement_search(query):
+    """Фильтрует запрос ДО пагинации — поиск идет по всем перемещениям, а
+    не только по тем, что попали на текущую страницу (см. чат: раньше
+    поле поиска было чисто клиентским JS-фильтром по уже загруженным 50
+    строкам — на следующих страницах ничего не находило)."""
+    q = request.args.get("q", "").strip()
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                MovementDocument.number.ilike(like),
+                MovementDocument.marketplace_request_number.ilike(like),
+                MovementDocument.from_warehouse.has(Warehouse.name.ilike(like)),
+                MovementDocument.to_warehouse.has(Warehouse.name.ilike(like)),
+                MovementDocument.created_by.has(
+                    or_(User.username.ilike(like), User.full_name.ilike(like))
+                ),
+                MovementDocument.lines.any(
+                    MovementLine.box.has(Box.box_number.ilike(like))
+                ),
+            )
+        )
+    mp_request = request.args.get("mp_request", "").strip()
+    if mp_request == "yes":
+        query = query.filter(MovementDocument.marketplace_request_created_at.isnot(None))
+    elif mp_request == "no":
+        query = query.filter(MovementDocument.marketplace_request_created_at.is_(None))
+    return query
+
+
 def _movement_pagination():
-    """Последние перемещения постранично, по 50 документов."""
+    """Последние перемещения постранично, по MOVEMENTS_PAGE_SIZE документов —
+    поиск (см. _apply_movement_search) применяется к запросу до пагинации,
+    поэтому находит совпадения по всей истории, а не только на странице."""
     page = max(request.args.get("page", 1, type=int), 1)
+    query = _apply_movement_search(_visible_movement_query())
     return (
-        _visible_movement_query()
+        query
         .order_by(MovementDocument.created_at.desc(), MovementDocument.id.desc())
         .paginate(page=page, per_page=MOVEMENTS_PAGE_SIZE, error_out=False)
     )

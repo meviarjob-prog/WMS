@@ -102,11 +102,14 @@ def test_list_page_shows_status_chips(db, client_logged_in):
     assert "status-chip-onassembly status-chip-reached" in html
 
 
-def test_list_page_has_per_column_text_filters(db, client_logged_in):
+def test_list_page_has_search_field(db, client_logged_in):
+    """Поиск по всем перемещениям (не только по текущей странице, см. чат
+    и test_movement_pagination.py) — одно поле ввода + фильтр по заявке на
+    МП, запрос идет к БД."""
     sender, dest = _make_warehouses("6")
     _make_doc_with_box(sender, dest, "MCHIP-0006", "BOX-MCHIP6")
 
     html = client_logged_in.get("/movement/").get_data(as_text=True)
 
-    assert "col-filter" in html
-    assert 'data-col="1"' in html
+    assert 'name="q"' in html
+    assert 'name="mp_request"' in html
