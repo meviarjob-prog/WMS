@@ -19,22 +19,26 @@
       <th>Маркетплейс</th>
       <th>Текущий этап</th>
       <th>Дней на этапе</th>
+      <th>Переделок</th>
+      <th>Дедлайн партии</th>
       <th>Статус из таблицы</th>
       <th>Обновлено</th>
     </tr>
   </thead>
   <tbody>
     {% for row in rows %}
-    <tr>
+    <tr class="{{ 'table-danger' if row.order.current_stage == 'sample_cancelled' else '' }}">
       <td class="fw-semibold">{{ row.order.order_number }}</td>
       <td>{{ row.order.marketplace or "—" }}</td>
       <td>{{ row.stage_label }}</td>
       <td>{{ row.days_in_stage if row.days_in_stage is not none else "—" }}</td>
+      <td>{{ row.order.rework_count if row.order.rework_count else "—" }}</td>
+      <td>{{ row.order.deadline_date.strftime('%d.%m.%Y') if row.order.deadline_date else "—" }}</td>
       <td class="text-muted small">{{ row.order.raw_status or "—" }}</td>
       <td class="text-muted small">{{ (row.order.last_synced_at|msk).strftime('%d.%m.%Y %H:%M') if row.order.last_synced_at else "—" }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="6" class="text-muted">Заказов пока нет — подключите таблицу и синхронизируйте.</td></tr>
+    <tr><td colspan="8" class="text-muted">Заказов пока нет — подключите таблицу и синхронизируйте.</td></tr>
     {% endfor %}
   </tbody>
 </table>

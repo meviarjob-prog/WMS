@@ -271,28 +271,36 @@ def dashboard():
         if production_orders_synced
         else {}
     )
-    sample_stage_qty = production_stage_counts.get(
-        "sample_sewing", 0
-    ) + production_stage_counts.get("sample_approval", 0)
+    search_and_sewing_qty = production_stage_counts.get(
+        "workshop_search", 0
+    ) + production_stage_counts.get("sample_sewing", 0)
+    approval_and_card_qty = (
+        production_stage_counts.get("sample_approved", 0)
+        + production_stage_counts.get("photo_requested", 0)
+        + production_stage_counts.get("mp_card_created", 0)
+    )
+    entering_1c_qty = production_stage_counts.get("data_in_1c", 0) + production_stage_counts.get(
+        "order_in_1c", 0
+    )
 
     process_steps = [
         {
-            "name": "Размещение заказа",
+            "name": "Поиск цеха / отшив образца",
             "source": "Google Таблицы",
             "state": "ok" if production_orders_synced else "source",
-            "value": production_stage_counts.get("order_placed", 0) if production_orders_synced else None,
+            "value": search_and_sewing_qty if production_orders_synced else None,
         },
         {
-            "name": "Поиск цеха",
+            "name": "Согласование / фото / карточка МП",
             "source": "Google Таблицы",
             "state": "ok" if production_orders_synced else "source",
-            "value": production_stage_counts.get("workshop_search", 0) if production_orders_synced else None,
+            "value": approval_and_card_qty if production_orders_synced else None,
         },
         {
-            "name": "Образец и согласование",
+            "name": "Занесение в 1С",
             "source": "Google Таблицы",
             "state": "ok" if production_orders_synced else "source",
-            "value": sample_stage_qty if production_orders_synced else None,
+            "value": entering_1c_qty if production_orders_synced else None,
         },
         {"name": "Отшив партии", "source": "WMS / Google", "state": "ok" if produced_qty else "quiet", "value": produced_qty},
         {"name": "Приёмка", "source": "WMS", "state": "risk" if active_receiving else "ok", "value": len(active_receiving)},

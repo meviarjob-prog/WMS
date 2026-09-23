@@ -111,10 +111,11 @@ def test_process_flow_shows_production_stage_awaiting_connection_before_sync(cli
 def test_process_flow_uses_real_production_order_counts_after_sync(db, client_logged_in):
     db.session.add_all(
         [
-            ProductionOrder(order_number="ЗК-MGMT-1", current_stage="order_placed"),
-            ProductionOrder(order_number="ЗК-MGMT-2", current_stage="workshop_search"),
-            ProductionOrder(order_number="ЗК-MGMT-3", current_stage="sample_sewing"),
-            ProductionOrder(order_number="ЗК-MGMT-4", current_stage="sample_approval"),
+            ProductionOrder(order_number="ЗК-MGMT-1", current_stage="workshop_search"),
+            ProductionOrder(order_number="ЗК-MGMT-2", current_stage="sample_sewing"),
+            ProductionOrder(order_number="ЗК-MGMT-3", current_stage="sample_approved"),
+            ProductionOrder(order_number="ЗК-MGMT-4", current_stage="photo_requested"),
+            ProductionOrder(order_number="ЗК-MGMT-5", current_stage="mp_card_created"),
         ]
     )
     db.session.commit()
@@ -122,8 +123,10 @@ def test_process_flow_uses_real_production_order_counts_after_sync(db, client_lo
     html = client_logged_in.get("/management/").get_data(as_text=True)
 
     assert "ожидает подключение" not in html
-    # "Образец и согласование" объединяет sample_sewing и sample_approval — 2 заказа.
+    # "Поиск цеха / отшив образца" — workshop_search + sample_sewing = 2.
     assert '<div class="process-value">2</div>' in html
+    # "Согласование / фото / карточка МП" — sample_approved + photo_requested + mp_card_created = 3.
+    assert '<div class="process-value">3</div>' in html
 
 
 def test_hidden_while_in_progress_redirects_away(client_logged_in, monkeypatch):

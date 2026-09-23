@@ -1,9 +1,10 @@
-"""Заказы на производство — этапы до прихода на склад (заказ -> поиск
-цеха -> отшив образца -> согласование образца -> отшив партии), см. чат
-(панель руководителя). Данные ведет менеджер в отдельной Google-таблице;
-WMS синхронизирует их так же, как план отгрузок (см. shipment_plan.py) —
-кнопкой из Apps Script, встроенной прямо в таблицу, никакого отдельного
-логина/пароля."""
+"""Заказы на производство — этапы до прихода на склад (поиск поставщика/
+цеха -> отшив образца -> согласование/отмена/переделка -> запрос фото ->
+карточка на МП -> данные в 1С -> заказ в 1С -> [дедлайн партии] -> обычный
+процесс WMS), см. чат (панель руководителя, уточненная схема). Данные
+ведет менеджер в отдельной Google-таблице; WMS синхронизирует их так же,
+как план отгрузок (см. shipment_plan.py) — кнопкой из Apps Script,
+встроенной прямо в таблицу, никакого отдельного логина/пароля."""
 
 import hmac
 import secrets
@@ -13,14 +14,21 @@ from flask import Blueprint, current_app, flash, jsonify, redirect, render_templ
 from flask_login import current_user
 
 from ..extensions import db
-from ..models import AppSetting, PRODUCTION_ORDER_STAGE_KEYS, PRODUCTION_ORDER_STAGE_LABELS, ProductionOrder
+from ..models import (
+    AppSetting,
+    PRODUCTION_ORDER_STAGE_CANCELLED,
+    PRODUCTION_ORDER_STAGE_KEYS,
+    PRODUCTION_ORDER_STAGE_LABELS,
+    ProductionOrder,
+)
 from ..utils.google_sheets import (
     google_sheets_configured,
     list_sheet_titles,
     read_sheet_tables,
     resolve_sheet_title,
 )
-from ..utils.production_orders_import import map_columns, match_stage
+from ..utils.production_orders_import import classify_status, map_columns
+from ..utils.shipment_plan_import import extract_period_start
 
 bp = Blueprint("production_orders", __name__)
 
@@ -142,12 +150,20 @@ def _cell_datetime(row, column):
     return None
 
 
+def _cell_date(row, column):
+    value = _cell_datetime(row, column)
+    return value.date() if value else None
+
+
 def _advance_stage(order, stage, now):
     """Проставляет отметку времени этому и всем более ранним этапам, у
     которых ее еще нет (см. ProductionOrder — при первой синхронизации
     заказа, уже находящегося не на первом этапе, более ранние этапы
     задним числом не восстановить, поэтому им честно ставится тот же
-    момент — "мы увидели заказ здесь", а не придуманная дата)."""
+    момент — "мы увидели заказ здесь", а не придуманная дата). Уже
+    проставленные даты не трогает — в т.ч. после переделки, когда заказ
+    возвращается на "sample_sewing" и потом снова доходит до более
+    позднего этапа: время первого прохождения этапа остается как было."""
     stage_index = PRODUCTION_ORDER_STAGE_KEYS.index(stage)
     for key in PRODUCTION_ORDER_STAGE_KEYS[: stage_index + 1]:
         if order.stage_timestamp(key) is None:
@@ -155,16 +171,21 @@ def _advance_stage(order, stage, now):
     order.current_stage = stage
 
 
-def _sync_sheet_rows(headers, rows, now):
+def _sync_sheet_rows(headers, rows, now, sheet_anchor_date=None):
     """Разбирает строки ОДНОГО листа и заводит/обновляет ProductionOrder —
     общая логика для режима "один лист по gid" и "все листы таблицы" (см.
-    sync_production_orders). Возвращает (columns, created, updated, skipped,
-    unmatched_statuses) для диагностики."""
+    sync_production_orders). sheet_anchor_date — дата из НАЗВАНИЯ листа
+    (см. чат), точка отсчета первого этапа ("Поиск поставщика/цеха"), а не
+    отдельный статус в таблице. Возвращает (columns, created, updated,
+    skipped, unmatched_statuses, cancelled, reworked) для диагностики."""
     columns = map_columns(headers)
     created = 0
     updated = 0
     skipped = 0
+    cancelled = 0
+    reworked = 0
     unmatched_statuses = []
+    anchor_dt = datetime.combine(sheet_anchor_date, datetime.min.time()) if sheet_anchor_date else None
 
     for row in rows:
         order_number = _cell_text(row, columns["order_number"])
@@ -187,31 +208,58 @@ def _sync_sheet_rows(headers, rows, now):
         raw_status = _cell_text(row, columns["status"])
         order.raw_status = raw_status
 
+        if anchor_dt is not None and order.workshop_search_started_at is None:
+            order.workshop_search_started_at = anchor_dt
+
         for stage_key, date_col in columns["stage_dates"].items():
             value = _cell_datetime(row, date_col)
             if value is not None and order.stage_timestamp(stage_key) is None:
                 order.set_stage_timestamp(stage_key, value)
 
-        stage = match_stage(raw_status)
-        if stage is None:
+        deadline_col = columns.get("deadline")
+        if deadline_col:
+            deadline_value = _cell_date(row, deadline_col)
+            if deadline_value is not None:
+                # В отличие от дат этапов — дедлайн может сдвинуться
+                # менеджером, поэтому берем актуальное значение каждый раз,
+                # а не только если было пусто.
+                order.deadline_date = deadline_value
+
+        kind, stage = classify_status(raw_status)
+        if kind == "cancelled":
+            if order.sample_cancelled_at is None:
+                order.sample_cancelled_at = now
+            order.current_stage = PRODUCTION_ORDER_STAGE_CANCELLED
+            cancelled += 1
+        elif kind == "rework":
+            order.rework_count = (order.rework_count or 0) + 1
+            order.last_rework_at = now
+            if order.sample_sewing_started_at is None:
+                order.sample_sewing_started_at = now
+            order.current_stage = "sample_sewing"
+            reworked += 1
+        elif kind == "stage":
+            _advance_stage(order, stage, now)
+        else:
             if raw_status:
                 unmatched_statuses.append(raw_status)
-        else:
-            _advance_stage(order, stage, now)
 
         order.last_synced_at = now
 
-    return columns, created, updated, skipped, unmatched_statuses
+    return columns, created, updated, skipped, unmatched_statuses, cancelled, reworked
 
 
 def _build_diagnostics(sheet_reports):
-    """sheet_reports — список {title, headers, columns, rows_count, created,
-    updated, skipped, unmatched_statuses}, один элемент на прочитанный лист
-    (несколько — в режиме "все листы таблицы", см. sync_production_orders)."""
+    """sheet_reports — список {title, anchor_date, headers, columns,
+    rows_count, created, updated, skipped, unmatched_statuses, cancelled,
+    reworked}, один элемент на прочитанный лист (несколько — в режиме "все
+    листы таблицы", см. sync_production_orders)."""
     lines = []
     total_created = sum(r["created"] for r in sheet_reports)
     total_updated = sum(r["updated"] for r in sheet_reports)
     total_skipped = sum(r["skipped"] for r in sheet_reports)
+    total_cancelled = sum(r["cancelled"] for r in sheet_reports)
+    total_reworked = sum(r["reworked"] for r in sheet_reports)
     lines.append(
         f"Прочитано листов: {len(sheet_reports)} — "
         + ", ".join(f'"{r["title"]}"' for r in sheet_reports)
@@ -219,11 +267,16 @@ def _build_diagnostics(sheet_reports):
     lines.append(
         f"Всего строк обработано: {sum(r['rows_count'] for r in sheet_reports)} "
         f"(создано заказов {total_created}, обновлено {total_updated}, "
-        f"без номера заказа пропущено {total_skipped})"
+        f"без номера заказа пропущено {total_skipped}, отменено образцов "
+        f"{total_cancelled}, отправлено на переделку {total_reworked})"
     )
     for report in sheet_reports:
         columns = report["columns"]
         lines.append(f"--- Лист \"{report['title']}\" ---")
+        lines.append(
+            "Дата из названия листа (точка отсчета) -> "
+            + (report["anchor_date"].strftime("%d.%m.%Y") if report["anchor_date"] else "не найдена в названии листа")
+        )
         lines.append(f"Заголовки ({len(report['headers'])}): " + (", ".join(report["headers"]) or "не найдены"))
         lines.append(
             "№ заказа -> "
@@ -233,6 +286,10 @@ def _build_diagnostics(sheet_reports):
         lines.append(
             "Статус/этап -> "
             + (f'"{columns["status"]}"' if columns["status"] else "НЕ НАЙДЕНА — этап не будет определяться по статусу")
+        )
+        lines.append(
+            "Дедлайн -> "
+            + (f'"{columns["deadline"]}"' if columns.get("deadline") else "не найдена (необязательно)")
         )
         found_dates = [
             f"{PRODUCTION_ORDER_STAGE_LABELS[stage]} -> \"{col}\""
@@ -290,10 +347,19 @@ def sync_production_orders():
 
     for title in titles:
         headers, rows = tables.get(title, ([], []))
-        columns, created, updated, skipped, unmatched_statuses = _sync_sheet_rows(headers, rows, now)
+        # Точка отсчета первого этапа — дата из НАЗВАНИЯ листа (см. чат),
+        # тот же прием, что и для листов плана отгрузок (см.
+        # shipment_plan_import.extract_period_start — например "... от
+        # 27.08"). Год не указан в названии — берется текущий (см. саму
+        # функцию), поэтому вызывается без даты "today" — по умолчанию.
+        anchor_date = extract_period_start(title)
+        columns, created, updated, skipped, unmatched_statuses, cancelled, reworked = _sync_sheet_rows(
+            headers, rows, now, sheet_anchor_date=anchor_date
+        )
         sheet_reports.append(
             {
                 "title": title,
+                "anchor_date": anchor_date,
                 "headers": headers,
                 "columns": columns,
                 "rows_count": len(rows),
@@ -301,6 +367,8 @@ def sync_production_orders():
                 "updated": updated,
                 "skipped": skipped,
                 "unmatched_statuses": unmatched_statuses,
+                "cancelled": cancelled,
+                "reworked": reworked,
             }
         )
 
@@ -323,12 +391,20 @@ def list_orders():
     now = datetime.utcnow()
     rows = []
     for order in orders:
-        entered_at = order.stage_timestamp(order.current_stage) if order.current_stage else None
+        if order.current_stage == PRODUCTION_ORDER_STAGE_CANCELLED:
+            entered_at = order.sample_cancelled_at
+            stage_label = "Образец отменен"
+        elif order.current_stage:
+            entered_at = order.stage_timestamp(order.current_stage)
+            stage_label = PRODUCTION_ORDER_STAGE_LABELS.get(order.current_stage, order.raw_status or "—")
+        else:
+            entered_at = None
+            stage_label = order.raw_status or "—"
         days_in_stage = (now - entered_at).days if entered_at else None
         rows.append(
             {
                 "order": order,
-                "stage_label": PRODUCTION_ORDER_STAGE_LABELS.get(order.current_stage, order.raw_status or "—"),
+                "stage_label": stage_label,
                 "days_in_stage": days_in_stage,
             }
         )

@@ -1209,74 +1209,112 @@ class OzonArticleMapping(db.Model):
 
 # Этапы производства до прихода на склад (после — уже ведется в WMS сквозь
 # ReceivingDocument/PlacementDocument/MovementDocument) — см. панель
-# руководителя. Порядок важен: используется и для последовательного
-# "продвижения" этапа при синхронизации (см. production_orders.
-# _apply_stage_from_status), и для отображения воронки в нужном порядке.
+# руководителя и чат (уточненная схема). Порядок важен: используется и для
+# последовательного "продвижения" этапа при синхронизации (см.
+# production_orders._advance_stage), и для отображения воронки в нужном
+# порядке.
+#
+# Точка отсчета первого этапа — НЕ отдельный статус в таблице, а ДАТА ИЗ
+# НАЗВАНИЯ ЛИСТА (см. чат: "из таблицы берем дату из названия листа, это
+# точка отсчета для поиска производства" — тот же прием, что уже есть для
+# листов плана отгрузок, см. shipment_plan_import.extract_period_start),
+# поэтому отдельного "заказ размещен" этапа здесь нет.
+#
+# "Отмена" и "переделка" образца — НЕ отдельные этапы воронки, а
+# статус-модификаторы поверх "sample_sewing" (см. ProductionOrder.
+# sample_cancelled_at/rework_count): переделка продлевает время в этом же
+# этапе (просто возвращает current_stage на "sample_sewing", не трогая уже
+# проставленные даты), отмена — терминальное состояние, заказ выбывает из
+# расчета средних длительностей по живым заказам и считается отдельно.
 PRODUCTION_ORDER_STAGE_KEYS = [
-    "order_placed",
     "workshop_search",
     "sample_sewing",
-    "sample_approval",
-    "batch_sewing",
-    "batch_ready",
+    "sample_approved",
+    "photo_requested",
+    "mp_card_created",
+    "data_in_1c",
+    "order_in_1c",
 ]
 PRODUCTION_ORDER_STAGE_LABELS = {
-    "order_placed": "Заказ на продукцию",
-    "workshop_search": "Поиск цеха",
+    "workshop_search": "Поиск поставщика/цеха",
     "sample_sewing": "Отшив образца",
-    "sample_approval": "Согласование образца",
-    "batch_sewing": "Отшив партии",
-    "batch_ready": "Партия готова к отгрузке",
+    "sample_approved": "Образец согласован",
+    "photo_requested": "Запрос фото образца",
+    "mp_card_created": "Карточка на МП заведена",
+    "data_in_1c": "Данные занесены в 1С",
+    "order_in_1c": "Заказ внесен в 1С",
 }
+# Терминальное состояние — не часть линейной воронки выше (см. ProductionOrder.current_stage).
+PRODUCTION_ORDER_STAGE_CANCELLED = "sample_cancelled"
 
 
 class ProductionOrder(db.Model):
-    """Заказ на пошив продукции — этапы ДО прихода на склад: заказ, поиск
-    цеха, отшив образца, согласование образца, отшив партии (см. чат —
-    панель руководителя). Источник данных — внешняя Google-таблица, которую
-    ведет менеджер вручную (см. production_orders.py — синхронизация по
-    кнопке в самой таблице, по аналогии с планом отгрузок, см.
+    """Заказ на пошив продукции — этапы ДО прихода на склад: поиск
+    поставщика/цеха, отшив образца, согласование, запрос фото, карточка на
+    МП, данные и заказ в 1С (см. чат — панель руководителя). После внесения
+    заказа в 1С дальнейший ориентир — не статус из таблицы, а deadline_date
+    (дедлайн партии) — дальше уже идет обычный процесс WMS (приемка и
+    т.д., см. ReceivingDocument.order_number — сопоставляется с этим же
+    order_number). Источник данных — внешняя Google-таблица, которую ведет
+    менеджер вручную (см. production_orders.py — синхронизация по кнопке в
+    самой таблице, по аналогии с планом отгрузок, см.
     shipment_plan.google_button_setup).
 
-    Таблица обычно хранит только ТЕКУЩИЙ статус заказа, без истории — сама
-    WMS не может знать даты этапов, которые уже прошли ДО первой
-    синхронизации. Если в таблице есть отдельные колонки с датами этапов
-    (см. production_orders_import._STAGE_DATE_CANDIDATES), даты берутся из
-    них напрямую — это надежный случай. Если таких колонок нет, WMS
-    засчитывает дату этапа тем моментом, когда САМА впервые увидела эту
-    строку в этом статусе (при каждой синхронизации) — это лишь
-    приближение: если менеджер сменил статус за день до синхронизации (или
-    вообще ни разу не запускал ее раньше), фактическая длительность этапа
-    в отчете будет неточной. Чем чаще идет синхронизация, тем точнее."""
+    Таблица хранит только ТЕКУЩИЙ статус заказа, без истории — сама WMS не
+    может знать даты этапов, которые уже прошли ДО первой синхронизации.
+    Если в таблице есть отдельные колонки с датами этапов (см.
+    production_orders_import._STAGE_DATE_CANDIDATES), даты берутся из них
+    напрямую — это надежный случай. Если таких колонок нет, WMS засчитывает
+    дату этапа тем моментом, когда САМА впервые увидела эту строку в этом
+    статусе (при каждой синхронизации) — это лишь приближение: если
+    менеджер сменил статус за день до синхронизации (или вообще ни разу не
+    запускал ее раньше), фактическая длительность этапа в отчете будет
+    неточной. Чем чаще идет синхронизация, тем точнее."""
 
     __tablename__ = "production_orders"
 
     id = db.Column(db.Integer, primary_key=True)
     order_number = db.Column(db.String(50), unique=True, nullable=False, index=True)
     marketplace = db.Column(db.String(20), nullable=True)
-    # Текущий этап — один из PRODUCTION_ORDER_STAGE_KEYS, либо NULL, если
-    # текст статуса из таблицы не удалось сопоставить ни с одним из них
-    # (см. raw_status — тогда там видно, что именно не распозналось).
+    # Текущий этап — один из PRODUCTION_ORDER_STAGE_KEYS, либо
+    # PRODUCTION_ORDER_STAGE_CANCELLED, либо NULL, если текст статуса из
+    # таблицы не удалось сопоставить ни с одним из них (см. raw_status —
+    # тогда там видно, что именно не распозналось).
     current_stage = db.Column(db.String(30), nullable=True)
     raw_status = db.Column(db.String(200), nullable=True)
 
-    order_placed_at = db.Column(db.DateTime, nullable=True)
     workshop_search_started_at = db.Column(db.DateTime, nullable=True)
     sample_sewing_started_at = db.Column(db.DateTime, nullable=True)
-    sample_approval_started_at = db.Column(db.DateTime, nullable=True)
-    batch_sewing_started_at = db.Column(db.DateTime, nullable=True)
-    batch_ready_at = db.Column(db.DateTime, nullable=True)
+    sample_approved_at = db.Column(db.DateTime, nullable=True)
+    photo_requested_at = db.Column(db.DateTime, nullable=True)
+    mp_card_created_at = db.Column(db.DateTime, nullable=True)
+    data_in_1c_at = db.Column(db.DateTime, nullable=True)
+    order_in_1c_at = db.Column(db.DateTime, nullable=True)
+
+    # См. класс-докстринг и PRODUCTION_ORDER_STAGE_CANCELLED — не часть
+    # линейной воронки, статус-модификаторы поверх "Отшив образца".
+    sample_cancelled_at = db.Column(db.DateTime, nullable=True)
+    rework_count = db.Column(db.Integer, nullable=False, default=0)
+    last_rework_at = db.Column(db.DateTime, nullable=True)
+
+    # Дедлайн партии из таблицы (одна дата на заказ, см. чат) — ориентир
+    # ПОСЛЕ внесения заказа в 1С, когда дальше уже нет отдельных статусов
+    # этой таблицы, а идет обычный процесс WMS. Обновляется при каждой
+    # синхронизации (в отличие от дат этапов — дедлайн может сдвинуться
+    # менеджером, а не только устанавливаться один раз).
+    deadline_date = db.Column(db.Date, nullable=True)
 
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     last_synced_at = db.Column(db.DateTime, nullable=True)
 
     _STAGE_TIMESTAMP_COLUMNS = {
-        "order_placed": "order_placed_at",
         "workshop_search": "workshop_search_started_at",
         "sample_sewing": "sample_sewing_started_at",
-        "sample_approval": "sample_approval_started_at",
-        "batch_sewing": "batch_sewing_started_at",
-        "batch_ready": "batch_ready_at",
+        "sample_approved": "sample_approved_at",
+        "photo_requested": "photo_requested_at",
+        "mp_card_created": "mp_card_created_at",
+        "data_in_1c": "data_in_1c_at",
+        "order_in_1c": "order_in_1c_at",
     }
 
     def stage_timestamp(self, stage_key):

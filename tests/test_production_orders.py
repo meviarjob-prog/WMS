@@ -1,17 +1,17 @@
-"""Заказы на производство (см. чат — панель руководителя): этапы до
-прихода на склад, синхронизация из Google-таблицы менеджера по кнопке
-Apps Script (по аналогии с планом отгрузок — см. test_google_sheets_sync.py).
-Реальный вызов Google Sheets API не тестируется — вместо этого
-read_sheet_tables/resolve_sheet_title подменяются моком, как и в тестах
-плана отгрузок."""
+"""Заказы на производство (см. чат — панель руководителя, уточненная
+схема): этапы до прихода на склад, синхронизация из Google-таблицы
+менеджера по кнопке Apps Script (по аналогии с планом отгрузок — см.
+test_google_sheets_sync.py). Реальный вызов Google Sheets API не
+тестируется — вместо этого read_sheet_tables/resolve_sheet_title/
+list_sheet_titles подменяются моком, как и в тестах плана отгрузок."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
 from wms.extensions import db
 from wms.models import AppSetting, ProductionOrder, User
-from wms.utils.production_orders_import import map_columns, match_stage
+from wms.utils.production_orders_import import classify_status, map_columns
 
 
 @pytest.fixture(autouse=True)
@@ -33,27 +33,36 @@ def _login_as_worker(client, db):
         sess["_fresh"] = True
 
 
-def test_match_stage_recognizes_each_stage_by_keyword():
-    assert match_stage("Заказ размещен у поставщика") == "order_placed"
-    assert match_stage("Идет поиск цеха") == "workshop_search"
-    assert match_stage("Отшив образца") == "sample_sewing"
-    assert match_stage("Образец согласован") == "sample_approval"
-    assert match_stage("Отшив партии") == "batch_sewing"
-    assert match_stage("Партия готова к отгрузке") == "batch_ready"
+def test_classify_status_recognizes_each_stage_by_keyword():
+    assert classify_status("Идет поиск цеха") == ("stage", "workshop_search")
+    assert classify_status("Отшив образца") == ("stage", "sample_sewing")
+    assert classify_status("Образец согласован") == ("stage", "sample_approved")
+    assert classify_status("Запрос фото образца") == ("stage", "photo_requested")
+    assert classify_status("Заведена карточка на МП") == ("stage", "mp_card_created")
+    assert classify_status("Данные в 1С занесено") == ("stage", "data_in_1c")
+    assert classify_status("Заказ внесен в 1С") == ("stage", "order_in_1c")
 
 
-def test_match_stage_returns_none_for_unrecognized_text():
-    assert match_stage("Что-то непонятное") is None
-    assert match_stage("") is None
-    assert match_stage(None) is None
+def test_classify_status_recognizes_cancelled_and_rework():
+    assert classify_status("Образец отменен") == ("cancelled", None)
+    assert classify_status("Заказ отменён поставщиком") == ("cancelled", None)
+    assert classify_status("Образец на переделке") == ("rework", None)
+    assert classify_status("Отправлен на переделку") == ("rework", None)
+
+
+def test_classify_status_returns_none_for_unrecognized_text():
+    assert classify_status("Что-то непонятное") == (None, None)
+    assert classify_status("") == (None, None)
+    assert classify_status(None) == (None, None)
 
 
 def test_map_columns_finds_headers_by_candidate_names():
-    headers = ["№ заказа", "Маркетплейс", "Статус", "Комментарий"]
+    headers = ["№ заказа", "Маркетплейс", "Статус", "Дедлайн", "Комментарий"]
     columns = map_columns(headers)
     assert columns["order_number"] == "№ заказа"
     assert columns["marketplace"] == "Маркетплейс"
     assert columns["status"] == "Статус"
+    assert columns["deadline"] == "Дедлайн"
     assert all(v is None for v in columns["stage_dates"].values())
 
 
@@ -62,15 +71,20 @@ def test_map_columns_returns_none_for_missing_columns():
     assert columns["order_number"] is None
     assert columns["marketplace"] is None
     assert columns["status"] is None
+    assert columns["deadline"] is None
 
 
-def _configure_sheet(monkeypatch, headers, rows, sheet_id="SHEET1", gid="123"):
-    db.session.add(AppSetting(key="production_sheet_id", value=sheet_id))
-    db.session.add(AppSetting(key="production_sheet_gid", value=gid))
+def _configure_sheet(monkeypatch, headers, rows, sheet_id="SHEET1", gid="123", sheet_title="Заказы"):
+    for key, value in (("production_sheet_id", sheet_id), ("production_sheet_gid", gid)):
+        setting = AppSetting.query.get(key)
+        if setting is None:
+            db.session.add(AppSetting(key=key, value=value))
+        else:
+            setting.value = value
     db.session.commit()
     monkeypatch.setattr("wms.blueprints.production_orders.google_sheets_configured", lambda app: True)
     monkeypatch.setattr(
-        "wms.blueprints.production_orders.resolve_sheet_title", lambda app, sid, gid_: "Заказы"
+        "wms.blueprints.production_orders.resolve_sheet_title", lambda app, sid, gid_: sheet_title
     )
     monkeypatch.setattr(
         "wms.blueprints.production_orders.read_sheet_tables",
@@ -95,7 +109,7 @@ def test_sync_uses_default_sheet_id_when_settings_never_saved(db, monkeypatch):
     monkeypatch.setattr(
         "wms.blueprints.production_orders.read_sheet_tables",
         lambda app, sid, titles: {
-            t: (["№ заказа", "Статус"], [{"№ заказа": "ЗК-999", "Статус": "Заказ размещен"}]) for t in titles
+            t: (["№ заказа", "Статус"], [{"№ заказа": "ЗК-999", "Статус": "Поиск цеха"}]) for t in titles
         },
     )
 
@@ -122,7 +136,7 @@ def test_sync_reads_all_sheets_when_gid_not_set(db, monkeypatch):
         ),
         "Заказы октябрь": (
             ["№ заказа", "Статус"],
-            [{"№ заказа": "ЗК-102", "Статус": "Отшив партии"}],
+            [{"№ заказа": "ЗК-102", "Статус": "Заказ внесен в 1С"}],
         ),
     }
     monkeypatch.setattr("wms.blueprints.production_orders.google_sheets_configured", lambda app: True)
@@ -139,7 +153,7 @@ def test_sync_reads_all_sheets_when_gid_not_set(db, monkeypatch):
     assert created == 2
     assert updated == 0
     assert ProductionOrder.query.filter_by(order_number="ЗК-101").first().current_stage == "sample_sewing"
-    assert ProductionOrder.query.filter_by(order_number="ЗК-102").first().current_stage == "batch_sewing"
+    assert ProductionOrder.query.filter_by(order_number="ЗК-102").first().current_stage == "order_in_1c"
     assert "Заказы сентябрь" in diagnostics
     assert "Заказы октябрь" in diagnostics
     assert "Прочитано листов: 2" in diagnostics
@@ -170,7 +184,7 @@ def test_sync_same_order_on_two_sheets_does_not_duplicate(db, monkeypatch):
     assert created == 1
     assert updated == 1
     # Последний прочитанный лист выигрывает — этап должен быть тем, что на "Лист 2".
-    assert ProductionOrder.query.filter_by(order_number="ЗК-200").first().current_stage == "sample_approval"
+    assert ProductionOrder.query.filter_by(order_number="ЗК-200").first().current_stage == "sample_approved"
 
 
 def test_sync_creates_order_and_stamps_current_stage(db, monkeypatch):
@@ -180,6 +194,7 @@ def test_sync_creates_order_and_stamps_current_stage(db, monkeypatch):
         monkeypatch,
         headers=["№ заказа", "Маркетплейс", "Статус"],
         rows=[{"№ заказа": "ЗК-001", "Маркетплейс": "Wildberries", "Статус": "Отшив образца"}],
+        sheet_title="Заказы",  # без даты в названии — анкер не сработает
     )
 
     created, updated, diagnostics = sync_production_orders()
@@ -190,33 +205,54 @@ def test_sync_creates_order_and_stamps_current_stage(db, monkeypatch):
     assert order is not None
     assert order.marketplace == "Wildberries"
     assert order.current_stage == "sample_sewing"
-    assert order.order_placed_at is not None
     assert order.workshop_search_started_at is not None
     assert order.sample_sewing_started_at is not None
-    assert order.sample_approval_started_at is None
-    assert "Отшив образца" in diagnostics or "sample_sewing" in diagnostics or True
+    assert order.sample_approved_at is None
+    assert "Заказы" in diagnostics
+
+
+def test_sync_uses_sheet_name_date_as_workshop_search_anchor(db, monkeypatch):
+    """См. чат: "из таблицы берем дату из названия листа — это точка
+    отсчета для поиска производства" — тот же прием, что уже есть для
+    листов плана отгрузок (extract_period_start)."""
+    from wms.blueprints.production_orders import sync_production_orders
+
+    today = date.today()
+    _configure_sheet(
+        monkeypatch,
+        headers=["№ заказа", "Статус"],
+        rows=[{"№ заказа": "ЗК-ANCHOR", "Статус": "Поиск цеха"}],
+        sheet_title=f"Заказы от {today.day:02d}.{today.month:02d}",
+    )
+
+    sync_production_orders()
+
+    order = ProductionOrder.query.filter_by(order_number="ЗК-ANCHOR").first()
+    assert order.workshop_search_started_at is not None
+    assert order.workshop_search_started_at.date() == today
 
 
 def test_sync_backfills_earlier_stages_with_same_timestamp_when_order_starts_later(db, monkeypatch):
-    """Заказ впервые увиден WMS уже на этапе "Согласование образца" — более
-    ранние этапы задним числом не восстановить, поэтому ставится тот же
-    момент, что и у текущего (честное приближение, см. чат)."""
+    """Заказ впервые увиден WMS уже на этапе "Образец согласован" — более
+    ранние этапы задним числом не восстановить (лист без даты в названии),
+    поэтому ставится тот же момент, что и у текущего (честное приближение,
+    см. чат)."""
     from wms.blueprints.production_orders import sync_production_orders
 
     _configure_sheet(
         monkeypatch,
         headers=["№ заказа", "Статус"],
         rows=[{"№ заказа": "ЗК-002", "Статус": "Образец согласован"}],
+        sheet_title="Заказы",
     )
 
     sync_production_orders()
 
     order = ProductionOrder.query.filter_by(order_number="ЗК-002").first()
-    assert order.current_stage == "sample_approval"
-    assert order.order_placed_at == order.sample_approval_started_at
-    assert order.workshop_search_started_at == order.sample_approval_started_at
-    assert order.sample_sewing_started_at == order.sample_approval_started_at
-    assert order.batch_sewing_started_at is None
+    assert order.current_stage == "sample_approved"
+    assert order.workshop_search_started_at == order.sample_approved_at
+    assert order.sample_sewing_started_at == order.sample_approved_at
+    assert order.photo_requested_at is None
 
 
 def test_sync_does_not_overwrite_already_stamped_stage_on_repeat_sync(db, monkeypatch):
@@ -228,20 +264,20 @@ def test_sync_does_not_overwrite_already_stamped_stage_on_repeat_sync(db, monkey
     _configure_sheet(
         monkeypatch,
         headers=["№ заказа", "Статус"],
-        rows=[{"№ заказа": "ЗК-003", "Статус": "Отшив партии"}],
+        rows=[{"№ заказа": "ЗК-003", "Статус": "Заказ внесен в 1С"}],
     )
     sync_production_orders()
     order = ProductionOrder.query.filter_by(order_number="ЗК-003").first()
-    first_stamp = order.batch_sewing_started_at
+    first_stamp = order.order_in_1c_at
     assert first_stamp is not None
 
-    order.batch_sewing_started_at = datetime.utcnow() - timedelta(days=5)
+    order.order_in_1c_at = datetime.utcnow() - timedelta(days=5)
     db.session.commit()
-    backdated = order.batch_sewing_started_at
+    backdated = order.order_in_1c_at
 
     sync_production_orders()
     order = ProductionOrder.query.filter_by(order_number="ЗК-003").first()
-    assert order.batch_sewing_started_at == backdated
+    assert order.order_in_1c_at == backdated
 
 
 def test_sync_prefers_explicit_stage_date_column_over_sync_timestamp(db, monkeypatch):
@@ -250,14 +286,101 @@ def test_sync_prefers_explicit_stage_date_column_over_sync_timestamp(db, monkeyp
     explicit_date = "01.03.2026"
     _configure_sheet(
         monkeypatch,
-        headers=["№ заказа", "Статус", "Дата заказа"],
-        rows=[{"№ заказа": "ЗК-004", "Статус": "Заказ размещен", "Дата заказа": explicit_date}],
+        headers=["№ заказа", "Статус", "Дата поиска цеха"],
+        rows=[{"№ заказа": "ЗК-004", "Статус": "Поиск цеха", "Дата поиска цеха": explicit_date}],
+        sheet_title="Заказы",
     )
 
     sync_production_orders()
 
     order = ProductionOrder.query.filter_by(order_number="ЗК-004").first()
-    assert order.order_placed_at == datetime(2026, 3, 1)
+    assert order.workshop_search_started_at == datetime(2026, 3, 1)
+
+
+def test_sync_handles_cancelled_status(db, monkeypatch):
+    from wms.blueprints.production_orders import sync_production_orders
+
+    _configure_sheet(
+        monkeypatch,
+        headers=["№ заказа", "Статус"],
+        rows=[{"№ заказа": "ЗК-CANCEL", "Статус": "Образец отменен"}],
+    )
+
+    _created, _updated, diagnostics = sync_production_orders()
+
+    order = ProductionOrder.query.filter_by(order_number="ЗК-CANCEL").first()
+    assert order.current_stage == "sample_cancelled"
+    assert order.sample_cancelled_at is not None
+    assert "отменено образцов 1" in diagnostics
+
+
+def test_sync_handles_rework_status_without_advancing_stage(db, monkeypatch):
+    from wms.blueprints.production_orders import sync_production_orders
+
+    _configure_sheet(
+        monkeypatch,
+        headers=["№ заказа", "Статус"],
+        rows=[{"№ заказа": "ЗК-REWORK", "Статус": "Образец на переделке"}],
+    )
+
+    _created, _updated, diagnostics = sync_production_orders()
+
+    order = ProductionOrder.query.filter_by(order_number="ЗК-REWORK").first()
+    assert order.current_stage == "sample_sewing"
+    assert order.rework_count == 1
+    assert order.last_rework_at is not None
+    assert "отправлено на переделку 1" in diagnostics
+
+
+def test_sync_rework_after_approval_returns_stage_but_keeps_approval_history(db, monkeypatch):
+    order = ProductionOrder(
+        order_number="ЗК-REWORK-2",
+        current_stage="sample_approved",
+        sample_sewing_started_at=datetime.utcnow() - timedelta(days=3),
+        sample_approved_at=datetime.utcnow() - timedelta(days=1),
+    )
+    db.session.add(order)
+    db.session.commit()
+    first_approval = order.sample_approved_at
+
+    from wms.blueprints.production_orders import sync_production_orders
+
+    _configure_sheet(
+        monkeypatch,
+        headers=["№ заказа", "Статус"],
+        rows=[{"№ заказа": "ЗК-REWORK-2", "Статус": "Отправлен на переделку"}],
+    )
+    sync_production_orders()
+
+    order = ProductionOrder.query.filter_by(order_number="ЗК-REWORK-2").first()
+    assert order.current_stage == "sample_sewing"
+    assert order.rework_count == 1
+    # Дата первого согласования не стирается переделкой.
+    assert order.sample_approved_at == first_approval
+
+
+def test_sync_captures_and_updates_deadline_date(db, monkeypatch):
+    from wms.blueprints.production_orders import sync_production_orders
+
+    _configure_sheet(
+        monkeypatch,
+        headers=["№ заказа", "Статус", "Дедлайн"],
+        rows=[{"№ заказа": "ЗК-DEADLINE", "Статус": "Поиск цеха", "Дедлайн": "15.10.2026"}],
+    )
+    sync_production_orders()
+    order = ProductionOrder.query.filter_by(order_number="ЗК-DEADLINE").first()
+    assert order.deadline_date == date(2026, 10, 15)
+
+    # Дедлайн может сдвинуться менеджером — берем актуальное значение
+    # каждый раз, а не только при первом появлении (в отличие от дат этапов).
+    _configure_sheet(
+        monkeypatch,
+        headers=["№ заказа", "Статус", "Дедлайн"],
+        rows=[{"№ заказа": "ЗК-DEADLINE", "Статус": "Поиск цеха", "Дедлайн": "20.10.2026"}],
+    )
+    sync_production_orders()
+    order = ProductionOrder.query.filter_by(order_number="ЗК-DEADLINE").first()
+    assert order.deadline_date == date(2026, 10, 20)
 
 
 def test_sync_skips_rows_without_order_number(db, monkeypatch):
@@ -332,9 +455,9 @@ def test_list_orders_shows_stage_and_days(db, client_logged_in, monkeypatch):
     order = ProductionOrder(
         order_number="ЗК-777",
         marketplace="Ozon",
-        current_stage="sample_approval",
+        current_stage="sample_approved",
         raw_status="Образец согласован",
-        sample_approval_started_at=datetime.utcnow() - timedelta(days=4),
+        sample_approved_at=datetime.utcnow() - timedelta(days=4),
     )
     db.session.add(order)
     db.session.commit()
@@ -342,8 +465,25 @@ def test_list_orders_shows_stage_and_days(db, client_logged_in, monkeypatch):
     html = client_logged_in.get("/production-orders/").get_data(as_text=True)
 
     assert "ЗК-777" in html
-    assert "Согласование образца" in html
+    assert "Образец согласован" in html
     assert ">4<" in html
+
+
+def test_list_orders_shows_cancelled_order_distinctly(db, client_logged_in):
+    order = ProductionOrder(
+        order_number="ЗК-888",
+        current_stage="sample_cancelled",
+        raw_status="Образец отменен",
+        sample_cancelled_at=datetime.utcnow() - timedelta(days=2),
+    )
+    db.session.add(order)
+    db.session.commit()
+
+    html = client_logged_in.get("/production-orders/").get_data(as_text=True)
+
+    assert "ЗК-888" in html
+    assert "Образец отменен" in html
+    assert ">2<" in html
 
 
 def test_settings_page_saves_sheet_id_and_gid(client_logged_in, db):
