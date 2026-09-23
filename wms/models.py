@@ -143,6 +143,12 @@ class User(UserMixin, db.Model):
     def is_production_only(self):
         return self.role == "production" and not self.is_admin
 
+    def is_logist_only(self):
+        """Логист видит только перемещения, ожидающие передачи транспорту
+        (movement.transport_list) — ничего больше в WMS, см. чат. Проверяется
+        в before_request так же, как is_production_only()."""
+        return self.role == "logist" and not self.is_admin
+
     def allowed_section_set(self):
         if not self.allowed_sections:
             return set(SECTION_CODES)

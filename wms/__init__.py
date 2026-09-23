@@ -414,6 +414,16 @@ def create_app(config_class=Config):
             and not request.endpoint.startswith("onboarding.")
         ):
             return redirect(url_for("production.index"))
+        # Роль "логист" — доступ только к перемещениям, ожидающим транспорт
+        # (movement.transport_list/transport_export_summary), ничего больше
+        # в WMS, см. чат. Эндпоинты этой роли специально названы с общим
+        # префиксом "movement.transport", чтобы не перечислять их по одному.
+        if (
+            current_user.is_logist_only()
+            and not request.endpoint.startswith("movement.transport")
+            and not request.endpoint.startswith("onboarding.")
+        ):
+            return redirect(url_for("movement.transport_list"))
         # Точечное ограничение разделов (см. User.allowed_sections) — тоже
         # проверяем при прямом вводе адреса, не только скрываем пункт меню.
         section = request.endpoint.split(".")[0]

@@ -253,6 +253,46 @@ def _compute_routing(box):
     return sorted(by_warehouse.values(), key=lambda e: -e["matched_qty"])
 
 
+def _transport_waiting_query():
+    """Перемещения, ожидающие передачи транспорту — сборка завершена,
+    заявка на МП подана, но "Транспорт забрал" еще не отмечено (см.
+    movement.mark_shipped/toggle_shipped). Тот же критерий, что и у бакета
+    "transport" в management.py (панель руководителя)."""
+    return MovementDocument.query.filter(
+        MovementDocument.status == "completed",
+        MovementDocument.marketplace_request_created_at.isnot(None),
+        MovementDocument.shipped_at.is_(None),
+    )
+
+
+@bp.route("/transport")
+def transport_list():
+    """Единственная страница, доступная роли "логист" (см. чат — видит
+    только перемещения со статусом "ждет транспорта"), но открыта и
+    остальным, кто уже видит перемещения — не только этой роли."""
+    documents = _transport_waiting_query().order_by(
+        MovementDocument.marketplace_request_created_at.asc()
+    ).all()
+    return render_template("movement/transport.html", documents=documents)
+
+
+@bp.route("/transport/export-summary.xlsx")
+def transport_export_summary():
+    """Сводная по перемещениям, ожидающим транспорт — тот же формат, что и
+    общий export_summary, но только по этой выборке (см. чат — "логист
+    может выгружать по ним сводную")."""
+    documents = _transport_waiting_query().order_by(
+        MovementDocument.marketplace_request_created_at.asc()
+    ).all()
+    data = export_movement_summary_to_excel(documents)
+    fname = f"transport_summary_{timestamp_for_filename()}.xlsx"
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": content_disposition(fname)},
+    )
+
+
 @bp.route("/")
 def list_documents():
     pagination = _movement_pagination()

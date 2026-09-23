@@ -82,7 +82,7 @@ def create_user():
     shift_minutes = request.form.get("shift_minutes", type=int) or 480
     role = request.form.get("role", "warehouse")
     warehouse_id = request.form.get("warehouse_id", type=int)
-    if role not in ("warehouse", "production"):
+    if role not in ("warehouse", "production", "logist"):
         role = "warehouse"
 
     if not username:
@@ -165,18 +165,19 @@ def update_shift_minutes(user_id):
 @login_required
 def update_role(user_id):
     """Роль ограничивает доступ: "production" видит только сканирование ЧЗ
-    на производстве, ничего больше (проверяется в before_request)."""
+    на производстве, "logist" — только перемещения, ожидающие транспорт,
+    ничего больше (проверяется в before_request)."""
     if not _require_admin():
         return redirect(url_for("main.index"))
 
     user = User.query.get_or_404(user_id)
     role = request.form.get("role", "warehouse")
-    if role not in ("warehouse", "production"):
+    if role not in ("warehouse", "production", "logist"):
         flash("Некорректная роль", "danger")
         return redirect(url_for("auth.users"))
 
-    if user.id == current_user.id and role == "production" and not user.is_admin:
-        flash("Нельзя ограничить самого себя до роли «производство»", "danger")
+    if user.id == current_user.id and role in ("production", "logist") and not user.is_admin:
+        flash("Нельзя ограничить самого себя до этой роли", "danger")
         return redirect(url_for("auth.users"))
 
     user.role = role
