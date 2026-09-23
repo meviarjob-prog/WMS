@@ -307,8 +307,9 @@ def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, cli
 
 def test_picking_list_shows_total_planned_and_shortfall_columns(db, client_logged_in):
     """«Общий план» и «Не хватает по плану» — построчно по товару, сумма по
-    всем городам обоих маркетплейсов. «Не хватает» = план минус то, что уже
-    в пути (не меньше нуля), а не просто остаток плана без учета транзита."""
+    всем городам обоих маркетплейсов. «Не хватает» = план минус все, что уже
+    в пути, готово к отгрузке и на разбраковке (не меньше нуля), а не просто
+    остаток плана без учета того, что уже есть на руках."""
     sender, city, item = _setup(planned_qty=30)
     _ship_box(sender, city, item, qty=10, box_number="BOX-TOTALS-1", client=client_logged_in)
 
@@ -332,6 +333,29 @@ def test_shortfall_column_floors_at_zero_when_transit_covers_plan(db, client_log
     snippet = html[idx : idx + 3000]
     assert ">10<" in snippet  # Общий план и «в пути» совпадают
     assert "text-muted\">0<" in snippet  # Не хватает: max(10 - 10, 0) = 0
+
+
+def test_shortfall_column_also_subtracts_ready_to_ship_and_unplaced(db, client_logged_in):
+    """Товар, который уже упакован в короб на складе-отправителе (готово к
+    отгрузке) или принят, но еще не упакован (на разбраковке), тоже
+    закрывает потребность плана — не только то, что уже уехало."""
+    from wms.models import Box, BoxItem, UnplacedStock
+
+    sender, city, item = _setup(planned_qty=30)
+    UnplacedStock.add(sender.id, item.id, 5)  # на разбраковке
+    box = Box(box_number="BOX-TOTALS-READY", warehouse_id=sender.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=7))  # готово к отгрузке
+    db.session.commit()
+    _ship_box(sender, city, item, qty=10, box_number="BOX-TOTALS-3", client=client_logged_in)
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    # Не хватает: 30 (план) - 10 (в пути) - 7 (готово к отгрузке) - 5 (на разбраковке) = 8
+    assert ">8<" in snippet
 
 
 def test_picking_list_shows_buyer_comment_column(db, client_logged_in):
