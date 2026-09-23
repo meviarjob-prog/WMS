@@ -139,3 +139,51 @@ def test_update_role_accepts_logist_for_another_user(client_logged_in, db):
 
     assert resp.status_code == 302
     assert User.query.get(target.id).role == "logist"
+
+
+def test_transport_list_shows_marketplace(db, client_logged_in):
+    wb_doc, _s1, _d1 = _movement("PER-WB-1")
+    ozon_doc, _s2, ozon_dest = _movement("PER-OZ-1")
+    ozon_dest.marketplace = "ozon"
+    db.session.commit()
+
+    html = client_logged_in.get("/movement/transport").get_data(as_text=True)
+
+    wb_idx = html.index("PER-WB-1")
+    assert "ВБ" in html[wb_idx : wb_idx + 400]
+    assert "mp-row-wb" in html[max(0, wb_idx - 400) : wb_idx]
+
+    oz_idx = html.index("PER-OZ-1")
+    assert "ОЗОН" in html[oz_idx : oz_idx + 400]
+    assert "mp-row-ozon" in html[max(0, oz_idx - 400) : oz_idx]
+
+
+def test_logist_can_mark_transport_and_document_leaves_list(db, client):
+    logist = _make_logist("logist-4")
+    _login(client, logist)
+    doc, *_ = _movement("PER-LOG-MARK")
+
+    resp = client.post(f"/movement/{doc.id}/transport/mark-shipped")
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/movement/transport")
+    doc = MovementDocument.query.get(doc.id)
+    assert doc.shipped_at is not None
+
+    html = client.get("/movement/transport").get_data(as_text=True)
+    table_body = html[html.index("<tbody>") : html.index("</tbody>")]
+    assert "PER-LOG-MARK" not in table_body
+
+
+def test_mark_shipped_requires_logist_or_higher_permission(db, client):
+    worker = User(username="plain-worker", is_admin=False, role="warehouse")
+    worker.set_password("password123")
+    db.session.add(worker)
+    db.session.commit()
+    _login(client, worker)
+    doc, *_ = _movement("PER-NOPERM")
+
+    resp = client.post(f"/movement/{doc.id}/transport/mark-shipped")
+
+    assert resp.status_code == 404
+    assert MovementDocument.query.get(doc.id).shipped_at is None

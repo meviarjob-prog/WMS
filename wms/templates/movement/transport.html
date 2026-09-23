@@ -15,27 +15,37 @@
   <thead>
     <tr>
       <th>Номер</th>
+      <th>МП</th>
       <th>Откуда</th>
       <th>Куда</th>
       <th>№ заявки МП</th>
       <th>Подана заявка</th>
       <th>Коробов</th>
       <th>Кол-во товара</th>
+      <th></th>
     </tr>
   </thead>
   <tbody>
     {% for d in documents %}
-    <tr>
+    {% set mp = d.to_warehouse.marketplace if d.to_warehouse else none %}
+    <tr class="{{ 'mp-row-wb' if mp == 'wb' else 'mp-row-ozon' if mp == 'ozon' else '' }}">
       <td class="fw-semibold">{{ d.number }}</td>
+      <td>{{ d.to_warehouse.marketplace_label() if d.to_warehouse else "—" }}</td>
       <td>{{ d.from_warehouse.name if d.from_warehouse else "—" }}</td>
       <td>{{ d.to_warehouse.name if d.to_warehouse else "—" }}</td>
       <td>{{ d.marketplace_request_number or "—" }}</td>
-      <td class="text-muted small">{{ (d.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if d.marketplace_request_created_at else "—" }}</td>
+      <td class="small">{{ (d.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if d.marketplace_request_created_at else "—" }}</td>
       <td>{{ d.lines.count() }}</td>
       <td>{{ d.total_sent_qty()|round|int }}</td>
+      <td class="text-end">
+        <form method="post" action="{{ url_for('movement.transport_mark_shipped', doc_id=d.id) }}"
+              onsubmit="return confirm('Отметить, что транспорт забрал {{ d.number }}?');">
+          <button type="submit" class="btn btn-sm btn-light">🚚 Транспорт забрал</button>
+        </form>
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="7" class="text-muted">Сейчас никто не ждет транспорт</td></tr>
+    <tr><td colspan="9" class="text-muted">Сейчас никто не ждет транспорт</td></tr>
     {% endfor %}
   </tbody>
 </table>

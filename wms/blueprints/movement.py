@@ -77,6 +77,12 @@ BOOKKEEPING_ENDPOINTS = {
 # чужие перемещения.
 COMPLETION_ENDPOINTS = {"movement.complete", "movement.mark_shipped"}
 RECEIVING_ENDPOINTS = {"movement.receive"}
+# Отметка "Транспорт забрал" прямо со страницы "Ждут транспорта" — в
+# отличие от обычного mark_shipped (редиректит на детальную страницу
+# документа, к которой у роли "логист" нет доступа), возвращает на тот же
+# список (см. transport_mark_shipped). Логист может отмечать любой
+# документ из своего списка, не только свой собственный.
+LOGIST_ENDPOINTS = {"movement.transport_mark_shipped"}
 
 
 @bp.before_request
@@ -88,6 +94,15 @@ def _restrict_document_access():
     readonly_endpoints = {"movement.detail", "movement.export_document"}
     if request.endpoint in readonly_endpoints or request.endpoint in BOOKKEEPING_ENDPOINTS:
         if not _can_view_movement_document(doc):
+            abort(404)
+        return None
+    if request.endpoint in LOGIST_ENDPOINTS:
+        if not (
+            current_user.is_admin
+            or current_user.is_logist_only()
+            or current_user.can_complete_movements()
+            or doc.created_by_id == current_user.id
+        ):
             abort(404)
         return None
     if request.endpoint in COMPLETION_ENDPOINTS:
@@ -291,6 +306,27 @@ def transport_export_summary():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": content_disposition(fname)},
     )
+
+
+@bp.route("/<int:doc_id>/transport/mark-shipped", methods=["POST"])
+def transport_mark_shipped(doc_id):
+    """Тот же mark_shipped, но со страницы "Ждут транспорта" — возвращает
+    туда же, а не на детальную страницу документа (к которой у роли
+    "логист" нет доступа, см. чат)."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status != "completed":
+        flash("Сначала завершите сборку перемещения", "danger")
+    elif not doc.marketplace_request_created_at or not (
+        doc.marketplace_request_number or ""
+    ).strip():
+        flash("Сначала внесите номер и отметьте подачу заявки на МП", "danger")
+    elif doc.shipped_at is not None:
+        flash("Передача транспорту уже зафиксирована", "warning")
+    else:
+        doc.shipped_at = datetime.utcnow()
+        db.session.commit()
+        flash(f"Перемещение {doc.number} передано транспорту", "success")
+    return redirect(url_for("movement.transport_list"))
 
 
 @bp.route("/")
