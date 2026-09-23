@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 from wms.extensions import db
-from wms.models import MovementDocument, Warehouse
+from wms.models import Box, BoxItem, MovementDocument, MovementLine, Nomenclature, Warehouse
 
 
 def _create_documents(count):
@@ -98,3 +98,73 @@ def test_mp_request_filter_narrows_across_all_documents(db, client_logged_in):
     assert "PER-PAGE-001" in html
     assert "PER-PAGE-002" not in html
     assert "PER-PAGE-003" not in html
+
+
+def _make_box_document(number, box_number, sender_name, dest_name, dest_marketplace=None):
+    sender = Warehouse(code=f"WH-MULTI-{number}A", name=sender_name)
+    dest = Warehouse(
+        code=f"WH-MULTI-{number}B",
+        name=dest_name,
+        marketplace=dest_marketplace,
+        marketplace_city=dest_name if dest_marketplace else None,
+    )
+    db.session.add_all([sender, dest])
+    db.session.commit()
+
+    item = Nomenclature(sku=f"SKU-MULTI-{number}", barcode=f"7770910{number}", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    box = Box(box_number=box_number, warehouse_id=sender.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=1))
+
+    doc = MovementDocument(number=number, from_warehouse_id=sender.id, to_warehouse_id=dest.id)
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(MovementLine(document_id=doc.id, box_id=box.id, from_warehouse_id=sender.id))
+    db.session.commit()
+    return doc
+
+
+def test_search_with_two_words_matches_across_different_fields(db, client_logged_in):
+    """«191 москва» — оба слова должны совпасть, но не обязательно в одном
+    и том же поле: "191" в номере короба, "москва" в складе назначения
+    (см. чат)."""
+    matching = _make_box_document(
+        "PER-MULTI-001", "BOX-191-A", "Основной", "Москва", dest_marketplace="ozon"
+    )
+    other_city = _make_box_document(
+        "PER-MULTI-002", "BOX-191-B", "Основной", "Казань", dest_marketplace="ozon"
+    )
+    other_box = _make_box_document(
+        "PER-MULTI-003", "BOX-777-C", "Основной", "Москва", dest_marketplace="ozon"
+    )
+
+    html = client_logged_in.get("/movement/?q=191+москва").get_data(as_text=True)
+
+    assert matching.number in html
+    assert other_city.number not in html
+    assert other_box.number not in html
+
+
+def test_search_with_marketplace_alias_and_city(db, client_logged_in):
+    """«озон москва» — слово "озон" понимается как площадка склада
+    назначения (Warehouse.marketplace == "ozon"), а не ищется буквально в
+    названии (в названии склада этого слова обычно и нет)."""
+    ozon_moscow = _make_box_document(
+        "PER-MULTI-011", "BOX-OZ-1", "Основной", "Москва", dest_marketplace="ozon"
+    )
+    wb_moscow = _make_box_document(
+        "PER-MULTI-012", "BOX-WB-1", "Основной", "Москва", dest_marketplace="wb"
+    )
+    ozon_kazan = _make_box_document(
+        "PER-MULTI-013", "BOX-OZ-2", "Основной", "Казань", dest_marketplace="ozon"
+    )
+
+    html = client_logged_in.get("/movement/?q=озон+москва").get_data(as_text=True)
+
+    assert ozon_moscow.number in html
+    assert wb_moscow.number not in html
+    assert ozon_kazan.number not in html

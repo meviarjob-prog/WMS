@@ -137,27 +137,64 @@ def _visible_movement_query():
     )
 
 
+# Алиасы, по которым слово в поиске понимается как площадка склада-
+# получателя, а не как подстрока в названии/городе (Warehouse.marketplace
+# хранит "ozon"/"wb", а не "озон"/"вб" — в тексте склада этого слова просто
+# нет, иначе оно и так нашлось бы обычным ilike по имени).
+_MOVEMENT_SEARCH_MARKETPLACE_ALIASES = {
+    "озон": "ozon",
+    "ozon": "ozon",
+    "вб": "wb",
+    "wb": "wb",
+}
+
+
+def _movement_search_token_condition(token):
+    """Условие для ОДНОГО слова поискового запроса — совпадение в любом из
+    полей (номер, короб, склад-отправитель/получатель, город, площадка,
+    автор, № заявки на МП). Несколько слов объединяются через И (см.
+    _apply_movement_search) — «191 москва» находит документ, где "191"
+    встретилось в одном поле (например, номере короба), а "москва" — в
+    другом (город склада), а не требует, чтобы вся фраза целиком была
+    подстрокой одного поля."""
+    like = f"%{token}%"
+    conditions = [
+        MovementDocument.number.ilike(like),
+        MovementDocument.marketplace_request_number.ilike(like),
+        MovementDocument.from_warehouse.has(
+            or_(Warehouse.name.ilike(like), Warehouse.marketplace_city.ilike(like))
+        ),
+        MovementDocument.to_warehouse.has(
+            or_(Warehouse.name.ilike(like), Warehouse.marketplace_city.ilike(like))
+        ),
+        MovementDocument.created_by.has(
+            or_(User.username.ilike(like), User.full_name.ilike(like))
+        ),
+        MovementDocument.lines.any(MovementLine.box.has(Box.box_number.ilike(like))),
+    ]
+    marketplace = _MOVEMENT_SEARCH_MARKETPLACE_ALIASES.get(token.lower())
+    if marketplace:
+        conditions.append(
+            MovementDocument.to_warehouse.has(Warehouse.marketplace == marketplace)
+        )
+    return or_(*conditions)
+
+
 def _apply_movement_search(query):
     """Фильтрует запрос ДО пагинации — поиск идет по всем перемещениям, а
     не только по тем, что попали на текущую страницу (см. чат: раньше
     поле поиска было чисто клиентским JS-фильтром по уже загруженным 50
-    строкам — на следующих страницах ничего не находило)."""
+    строкам — на следующих страницах ничего не находило).
+
+    Запрос из нескольких слов ("191 москва", "озон москва") разбивается по
+    пробелам — документ должен совпасть по КАЖДОМУ слову (не обязательно в
+    одном и том же поле, см. _movement_search_token_condition), а не
+    содержать всю фразу целиком подряд."""
     q = request.args.get("q", "").strip()
     if q:
-        like = f"%{q}%"
+        tokens = q.split()
         query = query.filter(
-            or_(
-                MovementDocument.number.ilike(like),
-                MovementDocument.marketplace_request_number.ilike(like),
-                MovementDocument.from_warehouse.has(Warehouse.name.ilike(like)),
-                MovementDocument.to_warehouse.has(Warehouse.name.ilike(like)),
-                MovementDocument.created_by.has(
-                    or_(User.username.ilike(like), User.full_name.ilike(like))
-                ),
-                MovementDocument.lines.any(
-                    MovementLine.box.has(Box.box_number.ilike(like))
-                ),
-            )
+            and_(*(_movement_search_token_condition(token) for token in tokens))
         )
     mp_request = request.args.get("mp_request", "").strip()
     if mp_request == "yes":

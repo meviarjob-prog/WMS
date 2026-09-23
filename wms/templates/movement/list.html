@@ -122,7 +122,7 @@
        ВСЕМ перемещениям, а не только на текущей странице (см. чат). -->
   <form method="get" action="{{ url_for('movement.list_documents') }}" class="d-flex flex-wrap gap-2">
     <input type="text" name="q" class="form-control" style="max-width:360px"
-           placeholder="Поиск: номер, короб, склад, автор, № заявки на МП"
+           placeholder="Поиск: номер, короб, склад, автор, № заявки на МП — можно несколько слов, например «191 москва»"
            value="{{ request.args.get('q', '') }}">
     <select name="mp_request" class="form-select" style="max-width:200px">
       <option value="">Заявка на МП: все</option>
