@@ -41,6 +41,9 @@
   </div>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_document', doc_id=doc.id) }}">📤 Экспорт в Excel</a>
+    {% if lines %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('movement.export_shipping_labels', doc_ids=[doc.id]) }}">🏷 Стикеры отправления</a>
+    {% endif %}
     {% if lines and doc.to_warehouse.marketplace == 'ozon' %}
     <a class="btn btn-outline-secondary" href="{{ url_for('marketplace_export.ozon_package_composition', doc_id=doc.id) }}">📦 Состав ГМ для Ozon</a>
     <a class="btn btn-outline-secondary" href="{{ url_for('marketplace_export.ozon_supply_request', doc_id=doc.id) }}">🧾 Заявка на поставку (Ozon)</a>

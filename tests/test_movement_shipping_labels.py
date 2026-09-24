@@ -1,8 +1,9 @@
-"""Стикеры отправления 58x40мм по выбранным перемещениям — по одному
-стикеру на каждый короб документа (маршрут + получатель + отправитель +
-номер ЭТОГО короба), чтобы при проклейке можно было сверить стикер с
-номером на коробе (это отдельная от «Этикетки короба» наклейка — без
-штрихкода, см. warehouses.update_recipient для настройки получателя)."""
+"""Стикеры отправления 58x40мм — по одному документу (кнопка на странице
+перемещения) или по выбранным в списке — по одному стикеру на каждый короб
+документа: отправитель, направление, порядковый номер короба из общего
+количества, дата печати и площадка склада назначения (это отдельная от
+«Этикетки короба» наклейка — без штрихкода). Формат повторяет бумажный
+бланк поставки, который раньше заполнялся от руки (см. чат)."""
 
 import re
 
@@ -80,29 +81,72 @@ def test_build_shipping_labels_across_documents_sums_box_counts(db, client_logge
     assert _page_count(pdf_bytes) == 6
 
 
-def test_build_shipping_labels_binds_box_number_per_box(db, client_logged_in, monkeypatch):
-    """Каждый стикер должен нести номер СВОЕГО короба (в правильном порядке
-    и без задвоения одного номера на все стикеры документа) — иначе сверка
-    при проклейке ничего не проверяет. PDF-текст не грепается напрямую
-    (reportlab сжимает содержимое страниц), поэтому проверяем через то,
-    какие box_number реально дошли до отрисовки."""
+def test_build_shipping_labels_binds_box_index_per_box(db, client_logged_in, monkeypatch):
+    """Каждый стикер должен нести свой порядковый номер в общем количестве
+    коробов документа ("Количество коробов: N из Total"), по порядку и без
+    повторов — иначе по стикерам нельзя проверить, что приехали все короба
+    поставки. PDF-текст не грепается напрямую (reportlab сжимает содержимое
+    страниц), поэтому проверяем через то, какие box_index/box_count реально
+    дошли до отрисовки."""
     doc, _dest = _make_document_with_boxes(n_boxes=3, suffix="D")
     from wms.utils import shipping_label_pdf
 
-    seen_box_numbers = []
+    seen = []
     original = shipping_label_pdf._draw_shipping_label
 
     def spy(c, **kwargs):
-        seen_box_numbers.append(kwargs.get("box_number"))
+        seen.append((kwargs.get("box_index"), kwargs.get("box_count")))
         return original(c, **kwargs)
 
     monkeypatch.setattr(shipping_label_pdf, "_draw_shipping_label", spy)
 
     shipping_label_pdf.build_movement_shipping_labels_pdf([doc])
 
-    expected = [line.box.box_number for line in doc.lines]
-    assert seen_box_numbers == expected
-    assert len(set(seen_box_numbers)) == 3
+    assert seen == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_shipping_label_includes_marketplace(db, client_logged_in, monkeypatch):
+    sender = Warehouse(code="WH-MPL-A", name="Склад-отправитель")
+    dest = Warehouse(code="WH-MPL-B", name="ОЗОН: Казань", marketplace="ozon", marketplace_city="Казань")
+    db.session.add_all([sender, dest])
+    db.session.commit()
+
+    item = Nomenclature(sku="SKU-MPL", barcode="7770001234", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    doc = MovementDocument(number="PER-MPL-1", from_warehouse_id=sender.id, to_warehouse_id=dest.id)
+    db.session.add(doc)
+    db.session.commit()
+    box = Box(box_number="BOX-MPL-1", warehouse_id=sender.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=1))
+    db.session.add(MovementLine(document_id=doc.id, box_id=box.id, from_warehouse_id=sender.id))
+    db.session.commit()
+
+    from wms.utils import shipping_label_pdf
+
+    seen = []
+    original = shipping_label_pdf._draw_shipping_label
+
+    def spy(c, **kwargs):
+        seen.append(kwargs.get("marketplace_label"))
+        return original(c, **kwargs)
+
+    monkeypatch.setattr(shipping_label_pdf, "_draw_shipping_label", spy)
+
+    shipping_label_pdf.build_movement_shipping_labels_pdf([doc])
+
+    assert seen == ["ОЗОН"]
+
+
+def test_detail_page_has_per_document_shipping_label_button(db, client_logged_in):
+    doc, _dest = _make_document_with_boxes(n_boxes=1, suffix="E")
+
+    html = client_logged_in.get(f"/movement/{doc.id}").get_data(as_text=True)
+
+    assert f"/movement/shipping-labels.pdf?doc_ids={doc.id}" in html
 
 
 def test_shipping_label_has_no_box_specific_barcode(db, client_logged_in):
