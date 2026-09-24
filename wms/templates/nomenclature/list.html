@@ -77,12 +77,12 @@
       <table class="table table-sm d-none d-md-table">
         <thead>
           <tr>
-            <th>Штрихкод</th><th>Наименование</th><th>Размер</th>
-            <th>Артикул</th>
+            <th>Штрихкод</th><th>Наименование</th>
             <th>Ед.</th>
             <th>Вид</th>
             {% for wh in stock_warehouses %}<th>{{ wh.name }}</th>{% endfor %}
             <th></th>
+            {% if current_user.is_admin %}<th></th>{% endif %}
           </tr>
         </thead>
         <tbody>
@@ -96,7 +96,7 @@
                 <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
               </form>
             </td>
-            <td style="min-width:220px">
+            <td style="min-width:380px">
               <form method="post" action="{{ url_for('nomenclature.update_name', item_id=item.id) }}" class="d-flex gap-1">
                 <input type="hidden" name="q" value="{{ q }}">
                 <input type="text" name="name" value="{{ item.name }}" class="form-control form-control-sm">
@@ -107,8 +107,6 @@
             <td>{{ item.barcode }}</td>
             <td>{{ item.name }}</td>
             {% endif %}
-            <td>{{ item.size or '' }}</td>
-            <td>{{ item.sku }}</td>
             <td>{{ item.unit }}</td>
             {% if current_user.can_edit_nomenclature() %}
             <td style="min-width:160px">
@@ -129,9 +127,18 @@
             <td><a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}</a></td>
             {% endfor %}
             <td><a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}">🖨 Этикетка</a></td>
+            {% if current_user.is_admin %}
+            <td>
+              <form method="post" action="{{ url_for('nomenclature.delete_nomenclature', item_id=item.id) }}"
+                    onsubmit="return confirm('Удалить этот товар? Действие необратимо.');">
+                <input type="hidden" name="q" value="{{ q }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger">🗑</button>
+              </form>
+            </td>
+            {% endif %}
           </tr>
         {% else %}
-          <tr><td colspan="{{ 7 + stock_warehouses|length }}" class="text-muted">Ничего не найдено</td></tr>
+          <tr><td colspan="{{ (6 if current_user.is_admin else 5) + stock_warehouses|length }}" class="text-muted">Ничего не найдено</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -154,7 +161,6 @@
                   <input type="hidden" name="q" value="{{ q }}">
                   <input type="text" name="barcode" value="{{ item.barcode }}" class="form-control form-control-sm">
                   <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
-                  {% if item.size or item.sku %}<span class="small text-muted flex-shrink-0">{{ item.size or '' }}{% if item.sku %} · {{ item.sku }}{% endif %}</span>{% endif %}
                 </form>
               </div>
               <a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>
@@ -162,8 +168,8 @@
             {% else %}
             <div class="d-flex justify-content-between align-items-start gap-2">
               <div>
-                <div class="fw-bold">{{ item.name }}{% if item.size %} ({{ item.size }}){% endif %}</div>
-                <div class="small text-muted">{{ item.barcode }}{% if item.sku %} · арт. {{ item.sku }}{% endif %}</div>
+                <div class="fw-bold">{{ item.name }}</div>
+                <div class="small text-muted">{{ item.barcode }}</div>
               </div>
               <a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>
             </div>
@@ -188,6 +194,13 @@
               {{ wh.name }}: <a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}</a>{% if not loop.last %} · {% endif %}
               {% endfor %}
             </div>
+            {% if current_user.is_admin %}
+            <form method="post" action="{{ url_for('nomenclature.delete_nomenclature', item_id=item.id) }}" class="mt-2"
+                  onsubmit="return confirm('Удалить этот товар? Действие необратимо.');">
+              <input type="hidden" name="q" value="{{ q }}">
+              <button type="submit" class="btn btn-sm btn-outline-danger">🗑 Удалить</button>
+            </form>
+            {% endif %}
           </div>
         {% else %}
           <div class="list-group-item text-muted">Ничего не найдено</div>

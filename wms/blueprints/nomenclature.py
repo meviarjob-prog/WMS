@@ -39,17 +39,11 @@ def _require_edit():
     return False
 
 
-@bp.route("/clear", methods=["POST"])
-def clear_nomenclature():
-    """Удаляет из номенклатуры все позиции, которые нигде не использовались
-    (нет остатков, нет строк ни в одном документе/движении) — например,
-    чтобы стереть пробный/ошибочный импорт перед чистой загрузкой. Товары,
-    хоть раз засветившиеся в реальных данных, не трогаем — иначе документы
-    и остатки, которые на них ссылаются, осиротеют."""
-    if not current_user.is_admin:
-        flash("Очищать номенклатуру может только администратор", "danger")
-        return redirect(url_for("nomenclature.list_nomenclature"))
-
+def _referenced_nomenclature_ids():
+    """ID товаров, на которые где-либо ссылаются реальные данные (остатки,
+    строки документов/движений) — такие удалять нельзя, иначе эти записи
+    осиротеют. Используется и при массовой очистке (clear_nomenclature), и
+    при удалении одного товара (delete_nomenclature)."""
     referenced_ids = set()
     for column in (
         BoxItem.nomenclature_id,
@@ -61,6 +55,21 @@ def clear_nomenclature():
         UnplacedStock.nomenclature_id,
     ):
         referenced_ids.update(row[0] for row in db.session.query(column).distinct().all())
+    return referenced_ids
+
+
+@bp.route("/clear", methods=["POST"])
+def clear_nomenclature():
+    """Удаляет из номенклатуры все позиции, которые нигде не использовались
+    (нет остатков, нет строк ни в одном документе/движении) — например,
+    чтобы стереть пробный/ошибочный импорт перед чистой загрузкой. Товары,
+    хоть раз засветившиеся в реальных данных, не трогаем — иначе документы
+    и остатки, которые на них ссылаются, осиротеют."""
+    if not current_user.is_admin:
+        flash("Очищать номенклатуру может только администратор", "danger")
+        return redirect(url_for("nomenclature.list_nomenclature"))
+
+    referenced_ids = _referenced_nomenclature_ids()
 
     query = Nomenclature.query
     if referenced_ids:
@@ -345,6 +354,32 @@ def update_name(item_id):
     item.name = name
     db.session.commit()
     flash(f"Наименование обновлено на «{name}»", "success")
+    return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+
+@bp.route("/<int:item_id>/delete", methods=["POST"])
+def delete_nomenclature(item_id):
+    """Удаление одного товара — доступно только администратору. Как и
+    массовая очистка (clear_nomenclature), не удаляет товар, если на него
+    где-либо ссылаются реальные данные (остатки, строки документов) —
+    иначе эти записи осиротеют."""
+    q = request.form.get("q", "")
+    if not current_user.is_admin:
+        flash("Удалять товар может только администратор", "danger")
+        return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+    item = Nomenclature.query.get_or_404(item_id)
+    if item.id in _referenced_nomenclature_ids():
+        flash(
+            f"Нельзя удалить «{item.name}» — по нему есть остатки или документы",
+            "danger",
+        )
+        return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+    name = item.name
+    db.session.delete(item)
+    db.session.commit()
+    flash(f"Товар «{name}» удален", "success")
     return redirect(url_for("nomenclature.list_nomenclature", q=q))
 
 
