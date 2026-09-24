@@ -100,6 +100,22 @@ def test_mp_request_filter_narrows_across_all_documents(db, client_logged_in):
     assert "PER-PAGE-003" not in html
 
 
+def test_search_by_marketplace_request_number(db, client_logged_in):
+    """Поиск по номеру заявки на МП (MovementDocument.marketplace_request_number)
+    — отдельно от фильтра mp_request=yes/no, ищет по самому значению номера
+    (см. чат)."""
+    documents = _create_documents(3)
+    documents[0].marketplace_request_number = "REQ-778899"
+    documents[0].marketplace_request_created_at = datetime(2026, 1, 2)
+    db.session.commit()
+
+    html = client_logged_in.get("/movement/?q=778899").get_data(as_text=True)
+
+    assert "PER-PAGE-001" in html
+    assert "PER-PAGE-002" not in html
+    assert "PER-PAGE-003" not in html
+
+
 def _make_box_document(number, box_number, sender_name, dest_name, dest_marketplace=None):
     sender = Warehouse(code=f"WH-MULTI-{number}A", name=sender_name)
     dest = Warehouse(
