@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
@@ -1488,12 +1488,34 @@ def export_all():
     )
 
 
+def _parse_report_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 @bp.route("/export-summary.xlsx")
 def export_summary():
     """Сводный список перемещений — одна строка на документ (кол-во
     коробов и кол-во товара), а не на каждую позицию, как в export_all —
-    для быстрой сверки объемов без разбора по товарам."""
-    documents = _visible_movement_query().order_by(MovementDocument.created_at.desc()).all()
+    для быстрой сверки объемов без разбора по товарам. Вторая страница
+    файла — отгрузки по дням (см. export_movement_summary_to_excel).
+
+    date_from/date_to (необязательные, формат YYYY-MM-DD) ограничивают
+    отчет документами, отгруженными в этот период (по MovementDocument.
+    shipped_at — когда транспорт физически забрал товар); без них в отчет
+    попадают все документы, как раньше."""
+    query = _visible_movement_query()
+    date_from = _parse_report_date(request.args.get("date_from", ""))
+    date_to = _parse_report_date(request.args.get("date_to", ""))
+    if date_from:
+        query = query.filter(MovementDocument.shipped_at >= date_from)
+    if date_to:
+        query = query.filter(MovementDocument.shipped_at < date_to + timedelta(days=1))
+    documents = query.order_by(MovementDocument.created_at.desc()).all()
     data = export_movement_summary_to_excel(documents)
     fname = f"movements_summary_{timestamp_for_filename()}.xlsx"
     return Response(

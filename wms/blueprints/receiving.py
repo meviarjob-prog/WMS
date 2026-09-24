@@ -14,7 +14,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
@@ -28,6 +28,7 @@ from ..models import (
     SupplierReturn,
     UnplacedStock,
     UnplacedStockLot,
+    User,
     Warehouse,
 )
 from ..utils.document_access import get_owned_or_404
@@ -121,6 +122,41 @@ def _next_redirect(doc_id):
     return redirect(url_for("receiving.detail", doc_id=doc_id))
 
 
+def _receiving_search_token_condition(token):
+    """Условие для ОДНОГО слова поискового запроса — совпадение в любом из
+    полей (номер, поставщик — как свободный текст, так и из справочника,
+    № заказа, склад, автор). Несколько слов объединяются через И (см.
+    _apply_receiving_search) — как в поиске по перемещениям (см. чат и
+    movement._movement_search_token_condition)."""
+    like = f"%{token}%"
+    return or_(
+        ReceivingDocument.number.ilike(like),
+        ReceivingDocument.supplier.ilike(like),
+        ReceivingDocument.order_number.ilike(like),
+        ReceivingDocument.supplier_ref.has(
+            or_(Supplier.name.ilike(like), Supplier.inn.ilike(like))
+        ),
+        ReceivingDocument.warehouse.has(Warehouse.name.ilike(like)),
+        ReceivingDocument.created_by.has(
+            or_(User.username.ilike(like), User.full_name.ilike(like))
+        ),
+    )
+
+
+def _apply_receiving_search(query):
+    """Фильтрует запрос по поисковой строке q — разбивается по пробелам,
+    документ должен совпасть по КАЖДОМУ слову (не обязательно в одном и
+    том же поле, см. _receiving_search_token_condition), как поиск по
+    перемещениям (см. чат)."""
+    q = request.args.get("q", "").strip()
+    if not q:
+        return query
+    tokens = q.split()
+    return query.filter(
+        and_(*(_receiving_search_token_condition(token) for token in tokens))
+    )
+
+
 @bp.route("/")
 def list_documents():
     # "Приемка по накладной" — документы, созданные загрузкой файла
@@ -129,7 +165,7 @@ def list_documents():
     # от ручного создания, где поставщик — просто свободный текст.
     unfinished_only = request.args.get("unfinished") == "on"
     invoice_only = request.args.get("invoice_only") == "on"
-    supplier_q = request.args.get("supplier", "").strip()
+    q = request.args.get("q", "").strip()
     warehouse_id = request.args.get("warehouse_id", type=int)
 
     query = _visible_receiving_query()
@@ -137,8 +173,7 @@ def list_documents():
         query = query.filter(ReceivingDocument.status != "completed")
     if invoice_only:
         query = query.filter(ReceivingDocument.supplier_id.isnot(None))
-    if supplier_q:
-        query = query.filter(ReceivingDocument.supplier.ilike(f"%{supplier_q}%"))
+    query = _apply_receiving_search(query)
     if warehouse_id:
         query = query.filter(ReceivingDocument.warehouse_id == warehouse_id)
 
@@ -183,7 +218,7 @@ def list_documents():
         documents=documents,
         unfinished_only=unfinished_only,
         invoice_only=invoice_only,
-        supplier_q=supplier_q,
+        q=q,
         warehouse_id=warehouse_id,
         warehouses=_receiving_warehouses(),
         returns_count_by_doc=returns_count_by_doc,

@@ -334,11 +334,26 @@ MOVEMENT_SUMMARY_HEADERS = [
 ]
 
 
+MOVEMENT_DAILY_SHIPMENTS_HEADERS = [
+    "Дата отгрузки",
+    "Кол-во коробов",
+    "Кол-во товара, шт",
+]
+
+
 def export_movement_summary_to_excel(documents) -> bytes:
     """Одна строка на документ перемещения целиком (в отличие от
     export_movement_to_excel, где строка на каждый товар в каждом коробе) —
     только количество коробов и суммарное количество товара, для быстрой
-    сверки объемов без разбора по позициям."""
+    сверки объемов без разбора по позициям.
+
+    Вторая страница — та же выборка документов, сгруппированная по дню
+    отгрузки (Warehouse.shipped_at — когда транспорт физически забрал
+    товар): суммарно коробов и товара за каждый день (документы без
+    отметки об отгрузке в эту сводку не попадают — для них еще нет дня
+    отгрузки). Период для обеих страниц задается на уровне выборки
+    documents (см. movement.export_summary — date_from/date_to по
+    shipped_at)."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Перемещения (сводно)"
@@ -346,6 +361,7 @@ def export_movement_summary_to_excel(documents) -> bytes:
 
     status_map = {"draft": "Черновик", "completed": "Завершен", "merged": "Объединен"}
 
+    daily = {}
     for doc in documents:
         ws.append(
             [
@@ -367,6 +383,16 @@ def export_movement_summary_to_excel(documents) -> bytes:
                 doc.total_plan_fact_qty(),
             ]
         )
+        if doc.shipped_at:
+            day = doc.shipped_at.date()
+            box_count, item_qty = daily.get(day, (0, 0))
+            daily[day] = (box_count + doc.lines.count(), item_qty + doc.total_item_qty())
+
+    ws2 = wb.create_sheet("Отгрузки по дням")
+    _style_header(ws2, MOVEMENT_DAILY_SHIPMENTS_HEADERS)
+    for day in sorted(daily):
+        box_count, item_qty = daily[day]
+        ws2.append([day.strftime("%Y-%m-%d"), box_count, item_qty])
 
     buffer = io.BytesIO()
     wb.save(buffer)

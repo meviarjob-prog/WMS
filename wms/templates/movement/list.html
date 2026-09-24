@@ -6,7 +6,14 @@
   <h3 class="mb-0">Перемещение товара</h3>
   <div class="d-flex flex-wrap gap-2">
     <a class="btn btn-outline-primary" href="{{ url_for('movement.box_transfer') }}">↔ Из короба в короб</a>
-    <a class="btn btn-outline-secondary d-none d-md-inline-block" href="{{ url_for('movement.export_summary') }}" title="Одна строка на документ: кол-во коробов и кол-во товара">📊 Сводный экспорт</a>
+    <form method="get" action="{{ url_for('movement.export_summary') }}"
+          class="d-none d-md-flex align-items-center gap-1"
+          title="Одна строка на документ (кол-во коробов и кол-во товара) + отдельная страница с отгрузками по дням">
+      <input type="date" name="date_from" class="form-control form-control-sm" style="width:150px" title="Отгружено с">
+      <span>—</span>
+      <input type="date" name="date_to" class="form-control form-control-sm" style="width:150px" title="Отгружено по">
+      <button type="submit" class="btn btn-outline-secondary">📊 Сводный экспорт</button>
+    </form>
     <a class="btn btn-primary" href="{{ url_for('movement.new_document') }}">➕ Новое перемещение</a>
   </div>
 </div>

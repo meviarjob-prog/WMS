@@ -166,3 +166,74 @@ def test_summary_export_excludes_no_documents_and_response_is_xlsx(db, client_lo
     resp = client_logged_in.get("/movement/export-summary.xlsx")
     assert resp.status_code == 200
     assert resp.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def test_summary_export_has_daily_shipments_sheet(db, client_logged_in):
+    """Вторая страница файла — отгрузки по дням: суммарно коробов и товара
+    за каждый день отгрузки (shipped_at), документы без отметки об отгрузке
+    в эту страницу не попадают (см. чат)."""
+    day1 = datetime(2026, 9, 1, 10, 0)
+    day2 = datetime(2026, 9, 2, 11, 0)
+    _make_movement_with_boxes("MSUM-D1", [3, 2], receiver_code="WH-MSUM-D1", shipped_at=day1)
+    _make_movement_with_boxes("MSUM-D2", [5], receiver_code="WH-MSUM-D2", shipped_at=day1)
+    _make_movement_with_boxes("MSUM-D3", [4], receiver_code="WH-MSUM-D3", shipped_at=day2)
+    _make_movement_with_boxes("MSUM-D4-NOSHIP", [10], receiver_code="WH-MSUM-D4")
+
+    resp = client_logged_in.get("/movement/export-summary.xlsx")
+    wb = openpyxl.load_workbook(io.BytesIO(resp.data))
+
+    assert wb.sheetnames == ["Перемещения (сводно)", "Отгрузки по дням"]
+    ws2 = wb["Отгрузки по дням"]
+    header = [c.value for c in ws2[1]]
+    assert header == ["Дата отгрузки", "Кол-во коробов", "Кол-во товара, шт"]
+
+    rows = {row[0]: (row[1], row[2]) for row in ws2.iter_rows(min_row=2, values_only=True) if row[0]}
+    assert rows["2026-09-01"] == (3, 10)  # 2 короба + 1 короб = 3; (3+2)+5 = 10 шт
+    assert rows["2026-09-02"] == (1, 4)
+    assert len(rows) == 2  # неотгруженный документ (MSUM-D4) не попал
+
+
+def test_summary_export_date_range_filters_by_shipped_at(db, client_logged_in):
+    early = datetime(2026, 8, 1, 10, 0)
+    inside = datetime(2026, 9, 10, 10, 0)
+    late = datetime(2026, 10, 1, 10, 0)
+    doc_early = _make_movement_with_boxes("MSUM-R1", [1], receiver_code="WH-MSUM-R1", shipped_at=early)
+    doc_inside = _make_movement_with_boxes("MSUM-R2", [1], receiver_code="WH-MSUM-R2", shipped_at=inside)
+    doc_late = _make_movement_with_boxes("MSUM-R3", [1], receiver_code="WH-MSUM-R3", shipped_at=late)
+
+    resp = client_logged_in.get("/movement/export-summary.xlsx?date_from=2026-09-01&date_to=2026-09-30")
+    rows = _read_xlsx_rows(resp.data)
+    numbers = {r[0] for r in rows}
+
+    assert doc_inside.number in numbers
+    assert doc_early.number not in numbers
+    assert doc_late.number not in numbers
+
+
+def test_summary_export_date_to_is_inclusive_of_whole_day(db, client_logged_in):
+    end_of_day = datetime(2026, 9, 30, 23, 59)
+    doc = _make_movement_with_boxes("MSUM-R4", [1], receiver_code="WH-MSUM-R4", shipped_at=end_of_day)
+
+    resp = client_logged_in.get("/movement/export-summary.xlsx?date_from=2026-09-01&date_to=2026-09-30")
+    numbers = {r[0] for r in _read_xlsx_rows(resp.data)}
+
+    assert doc.number in numbers
+
+
+def test_summary_export_without_dates_includes_everything_like_before(db, client_logged_in):
+    doc_no_ship = _make_movement_with_boxes("MSUM-R5", [1], receiver_code="WH-MSUM-R5")
+    doc_shipped = _make_movement_with_boxes(
+        "MSUM-R6", [1], receiver_code="WH-MSUM-R6", shipped_at=datetime(2020, 1, 1)
+    )
+
+    resp = client_logged_in.get("/movement/export-summary.xlsx")
+    numbers = {r[0] for r in _read_xlsx_rows(resp.data)}
+
+    assert doc_no_ship.number in numbers
+    assert doc_shipped.number in numbers
+
+
+def test_list_page_has_summary_export_date_range_fields(db, client_logged_in):
+    html = client_logged_in.get("/movement/").get_data(as_text=True)
+    assert 'name="date_from"' in html
+    assert 'name="date_to"' in html

@@ -27,7 +27,8 @@
     {% endfor %}
   </select>
   <div class="d-flex gap-1">
-    <input type="text" name="supplier" class="form-control form-control-sm" style="max-width:220px" placeholder="Поставщик" value="{{ supplier_q }}">
+    <input type="text" name="q" class="form-control form-control-sm" style="max-width:320px"
+           placeholder="Поиск: номер, поставщик, № заказа, склад, автор — можно несколько слов" value="{{ q }}">
     <button type="submit" class="btn btn-sm btn-outline-primary">Найти</button>
   </div>
 </form>
