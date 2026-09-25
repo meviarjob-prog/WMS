@@ -425,6 +425,28 @@ class UnplacedStock(db.Model):
             .all()
         )
 
+    def initial_qty(self):
+        """Сколько изначально пришло по партиям, из которых складывается
+        ТЕКУЩИЙ остаток (см. активные — active_lots(), полностью
+        размещенные партии сюда уже не входят, они больше не часть этого
+        остатка). None — партий нет (остаток заведен до появления партий,
+        начальное количество неизвестно)."""
+        lots = self.active_lots()
+        if not lots:
+            return None
+        return sum(lot.qty_received for lot in lots)
+
+    def placed_qty(self):
+        """Сколько из initial_qty() уже размещено (упаковано в короба/
+        расставлено) — разница между тем, что пришло, и тем, что еще
+        числится неразмещенным (см. чат: колонки "начальный остаток" и
+        "сколько размещено" на странице Размещения). None — как и у
+        initial_qty(), если партий нет."""
+        initial = self.initial_qty()
+        if initial is None:
+            return None
+        return max(initial - self.qty, 0)
+
 
 class UnplacedStockLot(db.Model):
     """Одна партия неразмещенного остатка — привязана к конкретной приемке

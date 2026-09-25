@@ -42,7 +42,7 @@
       </div>
       <p class="text-muted small d-none d-md-block">{{ hint_stock }}</p>
       <table class="table table-sm table-mobile-compact">
-        <thead><tr><th>Склад</th><th>Штрихкод</th><th>Наименование</th><th>Размер</th><th>Кол-во</th><th>Поступление</th></tr></thead>
+        <thead><tr><th>Склад</th><th>Штрихкод</th><th>Наименование</th><th>Размер</th><th>Начальный остаток</th><th>Размещено</th><th>Кол-во</th><th>Поступление</th></tr></thead>
         <tbody>
         {% for row in stock_rows %}
           <tr>
@@ -50,6 +50,8 @@
             <td>{{ row.nomenclature.barcode }}</td>
             <td>{{ row.nomenclature.name }}</td>
             <td>{{ row.nomenclature.size or '' }}</td>
+            <td>{{ row.initial_qty() if row.initial_qty() is not none else '—' }}</td>
+            <td>{{ row.placed_qty() if row.placed_qty() is not none else '—' }}</td>
             <td>{{ row.qty }} {{ row.nomenclature.unit }}</td>
             <td class="small text-muted">
               {% for lot in row.active_lots() %}
@@ -60,7 +62,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="6" class="text-muted">Неразмещенных остатков нет</td></tr>
+          <tr><td colspan="8" class="text-muted">Неразмещенных остатков нет</td></tr>
         {% endfor %}
         </tbody>
       </table>
