@@ -56,7 +56,10 @@ def test_manual_add_over_threshold_flashes_warning(db, client_logged_in):
     warehouse = Warehouse(code="WH-BQ2", name="Склад для проверки порога 2")
     db.session.add(warehouse)
     db.session.commit()
-    category = ProductCategory(name="Шапка-тест", keywords="шапка-тест", box_qty_warning=300)
+    # Порог ниже 300 (см. wms.blueprints.receiving.BOX_QTY_LIMIT — жесткий
+    # запрет на короб целиком) — иначе превышение категорийного порога
+    # недостижимо, hard-cap блокирует раньше.
+    category = ProductCategory(name="Шапка-тест", keywords="шапка-тест", box_qty_warning=200)
     db.session.add(category)
     db.session.commit()
     item = Nomenclature(
@@ -69,7 +72,7 @@ def test_manual_add_over_threshold_flashes_warning(db, client_logged_in):
 
     resp = client_logged_in.post(
         f"/receiving/{doc_id}/boxes/{box_id}/lines/add",
-        data={"nomenclature_id": item.id, "qty": 301},
+        data={"nomenclature_id": item.id, "qty": 201},
         follow_redirects=True,
     )
 
@@ -115,11 +118,16 @@ def test_no_warning_when_category_has_no_threshold(db, client_logged_in):
 
     doc_id, box_id = _make_doc_with_box(client_logged_in, warehouse)
 
+    # qty ограничена жестким лимитом короба (BOX_QTY_LIMIT=300, см.
+    # test_receiving_box_qty_limit.py) — здесь проверяем только отсутствие
+    # мягкого категорийного предупреждения, а не сам лимит.
     resp = client_logged_in.post(
         f"/receiving/{doc_id}/boxes/{box_id}/lines/add-by-barcode",
-        json={"barcode": item.barcode, "qty": 100000},
+        json={"barcode": item.barcode, "qty": 300},
     )
-    assert "warning" not in resp.get_json()
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert "warning" not in data
 
 
 def test_bootstrap_categories_backfills_default_thresholds(db):
