@@ -44,6 +44,17 @@ def _upload(client, sheet_name, rows):
     )
 
 
+def _picking_row_tag(html, barcode):
+    """Полный открывающий тег <tr ...> строки товара — ищем от начала тега
+    до его закрывающего ">", а не просто до первого вхождения штрихкода в
+    html (штрихкод встречается и внутри data-search-text раньше, чем
+    data-priority, — срез до него обрезал бы половину атрибутов)."""
+    idx = html.find(barcode)
+    row_start = html.rfind("<tr", 0, idx)
+    row_end = html.find(">", row_start)
+    return html[row_start:row_end + 1]
+
+
 def _make_sender_with_packed_stock(item, qty, code="WH-PRIO-SENDER"):
     sender = Warehouse.query.filter_by(code=code).first()
     if not sender:
@@ -312,3 +323,42 @@ def test_dashboard_no_stock_wins_over_priority_color(db, client_logged_in):
     row_html = html[row_start:idx]
     assert "table-danger" in row_html
     assert "table-success" not in row_html
+
+
+def test_dashboard_has_priority_only_checkbox(db, client_logged_in):
+    """Галочка — часть карточки "Что нужно отправить", которая рендерится
+    только когда в picking_list вообще есть позиции (см. {% if
+    picking_list %} в шаблоне), поэтому тесту нужен хотя бы один товар."""
+    item = Nomenclature(sku="SKU-PRIO-13", barcode="7770200013", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    _make_sender_with_packed_stock(item, qty=10, code="WH-PRIO-13")
+    _upload(client_logged_in, "Распределение ОЗОН ФБС от 01.09", [("7770200013", None, {"Москва": 10})])
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    assert 'data-picking-priority-only="picking"' in html
+    assert "Приоритетные товары" in html
+
+
+def test_dashboard_row_carries_priority_data_attribute(db, client_logged_in):
+    item = Nomenclature(sku="SKU-PRIO-11", barcode="7770200011", name="Товар с приоритетом", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    _make_sender_with_packed_stock(item, qty=10, code="WH-PRIO-11")
+
+    _upload(client_logged_in, "Распределение ОЗОН ФБС от 01.09", [("7770200011", 1, {"Москва": 10})])
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    assert 'data-priority="1"' in _picking_row_tag(html, "7770200011")
+
+
+def test_dashboard_row_without_priority_has_empty_priority_attribute(db, client_logged_in):
+    item = Nomenclature(sku="SKU-PRIO-12", barcode="7770200012", name="Товар без приоритета", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    _make_sender_with_packed_stock(item, qty=10, code="WH-PRIO-12")
+
+    _upload(client_logged_in, "Распределение ОЗОН ФБС от 01.09", [("7770200012", None, {"Москва": 10})])
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    assert 'data-priority=""' in _picking_row_tag(html, "7770200012")

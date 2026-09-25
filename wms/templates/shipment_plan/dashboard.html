@@ -137,7 +137,13 @@
 <div class="card p-3 mb-4">
   <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
     <h5 class="mb-0">Что нужно отправить <span class="text-muted small">(осталось по плану, {{ picking_list|length }} поз., ОЗОН и ВБ вместе)</span></h5>
-    <input type="text" class="form-control form-control-sm" style="max-width:260px" placeholder="Поиск по артикулу/штрихкоду..." data-picking-search="picking">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <div class="form-check mb-0">
+        <input type="checkbox" class="form-check-input" id="picking-priority-only" data-picking-priority-only="picking">
+        <label class="form-check-label" for="picking-priority-only">Приоритетные товары</label>
+      </div>
+      <input type="text" class="form-control form-control-sm" style="max-width:260px" placeholder="Поиск по артикулу/штрихкоду..." data-picking-search="picking">
+    </div>
   </div>
   <div class="table-responsive">
     <table class="table table-sm table-hover" id="picking-picking" style="font-size:12px">
@@ -177,7 +183,7 @@
            запас — no_stock важнее (нечем отгружать вообще) и имеет
            приоритет над цветом приоритета. Колонки "Приоритет" в таблице
            нет — только фон строки. #}
-        <tr class="{% if p.no_stock %}table-danger{% elif p.priority == 1 %}table-success{% elif p.priority == 2 %}table-warning{% elif p.priority == 0 %}table-info{% endif %}" data-search-text="{{ (p.article or '') ~ ' ' ~ p.barcode }}">
+        <tr class="{% if p.no_stock %}table-danger{% elif p.priority == 1 %}table-success{% elif p.priority == 2 %}table-warning{% elif p.priority == 0 %}table-info{% endif %}" data-search-text="{{ (p.article or '') ~ ' ' ~ p.barcode }}" data-priority="{{ p.priority if p.priority is not none else '' }}">
           <td>{{ p.article }}</td>
           <td>{{ p.size or '' }}</td>
           <td>{{ p.barcode }}</td>
@@ -226,16 +232,29 @@
 
 {% block scripts %}
 <script>
-  document.querySelectorAll("[data-picking-search]").forEach(function (input) {
-    var table = document.getElementById("picking-" + input.dataset.pickingSearch);
+  // Поиск по тексту и галочка "Приоритетные товары" работают на одних и
+  // тех же строках вместе — строка скрывается, если не проходит хотя бы
+  // один из двух активных фильтров (см. чат).
+  document.querySelectorAll("[data-picking-search], [data-picking-priority-only]").forEach(function (control) {
+    var key = control.dataset.pickingSearch || control.dataset.pickingPriorityOnly;
+    var table = document.getElementById("picking-" + key);
     if (!table) return;
-    input.addEventListener("input", function () {
-      var q = input.value.trim().toLowerCase();
+    var scope = table.closest(".card");
+    var searchInput = scope.querySelector("[data-picking-search='" + key + "']");
+    var priorityCheckbox = scope.querySelector("[data-picking-priority-only='" + key + "']");
+
+    function applyFilters() {
+      var q = (searchInput && searchInput.value.trim().toLowerCase()) || "";
+      var priorityOnly = priorityCheckbox && priorityCheckbox.checked;
       table.querySelectorAll("tbody tr:not(.picking-totals-row)").forEach(function (tr) {
         var text = (tr.dataset.searchText || "").toLowerCase();
-        tr.hidden = q.length > 0 && text.indexOf(q) === -1;
+        var matchesSearch = q.length === 0 || text.indexOf(q) !== -1;
+        var matchesPriority = !priorityOnly || (tr.dataset.priority || "") !== "";
+        tr.hidden = !matchesSearch || !matchesPriority;
       });
-    });
+    }
+
+    control.addEventListener(control.type === "checkbox" ? "change" : "input", applyFilters);
   });
 </script>
 {% endblock %}
