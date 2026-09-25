@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}SINANA — мой маршрут{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='css/trade.css') }}">{% endblock %}
+{% block content %}
+<script>document.body.classList.add('trade-page')</script>
+<div class="trade-mobile">
+  <section class="mobile-head">
+    <div class="d-flex justify-content-between align-items-center"><div><div class="sn-eyebrow">SINANA · представитель</div><h1 class="sn-title mb-0">Мой маршрут</h1><div class="sn-subtitle">{{ representative.display_name() }} · {{ today.strftime('%d.%m.%Y') }}</div></div><span class="sn-monogram">S</span></div>
+    <div class="mobile-summary"><small>Заказы сегодня</small><strong>{{ '{:,.0f}'.format(sales_today).replace(',', ' ') }} ₽</strong><small>{{ orders_today|length }} заказов · {{ completed_count }} посещений завершено</small></div>
+  </section>
+  <div class="route-stat"><div class="sn-card"><strong>{{ visits|length }}</strong><span>точек</span></div><div class="sn-card"><strong>{{ completed_count }}</strong><span>посещено</span></div><div class="sn-card"><strong>{{ visits|length - completed_count }}</strong><span>осталось</span></div></div>
+  {% for visit in visits %}
+  <article class="sn-card visit-card {{ visit.status }}">
+    <div class="d-flex gap-3 align-items-start"><span class="visit-seq">{{ visit.sequence }}</span><div class="flex-grow-1"><div class="d-flex justify-content-between gap-2"><b>{{ visit.customer.name }}</b>{% if visit.status == 'completed' %}<span class="status-pill delivered">готово</span>{% elif visit.status == 'in_progress' %}<span class="status-pill submitted">идет визит</span>{% endif %}</div><div class="visit-address">{{ visit.customer.address }}</div>{% if visit.customer.debt %}<div class="small text-danger mt-1">Задолженность {{ '{:,.0f}'.format(visit.customer.debt).replace(',', ' ') }} ₽</div>{% endif %}</div></div>
+    {% if visit.status != 'completed' %}<div class="visit-actions">{% if visit.status == 'planned' %}<form method="post" action="{{ url_for('trade.visit_action', visit_id=visit.id, action='start') }}"><button class="btn btn-sm btn-sn-dark">Начать визит</button></form>{% endif %}<a class="btn btn-sm btn-sn-rose" href="{{ url_for('trade.new_order', customer_id=visit.customer_id) }}">Создать заказ</a><form method="post" action="{{ url_for('trade.visit_action', visit_id=visit.id, action='no-order') }}"><button class="btn btn-sm btn-outline-secondary">Без заказа</button></form></div>{% elif visit.result == 'order' %}<div class="small text-success mt-2">Заказ принят</div>{% elif visit.result == 'no_order' %}<div class="small text-muted mt-2">Завершено без заказа</div>{% endif %}
+  </article>
+  {% else %}
+  <div class="sn-card sn-section text-center"><div class="sn-monogram mx-auto mb-3" style="color:#17201e;border-color:#b99191">S</div><h2 class="sn-section-title">Маршрут на сегодня не назначен</h2><p class="text-muted mb-0 mt-2">После назначения торговые точки появятся здесь автоматически.</p></div>
+  {% endfor %}
+</div>
+{% endblock %}
