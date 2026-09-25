@@ -354,3 +354,50 @@ def test_route_box_add_blocks_box_already_in_transit_completed_movement(db, clie
     assert "уже отсканирован в другое перемещение" in html
     assert "в пути" in html
     assert MovementLine.query.filter_by(box_id=box.id).count() == 1
+
+
+def test_routing_uses_distributed_target_for_priority_items(db, client_logged_in):
+    """Для приоритетных товаров (см. чат) подсказка маршрута ориентируется
+    на distributed_target_qty (пропорция от "готово к отгрузке"), а не на
+    жесткий planned_qty города — так и было подтверждено в обсуждении."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    line = ShipmentPlanLine.query.filter_by(warehouse_id=city.id, nomenclature_id=item.id).first()
+    line.priority = 1
+    line.distributed_target_qty = 5
+    db.session.commit()
+
+    box = _make_box(sender, item, qty=10, box_number="BOX-000002")
+
+    routing = _compute_routing(box)
+
+    assert len(routing) == 1
+    # Цель — 5 (distributed_target_qty), а не 10 (в коробе) и не 30 (план).
+    assert routing[0]["matched_qty"] == 5
+    assert routing[0]["items"][0]["remaining"] == 5
+
+
+def test_routing_ignores_priority_item_with_zero_distributed_target(db, client_logged_in):
+    sender, city, item = _setup_plan(planned_qty=30)
+    line = ShipmentPlanLine.query.filter_by(warehouse_id=city.id, nomenclature_id=item.id).first()
+    line.priority = 1
+    line.distributed_target_qty = 0
+    db.session.commit()
+
+    box = _make_box(sender, item, qty=10, box_number="BOX-000003")
+
+    routing = _compute_routing(box)
+
+    assert routing == []
+
+
+def test_routing_without_priority_still_uses_planned_qty(db, client_logged_in):
+    """Регрессия: товары без приоритета продолжают маршрутизироваться по
+    обычному plan-based remaining, как раньше."""
+    sender, city, item = _setup_plan(planned_qty=30)
+    box = _make_box(sender, item, qty=10, box_number="BOX-000004")
+
+    routing = _compute_routing(box)
+
+    assert len(routing) == 1
+    assert routing[0]["matched_qty"] == 10
+    assert routing[0]["items"][0]["remaining"] == 30

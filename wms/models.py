@@ -1175,6 +1175,21 @@ class ShipmentPlanLine(db.Model):
     # задержки поставки конкретного SKU. Читается из Google/Excel заново
     # при каждой загрузке плана, как и planned_qty.
     buyer_comment = db.Column(db.Text)
+    # Приоритет из колонки "Приоритет" файла плана (см. чат) — один и тот
+    # же на все города/площадки этого штрихкода (колонка стоит до городов,
+    # читается один раз на строку). Не участвует в выполнении плана — либо
+    # красит строку товара в "Что нужно отправить" на дашборде, либо (для
+    # значений 0/1/2) переключает распределение по городам на
+    # distributed_target_qty вместо planned_qty (см. ниже).
+    priority = db.Column(db.Integer, nullable=True)
+    # Для приоритетных товаров (priority in (0, 1, 2)) — целевое количество
+    # НА ЭТОТ ГОРОД, посчитанное при синхронизации плана как доля текущего
+    # "готово к отгрузке" по штрихкоду пропорционально доле города в общем
+    # плане (см. shipment_plan._apply_priority_distribution) — вместо
+    # жесткого planned_qty города, если фактически упакованного товара
+    # больше или меньше, чем весь план. NULL — приоритет не задан, либо
+    # план по этому штрихкоду нулевой (не с чем считать долю).
+    distributed_target_qty = db.Column(db.Float, nullable=True)
 
     warehouse = db.relationship("Warehouse")
     nomenclature = db.relationship("Nomenclature")
@@ -1182,6 +1197,20 @@ class ShipmentPlanLine(db.Model):
     __table_args__ = (
         db.UniqueConstraint("plan_id", "warehouse_id", "barcode", name="uq_plan_warehouse_barcode"),
     )
+
+    def effective_planned_qty(self):
+        """planned_qty этого города — либо, для приоритетных товаров с уже
+        посчитанным распределением, пропорциональная цель по факту "готово
+        к отгрузке" вместо жесткого плана города (см. distributed_target_qty
+        и чат). Используется ТОЛЬКО подсказкой "куда везти короб" (см.
+        movement._compute_routing) — сознательно не участвует в
+        remaining_qty()/дашборде: там план и так уже показывает разрыв с
+        планом по каждому городу, а при нулевом "готово к отгрузке" эта
+        цель обнулилась бы и товар с реальной нехваткой пропал бы из
+        "Что нужно отправить" вместо того чтобы показать проблему."""
+        if self.priority in (0, 1, 2) and self.distributed_target_qty is not None:
+            return self.distributed_target_qty
+        return self.planned_qty
 
     def remaining_qty(self):
         fulfilled_qty = getattr(self, "current_fulfilled_qty", self.fulfilled_qty)

@@ -147,6 +147,20 @@ def _find_comment_col(ws, header_row, max_col=None):
     return None
 
 
+def _find_priority_col(ws, header_row, max_col=None):
+    """Колонка "Приоритет" — как и комментарий, может стоять где угодно
+    относительно штрихкода (обычно среди служебных колонок правее, см.
+    "приорит" в _SUBCOLUMN_MARKERS — именно поэтому она туда и попала: не
+    спутать со столбцом-городом), поэтому ищем по всей строке заголовка, а
+    не только левее штрихкода, как артикул/размер."""
+    max_col = max_col or ws.max_column
+    for c in range(1, max_col + 1):
+        v = _norm(ws.cell(row=header_row, column=c).value).lower()
+        if "приорит" in v:
+            return c
+    return None
+
+
 def _find_city_columns(ws, header_row, start_col, end_col=None):
     """[(plan_col, city_name, fact_col), ...] — plan_col это первая колонка
     группы города (план по количеству); fact_col — колонка "отгружен / в
@@ -212,6 +226,18 @@ def _to_qty(value):
     return qty if qty > 0 else None
 
 
+def _to_priority(value):
+    """Значение колонки "Приоритет" — целое число (обычно 0/1/2, см. чат),
+    либо None, если ячейка пуста или не парсится как число (нетронутая
+    строка без приоритета не должна падать на нечитаемом значении)."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def _to_fact_qty(value):
     """В отличие от _to_qty, ноль/пусто — это законное "еще не отгружено",
     а не повод пропустить город (в отличие от плана, где qty=0 не создает
@@ -243,6 +269,7 @@ def _parse_one_sheet(ws):
     article_col = _find_label_col(ws, header_row, barcode_col, "артикул")
     size_col = _find_label_col(ws, header_row, barcode_col, "размер")
     comment_col = _find_comment_col(ws, header_row)
+    priority_col = _find_priority_col(ws, header_row)
     city_columns = _find_city_columns(ws, header_row, barcode_col + 1)
 
     cities = [name for _, name, _ in city_columns]
@@ -256,6 +283,7 @@ def _parse_one_sheet(ws):
         article = _norm(ws.cell(row=r, column=article_col).value) if article_col else ""
         size = _norm(ws.cell(row=r, column=size_col).value) if size_col else ""
         comment = _norm(ws.cell(row=r, column=comment_col).value) if comment_col else ""
+        priority = _to_priority(ws.cell(row=r, column=priority_col).value) if priority_col else None
 
         for col, city, fact_col in city_columns:
             qty = _to_qty(ws.cell(row=r, column=col).value)
@@ -281,6 +309,7 @@ def _parse_one_sheet(ws):
                     "qty": qty or 0.0,
                     "fact": fact,
                     "comment": comment,
+                    "priority": priority,
                     "_source_row": r,
                 }
             )
@@ -432,6 +461,7 @@ def _parse_combined_marketplace_sheet(ws, marketplace):
     article_col = _find_label_col(ws, header_row, barcode_col, "артикул")
     size_col = _find_label_col(ws, header_row, barcode_col, "размер")
     comment_col = _find_comment_col(ws, header_row, end_col)
+    priority_col = _find_priority_col(ws, header_row, end_col)
     city_columns = _find_city_columns(ws, header_row, start_col, end_col)
 
     cities = [name for _, name, _ in city_columns]
@@ -445,6 +475,7 @@ def _parse_combined_marketplace_sheet(ws, marketplace):
         article = _norm(ws.cell(row=r, column=article_col).value) if article_col else ""
         size = _norm(ws.cell(row=r, column=size_col).value) if size_col else ""
         comment = _norm(ws.cell(row=r, column=comment_col).value) if comment_col else ""
+        priority = _to_priority(ws.cell(row=r, column=priority_col).value) if priority_col else None
 
         for col, city, fact_col in city_columns:
             qty = _to_qty(ws.cell(row=r, column=col).value)
@@ -460,6 +491,7 @@ def _parse_combined_marketplace_sheet(ws, marketplace):
                     "qty": qty or 0.0,
                     "fact": fact,
                     "comment": comment,
+                    "priority": priority,
                 }
             )
 

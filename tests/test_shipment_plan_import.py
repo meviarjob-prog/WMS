@@ -228,3 +228,89 @@ def test_combined_marketplace_sheet_merges_with_regular_sheet_of_same_marketplac
     assert plan is not None
     assert set(plan.cities) == {"Краснодар", "Пятигорск", "Москва"}
     assert len(plan.rows) == 3
+
+
+def test_parse_reads_priority_column():
+    """Приоритет стоит среди служебных колонок ПОСЛЕ штрихкода (как в
+    реальном файле — см. _SUBCOLUMN_MARKERS), не перед ним, как
+    артикул/размер — ищем по всей строке заголовка (см. чат)."""
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБС от 01.09": [
+                ["Артикул", "Размер", "Баркод", "Приоритет", "Москва", "Питер"],
+                ["A1", "46", "1111", 1, 5, 2],
+            ]
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    priorities = {r["city"]: r["priority"] for r in plan.rows}
+    assert priorities == {"Москва": 1, "Питер": 1}
+
+
+def test_parse_priority_column_does_not_get_mistaken_for_a_city():
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБС от 01.09": [
+                ["Артикул", "Размер", "Баркод", "Приоритет", "Москва"],
+                ["A1", "46", "1111", 2, 5],
+            ]
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    assert plan.cities == ["Москва"]
+
+
+def test_parse_priority_missing_column_is_none():
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБС от 01.09": [
+                ["Артикул", "Размер", "Баркод", "Москва"],
+                ["A1", "46", "1111", 5],
+            ]
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    assert all(r["priority"] is None for r in plan.rows)
+
+
+def test_parse_priority_blank_cell_is_none():
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБС от 01.09": [
+                ["Артикул", "Размер", "Баркод", "Приоритет", "Москва"],
+                ["A1", "46", "1111", None, 5],
+            ]
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    assert plan.rows[0]["priority"] is None
+
+
+def test_parse_priority_zero_is_kept_not_treated_as_missing():
+    """priority=0 — законное значение (см. чат: бледно-синий цвет), не
+    должно схлопываться в None как "нет данных"."""
+    data = _sheet_to_bytes(
+        {
+            "Распределение ОЗОН ФБС от 01.09": [
+                ["Артикул", "Размер", "Баркод", "Приоритет", "Москва"],
+                ["A1", "46", "1111", 0, 5],
+            ]
+        }
+    )
+
+    plan = parse_plan_sheet(data, "ozon")
+
+    assert plan is not None
+    assert plan.rows[0]["priority"] == 0

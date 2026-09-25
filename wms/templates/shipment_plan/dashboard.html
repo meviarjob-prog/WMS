@@ -173,7 +173,11 @@
           {% for city in wb_cities %}<td class="text-end{% if loop.first %} border-start border-2{% endif %}">{{ picking_totals.wb[city] | round(0) | int }}</td>{% endfor %}
         </tr>
       {% for p in picking_list %}
-        <tr{% if p.no_stock %} class="table-danger"{% endif %} data-search-text="{{ (p.article or '') ~ ' ' ~ p.barcode }}">
+        {# Приоритет из файла плана (см. чат) красит строку, когда есть
+           запас — no_stock важнее (нечем отгружать вообще) и имеет
+           приоритет над цветом приоритета. Колонки "Приоритет" в таблице
+           нет — только фон строки. #}
+        <tr class="{% if p.no_stock %}table-danger{% elif p.priority == 1 %}table-success{% elif p.priority == 2 %}table-warning{% elif p.priority == 0 %}table-info{% endif %}" data-search-text="{{ (p.article or '') ~ ' ' ~ p.barcode }}">
           <td>{{ p.article }}</td>
           <td>{{ p.size or '' }}</td>
           <td>{{ p.barcode }}</td>

@@ -303,7 +303,12 @@ def _compute_routing(box):
     группирует по складу и сортирует по тому, сколько из содержимого
     короба реально покрывает эту потребность (matched_qty), по убыванию.
     Пустой список — значит короб никому не нужен по текущему плану (короб
-    можно пропустить)."""
+    можно пропустить).
+
+    Для приоритетных товаров (см. ShipmentPlanLine.effective_planned_qty и
+    чат) целью служит не жесткий planned_qty конкретного города, а доля
+    текущего "готово к отгрузке" пропорционально доле города в общем плане
+    по штрихкоду — план по количеству для них не ограничение."""
     qty_by_item = {}
     for box_item in box.items:
         qty_by_item[box_item.nomenclature_id] = (
@@ -324,7 +329,7 @@ def _compute_routing(box):
             committed_by_period[period_start] = _committed_by_warehouse_and_item(period_start)
         committed = committed_by_period[period_start]
         already_committed = committed.get((line.warehouse_id, line.nomenclature_id), 0)
-        remaining = max(line.remaining_qty() - already_committed, 0)
+        remaining = max(line.effective_planned_qty() - line.fulfilled_qty - already_committed, 0)
         box_qty = qty_by_item.get(line.nomenclature_id, 0)
         if remaining <= 0 or box_qty <= 0:
             continue

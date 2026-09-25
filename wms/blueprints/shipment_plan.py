@@ -190,6 +190,8 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
             merged[key]["fact"] += row["fact"]
             if not merged[key].get("comment") and row.get("comment"):
                 merged[key]["comment"] = row["comment"]
+            if merged[key].get("priority") is None and row.get("priority") is not None:
+                merged[key]["priority"] = row["priority"]
             dates = [d for d in (merged[key].get("period_start"), row.get("period_start")) if d]
             # Если один SKU-город случайно повторяется в листах разных
             # периодов, считаем его частью более нового плана.
@@ -224,11 +226,61 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
                 ),
                 period_start=row.get("period_start"),
                 buyer_comment=row.get("comment") or None,
+                priority=row.get("priority"),
             )
         )
         created += 1
 
     return created, len(unmatched_barcodes)
+
+
+def _apply_priority_distribution():
+    """Для товаров с проставленным приоритетом (0/1/2, см. чат) считает
+    distributed_target_qty на каждую строку плана: не жесткий planned_qty
+    конкретного города, а доля текущего "готово к отгрузке" (упаковано в
+    короб на складе-отправителе) пропорционально доле города в общем плане
+    по этому штрихкоду — сразу по ОБОИМ маркетплейсам вместе, т.к. на
+    дашборде это одна строка товара с колонками ОЗОН/ВБ. Вызывается один
+    раз при каждой синхронизации плана (upload/sync_google), после того как
+    _apply_plan уже отработал по обеим площадкам, но до финального commit —
+    иначе "готово к отгрузке" на момент синхронизации было бы неизвестно
+    новым строкам."""
+    sender_ids = _sender_warehouse_ids()
+    stock = _stock_by_nomenclature(sender_ids)
+    unplaced = _unplaced_by_nomenclature(sender_ids)
+
+    lines = (
+        ShipmentPlanLine.query
+        .join(ShipmentPlan)
+        .filter(ShipmentPlan.marketplace.in_(MARKETPLACES))
+        .all()
+    )
+    by_barcode = {}
+    for line in lines:
+        by_barcode.setdefault(line.barcode, []).append(line)
+
+    for barcode_lines in by_barcode.values():
+        priority = next((l.priority for l in barcode_lines if l.priority is not None), None)
+        if priority not in (0, 1, 2):
+            for line in barcode_lines:
+                line.distributed_target_qty = None
+            continue
+
+        nomenclature_id = next(
+            (l.nomenclature_id for l in barcode_lines if l.nomenclature_id is not None), None
+        )
+        ready_to_ship = 0.0
+        if nomenclature_id is not None:
+            ready_to_ship = max(
+                stock.get(nomenclature_id, 0) - unplaced.get(nomenclature_id, 0), 0
+            )
+
+        total_planned = sum(l.planned_qty for l in barcode_lines)
+        for line in barcode_lines:
+            if total_planned > 0:
+                line.distributed_target_qty = ready_to_ship * (line.planned_qty / total_planned)
+            else:
+                line.distributed_target_qty = 0.0
 
 
 def _set_sync_setting(key, value):
@@ -279,6 +331,7 @@ def sync_google_plans_and_movements(uploaded_by_id=None):
     if not found_any:
         raise RuntimeError("В Google Таблице не найдено подходящих данных плана")
 
+    _apply_priority_distribution()
     db.session.commit()
     exported = write_wms_movement_sheet(current_app)
     updated_cells = write_distribution_facts(current_app, workbook)
@@ -408,6 +461,7 @@ def upload():
         )
         return redirect(url_for("shipment_plan.upload"))
 
+    _apply_priority_distribution()
     db.session.commit()
     flash("План отгрузок обновлен: " + "; ".join(summary), "success")
     return redirect(url_for("shipment_plan.dashboard"))
@@ -804,6 +858,11 @@ def _dashboard_context():
                     "total_planned": 0,
                     "total_remaining": 0,
                     "comment": "",
+                    # Один и тот же приоритет на все города/площадки этого
+                    # штрихкода (см. модель ShipmentPlanLine.priority) —
+                    # только красит строку на дашборде (см. dashboard.html),
+                    # отдельной колонки под него нет.
+                    "priority": None,
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
@@ -816,6 +875,8 @@ def _dashboard_context():
             product["total_planned"] += line.planned_qty
             if not product["comment"] and line.buyer_comment:
                 product["comment"] = line.buyer_comment
+            if product["priority"] is None and line.priority is not None:
+                product["priority"] = line.priority
 
     # "Не хватает по плану" — план за вычетом всего, что уже едет или готово
     # к отправке: в пути, готово к отгрузке (упаковано в короб) и на
