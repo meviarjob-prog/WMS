@@ -281,7 +281,17 @@ MOVEMENT_HEADERS = [
 
 def export_movement_to_excel(documents) -> bytes:
     """Одна строка на каждый товар в каждом коробе документа перемещения —
-    короб сканируется целиком, но в отчете видно содержимое."""
+    короб сканируется целиком, но в отчете видно содержимое.
+
+    Один и тот же короб не должен попадать в документ дважды (см.
+    movement.add_box/route_box_add — обе проверяют перед добавлением), но
+    на практике это все-таки может случиться при гонке двух одновременных
+    запросов (см. чат — "экспорт этого документа показывает 2220, в
+    перемещении 2147": короб с двумя MovementLine на один и тот же box_id
+    удваивал сумму по строкам, хотя total_item_qty() считает его один раз
+    через SQL SUM с фильтром по множеству box_id, где дубли естественно
+    схлопываются). Поэтому здесь тоже показываем содержимое каждого
+    короба только один раз, даже если строк документа на него несколько."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Перемещения"
@@ -290,7 +300,11 @@ def export_movement_to_excel(documents) -> bytes:
     status_map = {"draft": "Черновик", "completed": "Завершен"}
 
     for doc in documents:
+        seen_box_ids = set()
         for line in doc.lines:
+            if line.box_id in seen_box_ids:
+                continue
+            seen_box_ids.add(line.box_id)
             box_items = list(line.box.items) if line.box else []
             rows = box_items or [None]
             for box_item in rows:

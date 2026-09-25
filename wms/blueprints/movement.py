@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 from sqlalchemy import and_, func, or_
+from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
 from ..models import (
@@ -677,7 +678,14 @@ def route_box_add():
     _create_movement_line(doc, box)
     if to_warehouse.marketplace == "ozon" and doc.lines.count() >= 30:
         doc.status = "collected"
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Гонка: тот же короб добавил кто-то другой между проверкой выше и
+        # этим commit() (см. add_box и чат про документ 202).
+        db.session.rollback()
+        flash(f"Короб {box.box_number} уже добавлен в перемещение {doc.number} — кем-то другим только что", "danger")
+        return redirect(url_for("movement.list_documents"))
     # Не уводим в сам документ перемещения — сборщик сканирует короба один
     # за другим на этой же странице; открыть документ можно из списка ниже,
     # когда сборка закончена.
@@ -967,7 +975,17 @@ def add_box(doc_id):
         if doc.received_at is not None:
             _apply_shipment_fulfillment(box, doc.to_warehouse_id, doc.shipped_at)
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Гонка: кто-то другой добавил этот же короб в тот же документ
+        # секундами раньше, между проверкой выше и этим commit() (см. чат —
+        # ровно так задвоился короб в документе 202: две MovementLine на
+        # один box_id удвоили сумму в экспорте). Уникальный индекс не дал
+        # вставить дубль — откатываем и говорим как есть, а не 500-й.
+        db.session.rollback()
+        flash(f"Короб {box.box_number} уже в этом списке — его только что добавил кто-то другой", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
     if doc.status == "collected":
         flash(
             f"Короб {box.box_number} добавлен. В перемещении 30 коробов — оно отмечено как собранное.",

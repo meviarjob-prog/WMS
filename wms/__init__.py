@@ -218,6 +218,30 @@ def _ensure_indexes():
         except Exception as exc:  # noqa: BLE001
             print(f"[schema] Не удалось создать индекс токенов приемки: {exc}")
 
+    # Один короб не должен попадать в один и тот же документ перемещения
+    # дважды (add_box/route_box_add и так проверяют это перед вставкой, но
+    # два одновременных запроса могут оба пройти проверку раньше, чем
+    # первый успеет закоммититься — см. чат: "экспорт показывает 2220, в
+    # перемещении 2147", ровно такая гонка задвоила короб в документе).
+    # На базе, где дубль уже есть, создание индекса не пройдет — тогда
+    # просто логируем и не падаем, дубль по-прежнему виден и его нужно
+    # почистить вручную.
+    if inspector.has_table("movement_lines"):
+        try:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        '"uq_movement_lines_document_box" '
+                        'ON "movement_lines" ("document_id", "box_id")'
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "[schema] Не удалось создать индекс уникальности короба в "
+                f"перемещении (возможно, в базе уже есть дубли): {exc}"
+            )
+
 
 def _register_sqlite_tuning():
     """SQLite-специфичные настройки:
