@@ -237,3 +237,46 @@ def test_list_page_has_summary_export_date_range_fields(db, client_logged_in):
     html = client_logged_in.get("/movement/").get_data(as_text=True)
     assert 'name="date_from"' in html
     assert 'name="date_to"' in html
+
+
+def test_summary_export_kolvo_v_korobah_uses_sent_snapshot_not_live_qty(db, client_logged_in):
+    """Регрессия: после завершения сборки (complete()) MovementDocument.
+    sent_qty_snapshot замораживает кол-во на этот момент. Если содержимое
+    короба потом поправили (boxes.update_item и т.п. — уже после того, как
+    перемещение уехало), "живой" total_item_qty() отражает эту правку, но
+    сводный экспорт должен по-прежнему показывать то, что реально было
+    отправлено (как и список перемещений) — иначе цифры расходятся (см.
+    чат: "экспорт показывает 2220, строка показывает 2147")."""
+    sender = Warehouse(code="WH-MSUM-SNAP-A", name="Отправитель")
+    receiver = Warehouse(code="WH-MSUM-SNAP-B", name="Получатель")
+    db.session.add_all([sender, receiver])
+    db.session.commit()
+    item = _make_item("777MSUM-SNAP0")
+    doc = MovementDocument(
+        number="MSUM-SNAP", from_warehouse_id=sender.id, to_warehouse_id=receiver.id, status="draft"
+    )
+    db.session.add(doc)
+    db.session.commit()
+    box = Box(box_number="BOX-MSUM-SNAP-0", warehouse_id=sender.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=10))
+    db.session.add(MovementLine(document_id=doc.id, box_id=box.id, from_warehouse_id=sender.id))
+    db.session.commit()
+
+    # Реальное завершение через маршрут — именно оно фиксирует sent_qty_snapshot.
+    resp = client_logged_in.post(f"/movement/{doc.id}/complete", follow_redirects=True)
+    assert resp.status_code == 200
+    doc = MovementDocument.query.get(doc.id)
+    assert doc.sent_qty_snapshot == 10
+
+    # Короб поправили постфактум — фактическое содержимое выросло.
+    box_item = doc.lines.first().box.items.first()
+    box_item.qty = 73
+    db.session.commit()
+    assert doc.total_item_qty() == 73  # "живое" количество действительно изменилось
+
+    rows = _read_xlsx_rows(client_logged_in.get("/movement/export-summary.xlsx").data)
+    row = next(r for r in rows if r[0] == doc.number)
+
+    assert row[11] == 10  # "Кол-во в коробах" — снимок на момент отправки, не 73

@@ -347,6 +347,14 @@ def export_movement_summary_to_excel(documents) -> bytes:
     только количество коробов и суммарное количество товара, для быстрой
     сверки объемов без разбора по позициям.
 
+    "Кол-во в коробах" — total_sent_qty() (тот же "снимок" на момент
+    завершения сборки, что показывает и список/страница перемещения), а не
+    "живой" total_item_qty(): после завершения содержимое короба иногда
+    донастраивают (boxes.add_item/update_item/move_item — см.
+    MovementDocument.composition_changed_at), и без снимка сводка тихо
+    разъезжалась бы с тем, что видно в самом перемещении (см. чат — "экспорт
+    показывает 2220, строка показывает 2147").
+
     Вторая страница — та же выборка документов, сгруппированная по дню
     отгрузки (Warehouse.shipped_at — когда транспорт физически забрал
     товар): суммарно коробов и товара за каждый день (документы без
@@ -379,14 +387,14 @@ def export_movement_summary_to_excel(documents) -> bytes:
                 doc.shipped_at.strftime("%Y-%m-%d %H:%M") if doc.shipped_at else "",
                 doc.received_at.strftime("%Y-%m-%d %H:%M") if doc.received_at else "",
                 doc.lines.count(),
-                doc.total_item_qty(),
+                doc.total_sent_qty(),
                 doc.total_plan_fact_qty(),
             ]
         )
         if doc.shipped_at:
             day = doc.shipped_at.date()
             box_count, item_qty = daily.get(day, (0, 0))
-            daily[day] = (box_count + doc.lines.count(), item_qty + doc.total_item_qty())
+            daily[day] = (box_count + doc.lines.count(), item_qty + doc.total_sent_qty())
 
     ws2 = wb.create_sheet("Отгрузки по дням")
     _style_header(ws2, MOVEMENT_DAILY_SHIPMENTS_HEADERS)
