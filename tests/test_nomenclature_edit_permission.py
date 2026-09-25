@@ -173,6 +173,64 @@ def test_update_name_allowed_with_permission(db, client_logged_in):
     assert Nomenclature.query.get(item.id).name == "Новое название 2"
 
 
+def test_update_sku_blocked_without_permission(db, client):
+    item = Nomenclature(sku="SKU-EDIT-10", barcode="1112223334440", name="Товар 10", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    user = _make_staff_user(nomenclature_edit_allowed=False)
+    _login_as(client, user)
+
+    client.post(f"/nomenclature/{item.id}/sku", data={"sku": "NEW-SKU-10"})
+
+    assert Nomenclature.query.get(item.id).sku == "SKU-EDIT-10"
+
+
+def test_update_sku_allowed_with_permission(db, client_logged_in):
+    item = Nomenclature(sku="SKU-EDIT-11", barcode="2223334445551", name="Товар 11", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    client_logged_in.post(f"/nomenclature/{item.id}/sku", data={"sku": "NEW-SKU-11"})
+
+    assert Nomenclature.query.get(item.id).sku == "NEW-SKU-11"
+
+
+def test_update_sku_rejects_duplicate(db, client_logged_in):
+    item1 = Nomenclature(sku="SKU-EDIT-12", barcode="3334445556662", name="Товар 12", unit="шт")
+    item2 = Nomenclature(sku="SKU-EDIT-13", barcode="4445556667773", name="Товар 13", unit="шт")
+    db.session.add_all([item1, item2])
+    db.session.commit()
+
+    resp = client_logged_in.post(
+        f"/nomenclature/{item2.id}/sku", data={"sku": "SKU-EDIT-12"}, follow_redirects=True
+    )
+
+    assert "уже используется" in resp.get_data(as_text=True)
+    assert Nomenclature.query.get(item2.id).sku == "SKU-EDIT-13"
+
+
+def test_update_sku_rejects_empty(db, client_logged_in):
+    item = Nomenclature(sku="SKU-EDIT-14", barcode="5556667778884", name="Товар 14", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    client_logged_in.post(f"/nomenclature/{item.id}/sku", data={"sku": "  "})
+
+    assert Nomenclature.query.get(item.id).sku == "SKU-EDIT-14"
+
+
+def test_list_nomenclature_shows_sku_column(db, client_logged_in):
+    item = Nomenclature(sku="SKU-EDIT-15", barcode="6667778889995", name="Товар 15", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+
+    html = client_logged_in.get("/nomenclature/").get_data(as_text=True)
+
+    assert "Артикул" in html
+    assert f'value="{item.sku}"' in html
+
+
 def test_update_sections_route_can_grant_and_revoke_edit_flag(db, client_logged_in):
     user = _make_staff_user(nomenclature_edit_allowed=False)
 

@@ -227,5 +227,8 @@ def test_movement_shortage_reduces_physical_box_stock(db, client_logged_in):
     client_logged_in.post(f"/movement/{doc.id}/receive", data={f"qty_{item.id}": "7"})
 
     assert BoxItem.query.get(box_item.id).qty == 7
-    assert MovementDocument.query.get(doc.id).total_sent_qty() == 10
+    # total_sent_qty() — актуальное количество (см. чат), не старый снимок
+    # на момент отправки: после недовоза физический остаток короба уже
+    # скорректирован до факта, поэтому здесь тоже 7, а не исходные 10.
+    assert MovementDocument.query.get(doc.id).total_sent_qty() == 7
     assert MovementDocument.query.get(doc.id).total_received_qty() == 7

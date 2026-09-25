@@ -239,14 +239,13 @@ def test_list_page_has_summary_export_date_range_fields(db, client_logged_in):
     assert 'name="date_to"' in html
 
 
-def test_summary_export_kolvo_v_korobah_uses_sent_snapshot_not_live_qty(db, client_logged_in):
-    """Регрессия: после завершения сборки (complete()) MovementDocument.
-    sent_qty_snapshot замораживает кол-во на этот момент. Если содержимое
-    короба потом поправили (boxes.update_item и т.п. — уже после того, как
-    перемещение уехало), "живой" total_item_qty() отражает эту правку, но
-    сводный экспорт должен по-прежнему показывать то, что реально было
-    отправлено (как и список перемещений) — иначе цифры расходятся (см.
-    чат: "экспорт показывает 2220, строка показывает 2147")."""
+def test_summary_export_kolvo_v_korobah_shows_live_qty_not_stale_snapshot(db, client_logged_in):
+    """Регрессия: total_sent_qty() раньше отдавал замороженный на момент
+    complete() sent_qty_snapshot, из-за чего сводный экспорт расходился с
+    тем, что видно в самом перемещении после правки короба (см. чат:
+    "экспорт показывает 2220, строка показывает 2147"). Эти цифры сверяют с
+    заявками на самом маркетплейсе, поэтому нужны актуальные данные — теперь
+    total_sent_qty() всегда равен "живому" total_item_qty()."""
     sender = Warehouse(code="WH-MSUM-SNAP-A", name="Отправитель")
     receiver = Warehouse(code="WH-MSUM-SNAP-B", name="Получатель")
     db.session.add_all([sender, receiver])
@@ -274,9 +273,9 @@ def test_summary_export_kolvo_v_korobah_uses_sent_snapshot_not_live_qty(db, clie
     box_item = doc.lines.first().box.items.first()
     box_item.qty = 73
     db.session.commit()
-    assert doc.total_item_qty() == 73  # "живое" количество действительно изменилось
+    assert doc.total_item_qty() == 73
 
     rows = _read_xlsx_rows(client_logged_in.get("/movement/export-summary.xlsx").data)
     row = next(r for r in rows if r[0] == doc.number)
 
-    assert row[11] == 10  # "Кол-во в коробах" — снимок на момент отправки, не 73
+    assert row[11] == 73  # "Кол-во в коробах" — актуальное количество, не старый снимок 10

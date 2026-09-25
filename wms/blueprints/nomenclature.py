@@ -336,6 +336,32 @@ def update_barcode(item_id):
     return redirect(url_for("nomenclature.list_nomenclature", q=q))
 
 
+@bp.route("/<int:item_id>/sku", methods=["POST"])
+def update_sku(item_id):
+    """Артикул иногда нужно поправить прямо в списке — например, при
+    смене нумерации у поставщика или после ручного импорта с опечаткой."""
+    if not _require_edit():
+        return redirect(url_for("nomenclature.list_nomenclature"))
+
+    item = Nomenclature.query.get_or_404(item_id)
+    sku = request.form.get("sku", "").strip()
+    q = request.form.get("q", "")
+
+    if not sku:
+        flash("Артикул не может быть пустым", "danger")
+        return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+    existing = Nomenclature.query.filter_by(sku=sku).first()
+    if existing and existing.id != item.id:
+        flash(f"Артикул '{sku}' уже используется у товара «{existing.name}»", "danger")
+        return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+    item.sku = sku
+    db.session.commit()
+    flash(f"Артикул для «{item.name}» обновлен", "success")
+    return redirect(url_for("nomenclature.list_nomenclature", q=q))
+
+
 @bp.route("/<int:item_id>/name", methods=["POST"])
 def update_name(item_id):
     """Наименование иногда нужно поправить прямо в списке — например,

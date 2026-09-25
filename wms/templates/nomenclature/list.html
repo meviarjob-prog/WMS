@@ -77,7 +77,7 @@
       <table class="table table-sm d-none d-md-table">
         <thead>
           <tr>
-            <th>Штрихкод</th><th>Наименование</th>
+            <th>Штрихкод</th><th>Наименование</th><th>Артикул</th>
             <th>Ед.</th>
             <th>Вид</th>
             {% for wh in stock_warehouses %}<th>{{ wh.name }}</th>{% endfor %}
@@ -96,16 +96,24 @@
                 <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
               </form>
             </td>
-            <td style="min-width:380px">
+            <td style="min-width:300px">
               <form method="post" action="{{ url_for('nomenclature.update_name', item_id=item.id) }}" class="d-flex gap-1">
                 <input type="hidden" name="q" value="{{ q }}">
                 <input type="text" name="name" value="{{ item.name }}" class="form-control form-control-sm">
                 <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
               </form>
             </td>
+            <td style="min-width:150px">
+              <form method="post" action="{{ url_for('nomenclature.update_sku', item_id=item.id) }}" class="d-flex gap-1">
+                <input type="hidden" name="q" value="{{ q }}">
+                <input type="text" name="sku" value="{{ item.sku }}" class="form-control form-control-sm">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+              </form>
+            </td>
             {% else %}
             <td>{{ item.barcode }}</td>
             <td>{{ item.name }}</td>
+            <td>{{ item.sku }}</td>
             {% endif %}
             <td>{{ item.unit }}</td>
             {% if current_user.can_edit_nomenclature() %}
@@ -138,7 +146,7 @@
             {% endif %}
           </tr>
         {% else %}
-          <tr><td colspan="{{ (6 if current_user.is_admin else 5) + stock_warehouses|length }}" class="text-muted">Ничего не найдено</td></tr>
+          <tr><td colspan="{{ (7 if current_user.is_admin else 6) + stock_warehouses|length }}" class="text-muted">Ничего не найдено</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -157,9 +165,14 @@
                   <input type="text" name="name" value="{{ item.name }}" class="form-control form-control-sm fw-bold">
                   <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
                 </form>
-                <form method="post" action="{{ url_for('nomenclature.update_barcode', item_id=item.id) }}" class="d-flex gap-1 align-items-center">
+                <form method="post" action="{{ url_for('nomenclature.update_barcode', item_id=item.id) }}" class="d-flex gap-1 align-items-center mb-1">
                   <input type="hidden" name="q" value="{{ q }}">
                   <input type="text" name="barcode" value="{{ item.barcode }}" class="form-control form-control-sm">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
+                </form>
+                <form method="post" action="{{ url_for('nomenclature.update_sku', item_id=item.id) }}" class="d-flex gap-1 align-items-center">
+                  <input type="hidden" name="q" value="{{ q }}">
+                  <input type="text" name="sku" value="{{ item.sku }}" class="form-control form-control-sm" placeholder="Артикул">
                   <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
                 </form>
               </div>
@@ -169,7 +182,7 @@
             <div class="d-flex justify-content-between align-items-start gap-2">
               <div>
                 <div class="fw-bold">{{ item.name }}</div>
-                <div class="small text-muted">{{ item.barcode }}</div>
+                <div class="small text-muted">{{ item.barcode }} · арт. {{ item.sku }}</div>
               </div>
               <a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>
             </div>
