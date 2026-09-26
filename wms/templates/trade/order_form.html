@@ -1,8 +1,0 @@
-{% extends "base.html" %}
-{% block title %}Новый заказ SINANA{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='css/trade.css') }}">{% endblock %}
-{% block content %}
-<script>document.body.classList.add('trade-page')</script>
-<div class="trade-mobile"><section class="sn-hero mb-3"><div class="sn-eyebrow">Новый заказ</div><h1 class="sn-title">{{ customer.name }}</h1><div class="sn-subtitle">{{ customer.address }}</div></section><section class="sn-card sn-section"><form method="post" id="tradeOrderForm"><input type="hidden" name="submission_token" value="{{ submission_token }}"><div class="mb-3"><label class="form-label">Сумма заказа, ₽</label><input class="form-control form-control-lg" type="number" min="1" step="0.01" name="total_amount" inputmode="decimal" required autofocus></div><div class="mb-3"><label class="form-label">Комментарий</label><textarea class="form-control" name="comment" rows="3" placeholder="Пожелания клиента, дата доставки"></textarea></div><div class="alert alert-light border small">Повторное нажатие при слабом интернете не создаст второй заказ.</div><div class="d-grid gap-2"><button class="btn btn-lg btn-sn-rose" id="saveOrderBtn">Сохранить заказ</button><a class="btn btn-outline-secondary" href="{{ url_for('trade.mobile') }}">Вернуться к маршруту</a></div></form></section></div>
-{% endblock %}
-{% block scripts %}<script>document.getElementById('tradeOrderForm').addEventListener('submit',()=>{const b=document.getElementById('saveOrderBtn');b.disabled=true;b.textContent='Сохраняем…'})</script>{% endblock %}

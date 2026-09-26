@@ -68,7 +68,6 @@ SECTIONS = [
     ("production", "Производство"),
     ("reports", "Отчеты"),
     ("shipment_plan", "План отгрузок"),
-    ("trade", "Продажи SINANA"),
 ]
 SECTION_CODES = {code for code, _ in SECTIONS}
 
@@ -1182,79 +1181,6 @@ class SupplierReturn(db.Model):
     nomenclature = db.relationship("Nomenclature")
     created_by = db.relationship("User")
     receiving_document = db.relationship("ReceivingDocument")
-
-
-class TradeCustomer(db.Model):
-    """Торговая точка в контуре продаж SINANA."""
-
-    __tablename__ = "trade_customers"
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False, index=True)
-    address = db.Column(db.String(300), nullable=False)
-    phone = db.Column(db.String(50))
-    contact_name = db.Column(db.String(150))
-    assigned_rep_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
-    credit_limit = db.Column(db.Float, nullable=False, default=0)
-    debt = db.Column(db.Float, nullable=False, default=0)
-    is_active = db.Column(db.Boolean, nullable=False, default=True)
-    last_visit_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-
-    assigned_rep = db.relationship("User", foreign_keys=[assigned_rep_id])
-
-
-class TradeVisit(db.Model):
-    """Одна запланированная остановка торгового представителя."""
-
-    __tablename__ = "trade_visits"
-
-    id = db.Column(db.Integer, primary_key=True)
-    visit_date = db.Column(db.Date, nullable=False, index=True)
-    sequence = db.Column(db.Integer, nullable=False, default=1)
-    customer_id = db.Column(db.Integer, db.ForeignKey("trade_customers.id"), nullable=False)
-    representative_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
-    status = db.Column(db.String(20), nullable=False, default="planned", index=True)
-    started_at = db.Column(db.DateTime, nullable=True)
-    completed_at = db.Column(db.DateTime, nullable=True)
-    result = db.Column(db.String(30), nullable=True)
-    note = db.Column(db.String(500))
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-
-    customer = db.relationship("TradeCustomer")
-    representative = db.relationship("User", foreign_keys=[representative_id])
-
-    __table_args__ = (
-        db.UniqueConstraint(
-            "visit_date", "customer_id", "representative_id", name="uq_trade_visit_day"
-        ),
-    )
-
-
-class TradeOrder(db.Model):
-    """Заказ торговой точки, принятый представителем."""
-
-    __tablename__ = "trade_orders"
-
-    id = db.Column(db.Integer, primary_key=True)
-    number = db.Column(db.String(30), unique=True, nullable=False, index=True)
-    # Токен формы защищает мобильное создание заказа от повторной отправки
-    # при нестабильном интернете или двойном нажатии.
-    submission_token = db.Column(db.String(64), unique=True, nullable=True, index=True)
-    customer_id = db.Column(db.Integer, db.ForeignKey("trade_customers.id"), nullable=False)
-    representative_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
-    visit_id = db.Column(db.Integer, db.ForeignKey("trade_visits.id"), nullable=True)
-    status = db.Column(db.String(20), nullable=False, default="submitted", index=True)
-    total_amount = db.Column(db.Float, nullable=False, default=0)
-    comment = db.Column(db.String(500))
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
-    submitted_at = db.Column(db.DateTime, nullable=True)
-    delivered_at = db.Column(db.DateTime, nullable=True)
-    paid_at = db.Column(db.DateTime, nullable=True)
-
-    customer = db.relationship("TradeCustomer")
-    representative = db.relationship("User", foreign_keys=[representative_id])
-    visit = db.relationship("TradeVisit")
 
 
 class OzonArticleMapping(db.Model):
