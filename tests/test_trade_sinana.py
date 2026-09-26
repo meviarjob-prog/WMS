@@ -14,7 +14,7 @@ def _representative():
     user = User(
         username="sinana-rep",
         full_name="Елена Смирнова",
-        role="warehouse",
+        role="trade_rep",
         allowed_sections="trade",
     )
     user.set_password("representative-password")
@@ -127,3 +127,88 @@ def test_non_manager_is_sent_to_mobile_trade_workspace(db, client):
 
     assert response.status_code == 302
     assert response.headers["Location"].endswith("/trade/mobile")
+
+
+def test_trade_pages_use_branded_login(db, client):
+    response = client.get("/trade/mobile")
+    assert response.status_code == 302
+    assert response.headers["Location"].startswith("/sinana/login")
+    login = client.get("/sinana/login")
+    assert login.status_code == 200
+    assert "SINANA" in login.get_data(as_text=True)
+
+
+def test_trade_login_redirects_each_role_to_own_interface(db, client):
+    manager = User(
+        username="sinana-manager",
+        full_name="Анна Крылова",
+        role="trade_manager",
+        allowed_sections="trade",
+    )
+    manager.set_password("manager-password")
+    representative = User(
+        username="sinana-login-rep",
+        full_name="Мария Петрова",
+        role="trade_rep",
+        allowed_sections="trade",
+    )
+    representative.set_password("representative-password")
+    db.session.add_all([manager, representative])
+    db.session.commit()
+
+    response = client.post(
+        "/login",
+        data={"username": manager.username, "password": "manager-password"},
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/trade/")
+
+    client.post("/logout")
+    response = client.post(
+        "/login",
+        data={
+            "username": representative.username,
+            "password": "representative-password",
+        },
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/trade/mobile")
+
+
+def test_trade_manager_assigns_password_and_representative_cannot_manage_team(db, client):
+    manager = User(
+        username="team-manager",
+        full_name="Руководитель",
+        role="trade_manager",
+        allowed_sections="trade",
+    )
+    manager.set_password("manager-password")
+    db.session.add(manager)
+    db.session.commit()
+    _login(client, manager)
+
+    response = client.post(
+        "/trade/team/create",
+        data={
+            "username": "new-sales-rep",
+            "full_name": "Новый представитель",
+            "password": "secure-password",
+            "role": "trade_rep",
+        },
+    )
+    assert response.status_code == 302
+    member = User.query.filter_by(username="new-sales-rep").one()
+    assert member.role == "trade_rep"
+    assert member.check_password("secure-password")
+    assert member.allowed_sections == "trade"
+
+    client.post("/logout")
+    client.post(
+        "/login",
+        data={"username": member.username, "password": "secure-password"},
+    )
+    denied = client.get("/trade/team")
+    assert denied.status_code == 403, (denied.status_code, denied.headers.get("Location"))
+    root = client.get("/")
+    assert root.status_code == 302
+    assert root.headers["Location"].endswith("/trade/mobile")

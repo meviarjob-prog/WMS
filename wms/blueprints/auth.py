@@ -7,15 +7,28 @@ from ..extensions import db
 from ..models import SECTIONS, User, Warehouse
 
 bp = Blueprint("auth", __name__)
+USER_ROLES = ("warehouse", "production", "trade_manager", "trade_rep")
+
+
+def _home_for(user):
+    if user.is_trade_representative():
+        return url_for("trade.mobile")
+    if user.is_trade_manager():
+        return url_for("trade.index")
+    if user.is_production_only():
+        return url_for("production.index")
+    return url_for("main.index")
 
 
 @bp.route("/login", methods=["GET", "POST"])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for("main.index"))
+        return redirect(_home_for(current_user))
 
     if request.method == "GET":
-        return render_template("auth/login.html")
+        return render_template(
+            "auth/login.html", sinana=request.path.startswith("/sinana/")
+        )
 
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
@@ -23,12 +36,26 @@ def login():
     user = User.query.filter_by(username=username).first()
     if not user or not user.is_active_user or not user.check_password(password):
         flash("Неверный логин или пароль", "danger")
-        return render_template("auth/login.html", username=username)
+        return render_template(
+            "auth/login.html",
+            username=username,
+            sinana=request.path.startswith("/sinana/"),
+        )
 
     login_user(user, remember=True)
     session["session_version"] = user.session_version or 0
     next_url = request.args.get("next")
-    return redirect(next_url or url_for("main.index"))
+    # Ролевой домашний экран важнее произвольного next для пользователей
+    # SINANA: так представитель не попадет в складской интерфейс даже по
+    # старой закладке, сохраненной до назначения роли.
+    if user.is_trade_user():
+        return redirect(_home_for(user))
+    return redirect(next_url or _home_for(user))
+
+
+@bp.route("/sinana/login", methods=["GET", "POST"])
+def sinana_login():
+    return login()
 
 
 @bp.route("/logout", methods=["POST"])
@@ -82,7 +109,7 @@ def create_user():
     shift_minutes = request.form.get("shift_minutes", type=int) or 480
     role = request.form.get("role", "warehouse")
     warehouse_id = request.form.get("warehouse_id", type=int)
-    if role not in ("warehouse", "production"):
+    if role not in USER_ROLES:
         role = "warehouse"
 
     if not username:
@@ -93,7 +120,11 @@ def create_user():
         flash(f"Пользователь '{username}' уже существует", "danger")
         return redirect(url_for("auth.users"))
 
-    temp_password = secrets.token_urlsafe(6)
+    supplied_password = request.form.get("password", "")
+    if supplied_password and len(supplied_password) < 8:
+        flash("Пароль должен содержать не менее 8 символов", "danger")
+        return redirect(url_for("auth.users"))
+    temp_password = supplied_password or secrets.token_urlsafe(8)
     user = User(
         username=username,
         full_name=full_name,
@@ -101,6 +132,7 @@ def create_user():
         shift_minutes=shift_minutes,
         role=role,
         warehouse_id=warehouse_id,
+        allowed_sections="trade" if role in ("trade_manager", "trade_rep") else None,
     )
     user.set_password(temp_password)
     db.session.add(user)
@@ -171,7 +203,7 @@ def update_role(user_id):
 
     user = User.query.get_or_404(user_id)
     role = request.form.get("role", "warehouse")
-    if role not in ("warehouse", "production"):
+    if role not in USER_ROLES:
         flash("Некорректная роль", "danger")
         return redirect(url_for("auth.users"))
 
@@ -180,6 +212,8 @@ def update_role(user_id):
         return redirect(url_for("auth.users"))
 
     user.role = role
+    if role in ("trade_manager", "trade_rep"):
+        user.allowed_sections = "trade"
     db.session.commit()
     flash(f"Роль для «{user.username}» обновлена", "success")
     return redirect(url_for("auth.users"))

@@ -26,7 +26,14 @@
           <select name="role" class="form-select">
             <option value="warehouse">Сотрудник склада (полный доступ)</option>
             <option value="production">Сотрудник производства (только сканирование ЧЗ)</option>
+            <option value="trade_manager">SINANA — руководитель</option>
+            <option value="trade_rep">SINANA — торговый представитель</option>
           </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Пароль</label>
+          <input type="text" name="password" class="form-control" minlength="8" autocomplete="new-password" placeholder="Не менее 8 символов">
+          <div class="form-text">Если оставить пустым, система создаст временный пароль.</div>
         </div>
         <div class="mb-2">
           <label class="form-label">Плановая смена, мин <span class="text-muted">(для эффективности на производстве)</span></label>
@@ -170,6 +177,8 @@
                 <select name="role" class="form-select form-select-sm" {% if u.id == current_user.id and not u.is_admin %}disabled{% endif %}>
                   <option value="warehouse" {% if u.role == 'warehouse' %}selected{% endif %}>Склад (полный доступ)</option>
                   <option value="production" {% if u.role == 'production' %}selected{% endif %}>Производство (только ЧЗ)</option>
+                  <option value="trade_manager" {% if u.role == 'trade_manager' %}selected{% endif %}>SINANA — руководитель</option>
+                  <option value="trade_rep" {% if u.role == 'trade_rep' %}selected{% endif %}>SINANA — торговый представитель</option>
                 </select>
                 {% if u.id != current_user.id or u.is_admin %}
                 <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>

@@ -399,7 +399,12 @@ def create_app(config_class=Config):
         ):
             return None
         if not current_user.is_authenticated:
-            return redirect(url_for("auth.login", next=request.full_path))
+            login_endpoint = (
+                "auth.sinana_login"
+                if request.endpoint.startswith("trade.")
+                else "auth.login"
+            )
+            return redirect(url_for(login_endpoint, next=request.full_path))
         # Роль "производство" — доступ только к сканированию ЧЗ, ничего
         # больше (даже при прямом вводе адреса другой страницы) — кроме
         # страницы обучения, она должна быть доступна всем сотрудникам
@@ -410,6 +415,14 @@ def create_app(config_class=Config):
             and not request.endpoint.startswith("onboarding.")
         ):
             return redirect(url_for("production.index"))
+        # SINANA — самостоятельный рабочий контур. Роль определяет не
+        # только видимость меню, но и серверный доступ при прямом вводе URL.
+        if current_user.is_trade_user() and not request.endpoint.startswith("trade."):
+            return redirect(
+                url_for(
+                    "trade.index" if current_user.is_trade_manager() else "trade.mobile"
+                )
+            )
         # Точечное ограничение разделов (см. User.allowed_sections) — тоже
         # проверяем при прямом вводе адреса, не только скрываем пункт меню.
         section = request.endpoint.split(".")[0]
