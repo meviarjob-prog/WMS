@@ -86,10 +86,10 @@ class User(UserMixin, db.Model):
     # Плановая длительность смены (минут) — используется для расчета
     # эффективности в модуле «Производство» (норма-минуты / эта величина).
     shift_minutes = db.Column(db.Integer, nullable=False, default=480)
-    # "warehouse" — обычный доступ ко всем разделам WMS;
-    # "production" — только производство; "trade_manager" — кабинет
-    # руководителя SINANA; "trade_rep" — мобильный кабинет торгового
-    # представителя. Админ всегда имеет полный доступ независимо от role.
+    # "warehouse" — обычный доступ ко всем разделам (как раньше);
+    # "production" — ограниченный доступ: только сканирование ЧЗ на
+    # производстве, ничего больше (проверяется в before_request). Админ
+    # (is_admin=True) всегда имеет полный доступ независимо от role.
     role = db.Column(db.String(20), nullable=False, default="warehouse")
     # Точечное ограничение доступа к разделам для role="warehouse":
     # NULL/пусто — доступ ко всем разделам (как раньше, обратная
@@ -144,18 +144,6 @@ class User(UserMixin, db.Model):
     def is_production_only(self):
         return self.role == "production" and not self.is_admin
 
-    def is_trade_manager(self):
-        return self.role == "trade_manager" and not self.is_admin
-
-    def is_trade_representative(self):
-        return self.role == "trade_rep" and not self.is_admin
-
-    def is_trade_user(self):
-        return self.role in {"trade_manager", "trade_rep"} and not self.is_admin
-
-    def can_manage_trade(self):
-        return self.is_admin or self.role == "trade_manager"
-
     def allowed_section_set(self):
         if not self.allowed_sections:
             return set(SECTION_CODES)
@@ -196,11 +184,7 @@ class User(UserMixin, db.Model):
         """Раздел не из SECTIONS (например, служебные api/boxes/labels) не
         ограничивается этим механизмом вообще — управляются им только
         разделы верхнего меню."""
-        if self.is_admin:
-            return True
-        if self.is_trade_user():
-            return section == "trade"
-        if section not in SECTION_CODES:
+        if self.is_admin or section not in SECTION_CODES:
             return True
         if not self.allowed_sections:
             return True

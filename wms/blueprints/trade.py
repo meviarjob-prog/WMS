@@ -39,7 +39,7 @@ def _money(value):
 
 @bp.route("/")
 def index():
-    if not current_user.can_manage_trade():
+    if not current_user.can_view_management_dashboard():
         return redirect(url_for("trade.mobile"))
 
     start, end = _month_bounds()
@@ -120,7 +120,7 @@ def index():
 @bp.route("/mobile")
 def mobile():
     representative = current_user
-    if current_user.can_manage_trade() and request.args.get("rep_id", type=int):
+    if current_user.is_admin and request.args.get("rep_id", type=int):
         representative = User.query.get_or_404(request.args.get("rep_id", type=int))
     today = date.today()
     visits = (
@@ -146,7 +146,7 @@ def mobile():
 
 
 def _can_manage_visit(visit):
-    return current_user.can_manage_trade() or visit.representative_id == current_user.id
+    return current_user.is_admin or visit.representative_id == current_user.id
 
 
 @bp.route("/visits/<int:visit_id>/<action>", methods=["POST"])
@@ -241,29 +241,25 @@ def new_order(customer_id):
 
 @bp.route("/setup", methods=["GET"])
 def setup():
-    if not current_user.can_manage_trade():
+    if not current_user.is_admin:
         abort(403)
     return render_template(
         "trade/setup.html",
         customers=TradeCustomer.query.order_by(TradeCustomer.name).all(),
-        representatives=User.query.filter_by(role="trade_rep", is_active_user=True)
-        .order_by(User.full_name, User.username)
-        .all(),
+        representatives=User.query.filter_by(is_active_user=True).order_by(User.full_name, User.username).all(),
     )
 
 
 @bp.route("/setup/customer", methods=["POST"])
 def create_customer():
-    if not current_user.can_manage_trade():
+    if not current_user.is_admin:
         abort(403)
     name = (request.form.get("name") or "").strip()
     address = (request.form.get("address") or "").strip()
     representative_id = request.form.get("representative_id", type=int)
     if not name or not address:
         flash("Укажите название и адрес торговой точки", "danger")
-    elif not User.query.filter_by(
-        id=representative_id, role="trade_rep", is_active_user=True
-    ).first():
+    elif not User.query.get(representative_id):
         flash("Выберите торгового представителя", "danger")
     else:
         db.session.add(
@@ -283,7 +279,7 @@ def create_customer():
 
 @bp.route("/setup/visit", methods=["POST"])
 def create_visit():
-    if not current_user.can_manage_trade():
+    if not current_user.is_admin:
         abort(403)
     customer = TradeCustomer.query.get(request.form.get("customer_id", type=int))
     visit_date = request.form.get("visit_date")
@@ -317,117 +313,3 @@ def create_visit():
         db.session.commit()
         flash("Точка добавлена в маршрут", "success")
     return redirect(url_for("trade.setup"))
-
-
-def _require_trade_manager():
-    if not current_user.can_manage_trade():
-        abort(403)
-
-
-@bp.route("/team")
-def team():
-    _require_trade_manager()
-    members = (
-        User.query.filter(User.role.in_(("trade_manager", "trade_rep")))
-        .order_by(User.role, User.full_name, User.username)
-        .all()
-    )
-    return render_template("trade/team.html", members=members)
-
-
-@bp.route("/team/create", methods=["POST"])
-def create_team_member():
-    _require_trade_manager()
-    username = (request.form.get("username") or "").strip()
-    full_name = (request.form.get("full_name") or "").strip()
-    password = request.form.get("password") or ""
-    role = request.form.get("role") or "trade_rep"
-    if role not in ("trade_manager", "trade_rep"):
-        abort(400)
-    if not username or not full_name:
-        flash("Укажите логин и имя сотрудника", "danger")
-    elif len(password) < 8:
-        flash("Пароль должен содержать не менее 8 символов", "danger")
-    elif User.query.filter_by(username=username).first():
-        flash("Пользователь с таким логином уже существует", "danger")
-    else:
-        member = User(
-            username=username,
-            full_name=full_name,
-            role=role,
-            allowed_sections="trade",
-            is_active_user=True,
-        )
-        member.set_password(password)
-        db.session.add(member)
-        db.session.commit()
-        flash(f"Сотрудник «{full_name}» добавлен", "success")
-    return redirect(url_for("trade.team"))
-
-
-@bp.route("/team/<int:user_id>/password", methods=["POST"])
-def set_team_member_password(user_id):
-    _require_trade_manager()
-    member = User.query.get_or_404(user_id)
-    if member.role not in ("trade_manager", "trade_rep"):
-        abort(404)
-    password = request.form.get("password") or ""
-    if len(password) < 8:
-        flash("Пароль должен содержать не менее 8 символов", "danger")
-    else:
-        member.set_password(password)
-        member.session_version = (member.session_version or 0) + 1
-        db.session.commit()
-        flash(f"Пароль для «{member.display_name()}» изменён", "success")
-    return redirect(url_for("trade.team"))
-
-
-@bp.route("/team/<int:user_id>/toggle", methods=["POST"])
-def toggle_team_member(user_id):
-    _require_trade_manager()
-    member = User.query.get_or_404(user_id)
-    if member.role not in ("trade_manager", "trade_rep"):
-        abort(404)
-    if member.id == current_user.id:
-        flash("Нельзя отключить собственную учётную запись", "danger")
-    else:
-        member.is_active_user = not member.is_active_user
-        if not member.is_active_user:
-            member.session_version = (member.session_version or 0) + 1
-        db.session.commit()
-        flash(
-            f"Сотрудник «{member.display_name()}» "
-            f"{'включён' if member.is_active_user else 'отключён'}",
-            "success",
-        )
-    return redirect(url_for("trade.team"))
-
-
-@bp.route("/team/<int:user_id>/delete", methods=["POST"])
-def delete_team_member(user_id):
-    _require_trade_manager()
-    member = User.query.get_or_404(user_id)
-    if member.role not in ("trade_manager", "trade_rep"):
-        abort(404)
-    if member.id == current_user.id:
-        flash("Нельзя удалить собственную учётную запись", "danger")
-        return redirect(url_for("trade.team"))
-    has_history = (
-        TradeCustomer.query.filter_by(assigned_rep_id=member.id).first()
-        or TradeVisit.query.filter_by(representative_id=member.id).first()
-        or TradeOrder.query.filter_by(representative_id=member.id).first()
-    )
-    if has_history:
-        member.is_active_user = False
-        member.session_version = (member.session_version or 0) + 1
-        db.session.commit()
-        flash(
-            "Сотрудник отключён, но сохранён в истории заказов и маршрутов",
-            "warning",
-        )
-    else:
-        name = member.display_name()
-        db.session.delete(member)
-        db.session.commit()
-        flash(f"Сотрудник «{name}» удалён", "success")
-    return redirect(url_for("trade.team"))
