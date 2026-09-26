@@ -226,16 +226,24 @@ def _to_qty(value):
     return qty if qty > 0 else None
 
 
-def _to_priority(value):
-    """Значение колонки "Приоритет" — целое число (обычно 0/1/2, см. чат),
-    либо None, если ячейка пуста или не парсится как число (нетронутая
-    строка без приоритета не должна падать на нечитаемом значении)."""
+def _parse_priority_cell(value):
+    """Значение колонки "Приоритет" — либо целое число (обычно 0/1/2, см.
+    чат), либо код товара-новинки под конкретный маркетплейс: "0w" —
+    новинка только для ВБ, "0o" — новинка только для Ozon (см. чат:
+    "введем еще типы приоритетов"). Возвращает (priority, novelty_marketplace) —
+    заполнена ровно одна часть пары, либо обе None, если ячейка пуста или
+    не распознана."""
     if value is None or value == "":
-        return None
+        return None, None
+    text = str(value).strip().lower()
+    if text == "0w":
+        return None, "wb"
+    if text == "0o":
+        return None, "ozon"
     try:
-        return int(float(value))
+        return int(float(value)), None
     except (TypeError, ValueError):
-        return None
+        return None, None
 
 
 def _to_fact_qty(value):
@@ -283,7 +291,11 @@ def _parse_one_sheet(ws):
         article = _norm(ws.cell(row=r, column=article_col).value) if article_col else ""
         size = _norm(ws.cell(row=r, column=size_col).value) if size_col else ""
         comment = _norm(ws.cell(row=r, column=comment_col).value) if comment_col else ""
-        priority = _to_priority(ws.cell(row=r, column=priority_col).value) if priority_col else None
+        priority, novelty_marketplace = (
+            _parse_priority_cell(ws.cell(row=r, column=priority_col).value)
+            if priority_col
+            else (None, None)
+        )
 
         for col, city, fact_col in city_columns:
             qty = _to_qty(ws.cell(row=r, column=col).value)
@@ -298,7 +310,11 @@ def _parse_one_sheet(ws):
             # плана на конкретной паре товар-город) это тоже теряло часть
             # уже отгруженного. remaining_qty() и так не уходит в минус,
             # поэтому обрезать факт не нужно — тянем оба значения как есть.
-            if qty is None and fact <= 0:
+            # Товар-новинка (0w/0o) обычно приходит с пустым планом по ВСЕМ
+            # городам сразу (плана по нему еще просто нет) — не пропускаем
+            # такую строку, иначе сам код приоритета терялся бы (см. чат:
+            # "если по товару нет плана то смотрим на приоритет").
+            if qty is None and fact <= 0 and novelty_marketplace is None:
                 continue
             rows.append(
                 {
@@ -310,6 +326,7 @@ def _parse_one_sheet(ws):
                     "fact": fact,
                     "comment": comment,
                     "priority": priority,
+                    "novelty_marketplace": novelty_marketplace,
                     "_source_row": r,
                 }
             )
@@ -475,12 +492,18 @@ def _parse_combined_marketplace_sheet(ws, marketplace):
         article = _norm(ws.cell(row=r, column=article_col).value) if article_col else ""
         size = _norm(ws.cell(row=r, column=size_col).value) if size_col else ""
         comment = _norm(ws.cell(row=r, column=comment_col).value) if comment_col else ""
-        priority = _to_priority(ws.cell(row=r, column=priority_col).value) if priority_col else None
+        priority, novelty_marketplace = (
+            _parse_priority_cell(ws.cell(row=r, column=priority_col).value)
+            if priority_col
+            else (None, None)
+        )
 
         for col, city, fact_col in city_columns:
             qty = _to_qty(ws.cell(row=r, column=col).value)
             fact = _to_fact_qty(ws.cell(row=r, column=fact_col).value) if fact_col else 0.0
-            if qty is None and fact <= 0:
+            # См. _parse_one_sheet — товар-новинка (0w/0o) не пропускаем,
+            # даже если план по всем городам пуст.
+            if qty is None and fact <= 0 and novelty_marketplace is None:
                 continue
             rows.append(
                 {
@@ -492,6 +515,7 @@ def _parse_combined_marketplace_sheet(ws, marketplace):
                     "fact": fact,
                     "comment": comment,
                     "priority": priority,
+                    "novelty_marketplace": novelty_marketplace,
                 }
             )
 

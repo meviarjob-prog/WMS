@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 import hmac
 import json
@@ -192,6 +193,8 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
                 merged[key]["comment"] = row["comment"]
             if merged[key].get("priority") is None and row.get("priority") is not None:
                 merged[key]["priority"] = row["priority"]
+            if merged[key].get("novelty_marketplace") is None and row.get("novelty_marketplace"):
+                merged[key]["novelty_marketplace"] = row["novelty_marketplace"]
             dates = [d for d in (merged[key].get("period_start"), row.get("period_start")) if d]
             # Если один SKU-город случайно повторяется в листах разных
             # периодов, считаем его частью более нового плана.
@@ -227,11 +230,46 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
                 period_start=row.get("period_start"),
                 buyer_comment=row.get("comment") or None,
                 priority=row.get("priority"),
+                novelty_marketplace=row.get("novelty_marketplace"),
             )
         )
         created += 1
 
     return created, len(unmatched_barcodes)
+
+
+def _average_city_share_by_marketplace(by_barcode):
+    """{marketplace: {warehouse_id: доля от 0 до 1}} — средняя (по товарам,
+    не по объему: у каждого штрихкода вес один, а не пропорционально его
+    количеству) доля города в плане "обычных" товаров этого маркетплейса.
+
+    Используется как процент распределения для товаров-новинок без
+    собственного плана (novelty_marketplace, см. _apply_priority_distribution
+    и чат: "смотрим на процентаж распределения") — там нечего взять за
+    основу вместо этого. Товары-новинки сами в расчет среднего не идут —
+    у них planned_qty везде 0, они только размыли бы типичную картину."""
+    sums = {marketplace: defaultdict(float) for marketplace in MARKETPLACES}
+    counts = {marketplace: defaultdict(int) for marketplace in MARKETPLACES}
+    for barcode_lines in by_barcode.values():
+        if any(line.novelty_marketplace for line in barcode_lines):
+            continue
+        lines_by_marketplace = defaultdict(list)
+        for line in barcode_lines:
+            lines_by_marketplace[line.warehouse.marketplace].append(line)
+        for marketplace, mp_lines in lines_by_marketplace.items():
+            total = sum(line.planned_qty for line in mp_lines)
+            if total <= 0:
+                continue
+            for line in mp_lines:
+                sums[marketplace][line.warehouse_id] += line.planned_qty / total
+                counts[marketplace][line.warehouse_id] += 1
+    return {
+        marketplace: {
+            warehouse_id: sums[marketplace][warehouse_id] / counts[marketplace][warehouse_id]
+            for warehouse_id in sums[marketplace]
+        }
+        for marketplace in MARKETPLACES
+    }
 
 
 def _apply_priority_distribution():
@@ -240,11 +278,20 @@ def _apply_priority_distribution():
     конкретного города, а доля текущего "готово к отгрузке" (упаковано в
     короб на складе-отправителе) пропорционально доле города в общем плане
     по этому штрихкоду — сразу по ОБОИМ маркетплейсам вместе, т.к. на
-    дашборде это одна строка товара с колонками ОЗОН/ВБ. Вызывается один
-    раз при каждой синхронизации плана (upload/sync_google), после того как
-    _apply_plan уже отработал по обеим площадкам, но до финального commit —
-    иначе "готово к отгрузке" на момент синхронизации было бы неизвестно
-    новым строкам."""
+    дашборде это одна строка товара с колонками ОЗОН/ВБ.
+
+    Для товаров-новинок (novelty_marketplace = "wb"/"ozon" из кода 0w/0o в
+    файле плана, см. чат) своего плана по городам нет вообще — вместо доли
+    СВОЕГО плана берем средний процент распределения ОСТАЛЬНЫХ товаров
+    этого одного маркетплейса (см. _average_city_share_by_marketplace) и
+    делим на него "готово к отгрузке", причем только между городами
+    указанного маркетплейса — даже если у штрихкода вдруг нашлись строки
+    и на другой площадке, они в распределение не участвуют.
+
+    Вызывается один раз при каждой синхронизации плана (upload/sync_google),
+    после того как _apply_plan уже отработал по обеим площадкам, но до
+    финального commit — иначе "готово к отгрузке" на момент синхронизации
+    было бы неизвестно новым строкам."""
     sender_ids = _sender_warehouse_ids()
     stock = _stock_by_nomenclature(sender_ids)
     unplaced = _unplaced_by_nomenclature(sender_ids)
@@ -259,13 +306,12 @@ def _apply_priority_distribution():
     for line in lines:
         by_barcode.setdefault(line.barcode, []).append(line)
 
-    for barcode_lines in by_barcode.values():
-        priority = next((l.priority for l in barcode_lines if l.priority is not None), None)
-        if priority not in (0, 1, 2):
-            for line in barcode_lines:
-                line.distributed_target_qty = None
-            continue
+    city_share = _average_city_share_by_marketplace(by_barcode)
 
+    for barcode_lines in by_barcode.values():
+        novelty_marketplace = next(
+            (l.novelty_marketplace for l in barcode_lines if l.novelty_marketplace), None
+        )
         nomenclature_id = next(
             (l.nomenclature_id for l in barcode_lines if l.nomenclature_id is not None), None
         )
@@ -274,6 +320,37 @@ def _apply_priority_distribution():
             ready_to_ship = max(
                 stock.get(nomenclature_id, 0) - unplaced.get(nomenclature_id, 0), 0
             )
+
+        if novelty_marketplace:
+            target_lines = [
+                l for l in barcode_lines if l.warehouse.marketplace == novelty_marketplace
+            ]
+            other_lines = [
+                l for l in barcode_lines if l.warehouse.marketplace != novelty_marketplace
+            ]
+            for line in other_lines:
+                # Штрихкод новинки нашелся и на другой площадке — код
+                # 0w/0o явно говорит "только сюда", туда не отгружаем.
+                line.distributed_target_qty = 0.0
+            shares = city_share.get(novelty_marketplace, {})
+            total_share = sum(shares.get(l.warehouse_id, 0.0) for l in target_lines)
+            for line in target_lines:
+                if total_share > 0:
+                    line.distributed_target_qty = (
+                        ready_to_ship * shares.get(line.warehouse_id, 0.0) / total_share
+                    )
+                elif target_lines:
+                    # Нет данных о типичном распределении (например, у
+                    # маркетплейса вообще еще нет других товаров с планом) —
+                    # делим поровну между городами этой площадки.
+                    line.distributed_target_qty = ready_to_ship / len(target_lines)
+            continue
+
+        priority = next((l.priority for l in barcode_lines if l.priority is not None), None)
+        if priority not in (0, 1, 2):
+            for line in barcode_lines:
+                line.distributed_target_qty = None
+            continue
 
         total_planned = sum(l.planned_qty for l in barcode_lines)
         for line in barcode_lines:
@@ -863,6 +940,11 @@ def _dashboard_context():
                     # только красит строку на дашборде (см. dashboard.html),
                     # отдельной колонки под него нет.
                     "priority": None,
+                    # "wb"/"ozon" — товар-новинка только для этого
+                    # маркетплейса (код 0w/0o, см. модель
+                    # ShipmentPlanLine.novelty_marketplace и чат). Как и
+                    # priority, только красит строку/помечает бейджем.
+                    "novelty_marketplace": None,
                 },
             )
             product[marketplace][line.warehouse.marketplace_city] = line
@@ -877,6 +959,8 @@ def _dashboard_context():
                 product["comment"] = line.buyer_comment
             if product["priority"] is None and line.priority is not None:
                 product["priority"] = line.priority
+            if product["novelty_marketplace"] is None and line.novelty_marketplace:
+                product["novelty_marketplace"] = line.novelty_marketplace
 
     # "Не хватает по плану" — план за вычетом всего, что уже едет или готово
     # к отправке: в пути, готово к отгрузке (упаковано в короб) и на
@@ -895,7 +979,15 @@ def _dashboard_context():
         )
 
     picking_list = sorted(
-        (p for p in products.values() if p["max_remaining"] > 0),
+        (
+            p
+            for p in products.values()
+            # У товара-новинки (novelty_marketplace) max_remaining всегда 0
+            # (planned_qty по нему нигде не проставлен — плана просто нет),
+            # но именно такие товары и нужно не потерять из виду — их еще
+            # нужно вручную направить в нужный маркетплейс.
+            if p["max_remaining"] > 0 or p["novelty_marketplace"]
+        ),
         key=lambda p: (p["article"] or "", p["size"] or ""),
     )
 

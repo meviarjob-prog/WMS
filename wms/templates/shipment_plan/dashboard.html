@@ -181,10 +181,13 @@
       {% for p in picking_list %}
         {# Приоритет из файла плана (см. чат) красит строку, когда есть
            запас — no_stock важнее (нечем отгружать вообще) и имеет
-           приоритет над цветом приоритета. Колонки "Приоритет" в таблице
-           нет — только фон строки. #}
-        <tr class="{% if p.no_stock %}table-danger{% elif p.priority == 1 %}table-success{% elif p.priority == 2 %}table-warning{% elif p.priority == 0 %}table-info{% endif %}" data-search-text="{{ (p.article or '') ~ ' ' ~ p.barcode }}" data-priority="{{ p.priority if p.priority is not none else '' }}">
-          <td>{{ p.article }}</td>
+           приоритет над цветом приоритета. Товар-новинка (0w/0o, см.
+           novelty_marketplace) красится отдельным цветом и получает
+           бейджик — у него нет собственного плана, поэтому его нужно
+           отличать от обычных приоритетных строк. Колонки "Приоритет" в
+           таблице нет — только фон строки. #}
+        <tr class="{% if p.no_stock %}table-danger{% elif p.novelty_marketplace %}table-primary{% elif p.priority == 1 %}table-success{% elif p.priority == 2 %}table-warning{% elif p.priority == 0 %}table-info{% endif %}" data-search-text="{{ (p.article or '') ~ ' ' ~ p.barcode }}" data-priority="{{ p.novelty_marketplace or (p.priority if p.priority is not none else '') }}">
+          <td>{{ p.article }}{% if p.novelty_marketplace %} <span class="badge bg-primary">Новинка {{ 'ВБ' if p.novelty_marketplace == 'wb' else 'Ozon' }}</span>{% endif %}</td>
           <td>{{ p.size or '' }}</td>
           <td>{{ p.barcode }}</td>
           <td>
