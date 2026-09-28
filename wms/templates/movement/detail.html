@@ -88,7 +88,7 @@
     <span class="badge bg-success">Принято МП {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
     {% if doc.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ doc.total_shortage_qty() | round(3) }}</span>{% elif doc.discrepancies %}<span class="badge bg-info text-dark">Излишек при приемке</span>{% endif %}
     {% elif doc.status == 'completed' %}
-    <span class="text-warning-emphasis">В пути</span>
+    <span class="text-warning-emphasis">{{ doc.transit_status_label() }}</span>
     {% endif %}
     {% if current_user.is_admin %}
     <form method="post" action="{{ url_for('movement.delete_document', doc_id=doc.id) }}" class="d-inline"

@@ -944,6 +944,17 @@ class MovementDocument(db.Model):
         """Сколько товара не принято на складе назначения и нужно найти."""
         return sum(discrepancy.shortage_qty() for discrepancy in self.discrepancies)
 
+    def transit_status_label(self):
+        """Статус собранного, но еще не принятого МП документа.
+
+        После завершения сборки товар ждет заявки на маркетплейс, затем
+        транспорт; "В пути" — только после отметки "Транспорт забрал"."""
+        if self.shipped_at is not None:
+            return "В пути"
+        if self.marketplace_request_created_at is not None and self.marketplace_request_number:
+            return "Ожидает транспорт"
+        return "Ждет заявки на МП"
+
     def total_plan_fact_qty(self):
         """Количество документа, которое может входить в факт плана.
 

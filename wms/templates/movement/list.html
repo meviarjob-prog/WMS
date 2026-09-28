@@ -109,7 +109,7 @@
             <td>
               {% if line.document.status != 'completed' %}—
               {% elif line.document.received_at %}Отгружено
-              {% else %}<span class="text-warning-emphasis">В пути</span>{% endif %}
+              {% else %}<span class="text-warning-emphasis">{{ line.document.transit_status_label() }}</span>{% endif %}
             </td>
           </tr>
         {% endfor %}
@@ -229,12 +229,12 @@
             {% elif current_user.can_receive_movements() and d.shipped_at %}
               <a class="btn btn-sm btn-warning movement-receive-btn text-decoration-none" href="{{ url_for('movement.receive', doc_id=d.id) }}"
                  title="Зафиксировать количество, принятое маркетплейсом">📥 Принято на МП</a>
+            {% elif d.shipped_at %}
+              <span class="text-warning-emphasis">В пути</span>
             {% elif d.marketplace_request_created_at and d.marketplace_request_number %}
               <span class="text-warning-emphasis small">Ожидает транспорт</span>
-            {% elif can_manage_document %}
-              <span class="text-muted small" title="Сначала отметьте: заявка на маркетплейс создана">Ждет заявки на МП</span>
             {% else %}
-              <span class="text-warning-emphasis">В пути</span>
+              <span class="text-muted small" title="Сначала отметьте: заявка на маркетплейс создана">Ждет заявки на МП</span>
             {% endif %}
           </td>
           <td class="text-center">
@@ -318,7 +318,7 @@
         <div class="small text-muted">{{ (d.created_at|msk).strftime('%d.%m.%Y') }} · {{ d.lines.count() }} короб. · {{ mobile_total_qty | int if mobile_total_qty == mobile_total_qty | int else mobile_total_qty | round(3) }} шт.{% if d.received_at %}{% set mobile_accepted_qty = d.total_received_qty() %} (принято {{ mobile_accepted_qty | int if mobile_accepted_qty == mobile_accepted_qty | int else mobile_accepted_qty | round(3) }}){% endif %}{% if d.created_by %} · Автор: {{ d.created_by.display_name() }}{% endif %}</div>
         {% if d.status == 'completed' and not d.received_at %}
           <div class="mt-1">
-            <span class="text-warning-emphasis small">{{ 'В пути' if d.shipped_at else ('Ожидает транспорт' if d.marketplace_request_created_at else 'Ждет заявки на МП') }}</span>
+            <span class="text-warning-emphasis small">{{ d.transit_status_label() }}</span>
           </div>
         {% endif %}
       </a>
