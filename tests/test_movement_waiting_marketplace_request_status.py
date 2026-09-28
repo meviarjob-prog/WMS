@@ -63,3 +63,20 @@ def test_completed_movement_waits_for_marketplace_request_for_non_author(db, cli
     for html in (detail, listing):
         assert "Ждет заявки на МП" in html
         assert "В пути</span>" not in html
+
+
+def test_admin_sees_same_status_as_other_users(db, client_logged_in):
+    waiting = _make_completed_doc("3")
+    shipped = _make_completed_doc("4")
+    shipped.marketplace_request_number = "REQ-4"
+    shipped.marketplace_request_created_at = datetime.utcnow()
+    shipped.shipped_at = datetime.utcnow()
+    db.session.commit()
+
+    waiting_html = client_logged_in.get(f"/movement/{waiting.id}").get_data(as_text=True)
+    shipped_html = client_logged_in.get(f"/movement/{shipped.id}").get_data(as_text=True)
+
+    assert "Ждет заявки на МП</span>" in waiting_html
+    assert "Сохранить номер" in waiting_html
+    assert "В пути</span>" in shipped_html
+    assert "Принято на складе МП" in shipped_html

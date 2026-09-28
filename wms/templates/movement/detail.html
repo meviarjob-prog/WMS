@@ -59,8 +59,10 @@
     <form method="post" action="{{ url_for('movement.complete', doc_id=doc.id) }}" class="d-inline">
       <button type="submit" class="btn btn-success">📦 Завершить сборку</button>
     </form>
-    {% elif (can_manage_document or can_receive_document) and doc.status == 'completed' and not doc.received_at %}
-      {% if not doc.marketplace_request_number %}
+    {% elif doc.status == 'completed' and not doc.received_at %}
+      <span class="text-warning-emphasis">{{ doc.transit_status_label() }}</span>
+      {% if not (can_manage_document or can_receive_document) %}
+      {% elif not doc.marketplace_request_number %}
       <form method="post" action="{{ url_for('movement.update_marketplace_request_number', doc_id=doc.id) }}" class="d-inline-flex gap-1 align-items-center">
         <input type="hidden" name="return_to" value="detail">
         <input type="text" name="marketplace_request_number" class="form-control form-control-sm" style="width:150px" placeholder="№ заявки на МП" required>
@@ -78,17 +80,14 @@
         <button type="submit" class="btn btn-primary">🚚 Транспорт забрал</button>
       </form>
       <span class="text-muted small d-block mt-1">После этого товар получит статус «В пути».</span>
-      {% else %}<span class="text-warning-emphasis">Ожидает транспорт</span>{% endif %}
-      {% else %}
-      {% if can_receive_document %}<a class="btn btn-warning" href="{{ url_for('movement.receive', doc_id=doc.id) }}"
+      {% endif %}
+      {% elif can_receive_document %}
+      <a class="btn btn-warning" href="{{ url_for('movement.receive', doc_id=doc.id) }}"
          title="Зафиксировать фактическое количество, принятое маркетплейсом">📥 Принято на складе МП</a>
-      {% else %}<span class="text-warning-emphasis">В пути</span>{% endif %}
       {% endif %}
     {% elif doc.status == 'completed' and doc.received_at %}
     <span class="badge bg-success">Принято МП {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
     {% if doc.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ doc.total_shortage_qty() | round(3) }}</span>{% elif doc.discrepancies %}<span class="badge bg-info text-dark">Излишек при приемке</span>{% endif %}
-    {% elif doc.status == 'completed' %}
-    <span class="text-warning-emphasis">{{ doc.transit_status_label() }}</span>
     {% endif %}
     {% if current_user.is_admin %}
     <form method="post" action="{{ url_for('movement.delete_document', doc_id=doc.id) }}" class="d-inline"

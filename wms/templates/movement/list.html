@@ -226,15 +226,12 @@
               <span class="text-muted">—</span>
             {% elif d.received_at %}
               <span class="badge bg-success" title="{{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') }}">Принято МП {{ (d.received_at|msk).strftime('%d.%m') }}</span>
-            {% elif current_user.can_receive_movements() and d.shipped_at %}
+            {% else %}
+              <span class="text-warning-emphasis small">{{ d.transit_status_label() }}</span>
+              {% if current_user.can_receive_movements() and d.shipped_at %}
               <a class="btn btn-sm btn-warning movement-receive-btn text-decoration-none" href="{{ url_for('movement.receive', doc_id=d.id) }}"
                  title="Зафиксировать количество, принятое маркетплейсом">📥 Принято на МП</a>
-            {% elif d.shipped_at %}
-              <span class="text-warning-emphasis">В пути</span>
-            {% elif d.marketplace_request_created_at and d.marketplace_request_number %}
-              <span class="text-warning-emphasis small">Ожидает транспорт</span>
-            {% else %}
-              <span class="text-muted small" title="Сначала отметьте: заявка на маркетплейс создана">Ждет заявки на МП</span>
+              {% endif %}
             {% endif %}
           </td>
           <td class="text-center">
