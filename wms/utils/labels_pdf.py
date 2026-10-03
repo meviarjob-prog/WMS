@@ -155,3 +155,62 @@ def build_zone_label_pdf(code_value: str, title: str) -> bytes:
     c.showPage()
     c.save()
     return buffer.getvalue()
+
+
+def _fit_text(c, text, font, size, max_width, min_size=6):
+    """Уменьшает кегль, пока строка не влезет по ширине; если и на
+    минимальном не влезает — обрезает с многоточием."""
+    while size > min_size and c.stringWidth(text, font, size) > max_width:
+        size -= 0.5
+    if c.stringWidth(text, font, size) > max_width:
+        while text and c.stringWidth(text + "…", font, size) > max_width:
+            text = text[:-1]
+        text += "…"
+    return text, size
+
+
+def build_mvb_box_labels_pdf(entries) -> bytes:
+    """Этикетки коробов МВБ Логистика 58x40мм. entries — список словарей:
+    barcode, destination («WB · Коледино»), slot («07.10.2026»), seq, total,
+    sender. Сверху крупно куда, затем слот и номер короба, штрихкод,
+    внизу отправитель."""
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
+    pad = 1.8 * mm
+    width = LABEL_WIDTH - 2 * pad
+    for e in entries:
+        top = LABEL_HEIGHT - pad
+        # Куда: маркетплейс и СЦ — самое заметное.
+        text, size = _fit_text(c, e["destination"], FONT_BOLD, 12, width)
+        c.setFont(FONT_BOLD, size)
+        top -= size * 0.36 * mm
+        c.drawString(pad, top, text)
+
+        # Слот слева, номер короба из общего количества справа.
+        top -= 4.2 * mm
+        c.setFont(FONT_BOLD, 8.5)
+        c.drawString(pad, top, f"Слот {e['slot']}" if e.get("slot") else "Слот —")
+        c.setFont(FONT_BOLD, 10)
+        c.drawRightString(LABEL_WIDTH - pad, top, f"{e['seq']} / {e['total']} кор.")
+
+        # Отправитель — нижняя строка.
+        bottom = pad
+        sender, size = _fit_text(c, f"От: {e['sender']}", FONT_REGULAR, 7.5, width)
+        c.setFont(FONT_REGULAR, size)
+        c.drawString(pad, bottom, sender)
+
+        # Штрихкод (с цифрами под ним) — все место между ними.
+        png_bytes = generate_barcode_png_bytes(e["barcode"])
+        img = ImageReader(io.BytesIO(png_bytes))
+        img_w, img_h = img.getSize()
+        area_top = top - 1.2 * mm
+        area_bottom = bottom + size * 0.36 * mm + 1.0 * mm
+        scale = min(width / img_w, (area_top - area_bottom) / img_h)
+        draw_w, draw_h = img_w * scale, img_h * scale
+        c.drawImage(
+            img, (LABEL_WIDTH - draw_w) / 2, area_bottom + (area_top - area_bottom - draw_h) / 2,
+            width=draw_w, height=draw_h, mask="auto",
+        )
+        c.showPage()
+    c.save()
+    return buffer.getvalue()

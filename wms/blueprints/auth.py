@@ -4,7 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from flask_login import current_user, login_required, login_user, logout_user
 
 from ..extensions import db
-from ..models import SECTIONS, User, Warehouse
+from ..models import MVB_ROLES, SECTIONS, User, Warehouse
 
 bp = Blueprint("auth", __name__)
 
@@ -24,6 +24,9 @@ def login():
     if not user or not user.is_active_user or not user.check_password(password):
         flash("Неверный логин или пароль", "danger")
         return render_template("auth/login.html", username=username)
+    if user.is_mvb_user():
+        flash("Это учетная запись МВБ Логистики — войдите через её страницу входа", "warning")
+        return redirect(url_for("mvb.login"))
 
     login_user(user, remember=True)
     session["session_version"] = user.session_version or 0
@@ -58,7 +61,11 @@ def users():
         return redirect(url_for("main.index"))
     from .movement import get_shipping_label_sender_override
 
-    all_users = User.query.order_by(User.username).all()
+    # Пользователи МВБ Логистики управляются в своем разделе (/mvb/admin/users).
+    all_users = (
+        User.query.filter(User.role.notin_(list(MVB_ROLES)))
+        .order_by(User.username).all()
+    )
     warehouses = Warehouse.query.order_by(Warehouse.code).all()
 
     return render_template(

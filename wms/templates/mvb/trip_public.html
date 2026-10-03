@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="robots" content="noindex">
+<title>Рейс {{ trip.number }} — МВБ Логистика</title>
+<meta name="theme-color" content="#198754">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+</head>
+<body>
+{# Страница наемного водителя на СЦ: открывается по ссылке без входа. #}
+<nav class="navbar navbar-dark mb-3" style="background:#14532d">
+  <div class="container-fluid"><span class="navbar-brand">🚚 МВБ Логистика</span></div>
+</nav>
+<div class="container px-3" style="max-width:640px">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  <h4 class="mb-1">Рейс {{ trip.number }} <span class="badge bg-success">{{ trip.status_label }}</span></h4>
+  <div class="text-muted mb-3">
+    {% if trip.transport_label() %}{{ trip.transport_label() }} · {% endif %}{% if trip.driver_label() %}{{ trip.driver_label() }} · {% endif %}коробов: {{ trip.boxes|length or trip.planned_boxes }}
+    {% if trip.status in ('assigned', 'arrived', 'loading') %}<br>Подача на склад МВБ: {{ (trip.planned_arrival_at|msk).strftime('%d.%m %H:%M') if trip.planned_arrival_at else 'уточните у оператора' }}{% endif %}
+  </div>
+
+  {% if trip.status == 'assigned' %}
+  <form method="post" action="{{ url_for('mvb.trip_public_arrive', token=token) }}" class="mb-3">
+    <button class="btn btn-outline-success btn-lg w-100">Я на погрузке</button>
+  </form>
+  {% elif trip.status in ('arrived', 'loading') %}
+  <div class="alert alert-info">Идет погрузка. После отправки здесь появятся кнопки «Сдан на СЦ» по точкам.</div>
+  {% elif trip.status == 'delivered' %}
+  <div class="alert alert-success">Рейс завершен, спасибо!</div>
+  {% endif %}
+
+  {% if trip.slot_date %}<div class="alert alert-warning py-2">Сдать на СЦ: <b>{{ trip.slot_date.strftime('%d.%m.%Y') }}</b></div>{% endif %}
+  <h5>Точки маршрута</h5>
+  {% if trip.route_url() %}<a class="btn btn-primary w-100 mb-2" target="_blank" href="{{ trip.route_url() }}">🗺 Маршрут по точкам</a>{% endif %}
+  <ol class="list-group list-group-numbered mb-3">
+    {% for stop in trip.stops %}
+    <li class="list-group-item">
+      {% set public_token = token %}{% include "mvb/_stop_driver.html" %}
+    </li>
+    {% endfor %}
+  </ol>
+</div>
+<script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+</body>
+</html>

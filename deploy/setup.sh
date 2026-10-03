@@ -36,7 +36,9 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/meviarjob-prog/WMS.git"
-BRANCH="claude/wms-system-python-t1db0u"
+# Ветка для установки; для тестового сервера можно задать другую:
+#   curl -fsSL .../setup.sh | WMS_BRANCH=claude/project-thread-19dtys bash
+BRANCH="${WMS_BRANCH:-claude/wms-system-python-t1db0u}"
 APP_DIR="/opt/wms"
 APP_USER="wms"
 SERVICE_NAME="wms"

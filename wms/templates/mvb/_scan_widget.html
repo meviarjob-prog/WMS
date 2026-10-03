@@ -1,0 +1,51 @@
+{# Поле скана + журнал. Нужны переменные scan_url и (необязательно) scan_reload. #}
+<div class="input-group input-group-lg mb-3" style="max-width:560px">
+  <input id="mvbScanInput" class="form-control" placeholder="{{ scan_placeholder or 'Штрихкод короба' }}" autocomplete="off" autofocus>
+  <button type="button" class="btn btn-outline-success" data-camera-scan-target="#mvbScanInput" title="Сканировать камерой">📷</button>
+</div>
+<div id="mvbScanLast" class="mb-3"></div>
+<h6>Отсканировано в этой сессии: <span id="mvbScanCount">0</span></h6>
+<ul id="mvbScanLog" class="list-group mb-3" style="max-width:720px"></ul>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const input = document.getElementById("mvbScanInput");
+  const last = document.getElementById("mvbScanLast");
+  const log = document.getElementById("mvbScanLog");
+  const countEl = document.getElementById("mvbScanCount");
+  let count = 0;
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+  async function send(code) {
+    const body = new URLSearchParams({barcode: code});
+    let data;
+    try {
+      const resp = await fetch("{{ scan_url }}", {method: "POST", body});
+      data = await resp.json();
+    } catch (e) {
+      data = {ok: false, message: "Нет связи с сервером"};
+    }
+    const cls = !data.ok ? "danger" : data.already ? "warning" : "success";
+    let extra = "";
+    if (data.order) {
+      extra += ` · <a href="${esc(data.order_url)}">${esc(data.order)}</a> · ${esc(data.client)} · ${data.direction ? esc(data.direction) + ' · ' : ''}короб ${esc(data.seq)}/${esc(data.total)}`;
+      if (data.done !== undefined) extra += ` · по направлению: ${esc(data.done)} из ${esc(data.total)}`;
+    }
+    if (data.count !== undefined) extra += ` · всего: ${esc(data.count)}`;
+    let html = `<div class="alert alert-${cls} fs-5 mb-1">${esc(data.message)}${extra}</div>`;
+    if (data.warning) html += `<div class="alert alert-warning mb-0">${esc(data.warning)}</div>`;
+    last.innerHTML = html;
+    if (data.ok && !data.already) {
+      count += 1;
+      countEl.textContent = count;
+    }
+    const li = document.createElement("li");
+    li.className = `list-group-item list-group-item-${cls}`;
+    li.innerHTML = `${esc(code)} — ${esc(data.message)}`;
+    log.prepend(li);
+    document.dispatchEvent(new CustomEvent("mvb:scanned", {detail: data}));
+    if (navigator.vibrate) navigator.vibrate(data.ok ? 60 : [100, 60, 100]);
+  }
+
+  initBarcodeInput(input, send);
+});
+</script>

@@ -1,0 +1,51 @@
+{% extends "mvb/base.html" %}
+{% block title %}Транспорт{% endblock %}
+{% block content %}
+<h3 class="mb-3">Транспорт</h3>
+<form method="post" class="card p-3 mb-4">
+  <h6>Добавить авто</h6>
+  <div class="row g-2">
+    <div class="col-md-2"><input name="plate" class="form-control" placeholder="Госномер *" required></div>
+    <div class="col-md-2"><input name="model" class="form-control" placeholder="Марка / модель"></div>
+    <div class="col-md-2"><input name="carrier" class="form-control" placeholder="Перевозчик (ТК)"></div>
+    <div class="col-md-2"><input name="capacity_boxes" type="number" min="0" class="form-control" placeholder="Вместимость, кор. *" required></div>
+    <div class="col-md-3">
+      <select name="driver_id" class="form-select">
+        <option value="">Водитель (необязательно)</option>
+        {% for d in drivers %}<option value="{{ d.id }}">{{ d.display_name() }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1"><button class="btn btn-success w-100">+</button></div>
+  </div>
+</form>
+<div class="table-responsive">
+<table class="table align-middle">
+  <thead><tr><th>Госномер</th><th>Модель</th><th>Перевозчик</th><th>Вместимость</th><th>Водитель</th><th>Активен</th><th></th></tr></thead>
+  <tbody>
+  {% for v in vehicles %}
+    <tr>
+      <td><input form="veh-{{ v.id }}" name="plate" class="form-control form-control-sm" value="{{ v.plate }}" required></td>
+      <td><input form="veh-{{ v.id }}" name="model" class="form-control form-control-sm" value="{{ v.model or '' }}"></td>
+      <td><input form="veh-{{ v.id }}" name="carrier" class="form-control form-control-sm" value="{{ v.carrier or '' }}"></td>
+      <td><input form="veh-{{ v.id }}" name="capacity_boxes" type="number" min="0" class="form-control form-control-sm" value="{{ v.capacity_boxes }}" style="width:90px"></td>
+      <td>
+        <select form="veh-{{ v.id }}" name="driver_id" class="form-select form-select-sm">
+          <option value="">—</option>
+          {% for d in drivers %}<option value="{{ d.id }}" {{ 'selected' if v.driver_id == d.id }}>{{ d.display_name() }}</option>{% endfor %}
+        </select>
+      </td>
+      <td><input form="veh-{{ v.id }}" type="checkbox" name="is_active" value="1" class="form-check-input" {{ 'checked' if v.is_active }}></td>
+      <td>
+        <form method="post" id="veh-{{ v.id }}">
+          <input type="hidden" name="vehicle_id" value="{{ v.id }}">
+          <button class="btn btn-sm btn-outline-primary">Сохранить</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="text-muted">Транспорт пока не добавлен. Водителей заводит администратор в «Пользователи».</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}
