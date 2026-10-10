@@ -6,6 +6,7 @@
   <h3 class="mb-0">Приемка товара</h3>
   <div class="d-flex flex-wrap gap-2">
     <a class="btn btn-outline-secondary" href="{{ url_for('receiving.returns_list') }}">↩ Возвраты поставщику</a>
+    {% if current_user.is_admin %}<a class="btn btn-outline-danger" href="{{ url_for('receiving.doubled_receipts') }}">⚠ Задвоенные приемки</a>{% endif %}
     <a class="btn btn-outline-primary" href="{{ url_for('receiving.import_invoice_form') }}">📄 Загрузить накладную</a>
     <a class="btn btn-primary" href="{{ url_for('receiving.new_document') }}">➕ Новая приемка</a>
   </div>

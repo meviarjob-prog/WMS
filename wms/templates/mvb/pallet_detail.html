@@ -1,0 +1,57 @@
+{% extends "mvb/base.html" %}
+{% block title %}Паллета {{ pallet.number }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
+  <div>
+    <h3 class="mb-1">Паллета {{ pallet.number }}</h3>
+    <div class="text-muted">{{ pallet.marketplace_label }}{% if pallet.destination %} · {{ pallet.destination }}{% endif %} · коробов: {{ pallet.boxes|length }}</div>
+  </div>
+  <div class="d-flex flex-wrap gap-2 align-items-start">
+    <a class="btn btn-outline-success" target="_blank" href="{{ url_for('mvb.pallet_label_pdf', pallet_id=pallet.id) }}">🖨 Этикетка паллеты</a>
+    {% if mvb_can_manage %}
+    <form method="post" action="{{ url_for('mvb.pallet_delete', pallet_id=pallet.id) }}" onsubmit="return confirm('Удалить паллету {{ pallet.number }}? Короба останутся на складе без паллеты.')"><button class="btn btn-danger">🗑 Удалить</button></form>
+    {% endif %}
+  </div>
+</div>
+<p class="text-muted">Сканируйте короба, которые ставите на эту паллету. Подходят только принятые на складе короба этого направления.</p>
+{% set scan_url = url_for('mvb.pallet_scan', pallet_id=pallet.id) %}
+{% include "mvb/_scan_widget.html" %}
+{% set on_pallet = boxes|selectattr('pallet_id', 'equalto', pallet.id)|list|length %}
+<h5>Короба этого направления: на паллете <span id="palletCount">{{ on_pallet }}</span> из {{ boxes|length }}
+  <a class="btn btn-sm btn-outline-secondary ms-2" href="{{ url_for('mvb.pallet_detail', pallet_id=pallet.id) }}">Обновить</a></h5>
+<div class="small mb-2"><span class="badge bg-success">&nbsp;</span> на этой паллете · <span class="badge bg-warning">&nbsp;</span> на другой паллете · без цвета — еще не отсканирован</div>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Штрихкод</th><th class="d-none d-md-table-cell">Заявка</th><th class="d-none d-sm-table-cell">Клиент</th><th class="d-none d-md-table-cell">Принят</th><th>Где</th><th></th></tr></thead>
+  <tbody>
+  {% for b in boxes %}
+    {% set here = b.pallet_id == pallet.id %}
+    <tr data-barcode="{{ b.barcode|upper }}" class="{{ 'table-success' if here else ('table-warning' if b.pallet_id else '') }}">
+      <td class="font-monospace text-nowrap">{{ b.barcode }}</td>
+      <td class="text-nowrap d-none d-md-table-cell">{{ b.order.number }}</td>
+      <td class="d-none d-sm-table-cell">{{ b.order.client.name }}</td>
+      <td class="d-none d-md-table-cell">{{ (b.received_at|msk).strftime('%d.%m %H:%M') if b.received_at else '' }}</td>
+      <td class="where">{% if here %}✓ на паллете{% elif b.pallet %}на {{ b.pallet.number }}{% else %}—{% endif %}{% if b.status != 'received' %} · {{ b.status_label }}{% endif %}</td>
+      <td>{% if here and b.status == 'received' %}
+        <form method="post" action="{{ url_for('mvb.pallet_remove_box', pallet_id=pallet.id, box_id=b.id) }}"><button class="btn btn-sm btn-outline-danger">Снять</button></form>
+      {% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="text-muted">На складе нет коробов этого направления</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<script>
+document.addEventListener("mvb:scanned", (e) => {
+  const d = e.detail;
+  if (!d.ok || !d.barcode) return;
+  const row = document.querySelector(`tr[data-barcode="${CSS.escape(String(d.barcode).toUpperCase())}"]`);
+  if (row) {
+    row.className = "table-success";
+    row.querySelector(".where").textContent = "✓ на паллете";
+  }
+  if (d.count !== undefined) document.getElementById("palletCount").textContent = d.count;
+});
+</script>
+{% endblock %}

@@ -119,6 +119,42 @@ def test_ozon_mapping_upload_skips_rows_where_first_column_is_not_a_barcode(db, 
     assert "не похожа на штрихкод" in resp.get_data(as_text=True)
 
 
+def test_ozon_mapping_clear_removes_all_rows(db, client_logged_in):
+    """Загрузка файла только добавляет/обновляет по штрихкоду, но никогда
+    не удаляет лишнее — для перезаливки сопоставления заново нужна явная
+    очистка (см. чат)."""
+    db.session.add_all(
+        [
+            OzonArticleMapping(barcode="8880100001", article="Артикул-А"),
+            OzonArticleMapping(barcode="8880100002", article="Артикул-Б"),
+        ]
+    )
+    db.session.commit()
+
+    resp = client_logged_in.post("/marketplace-export/ozon-mapping/clear")
+
+    assert resp.status_code == 302
+    assert OzonArticleMapping.query.count() == 0
+
+
+def test_ozon_mapping_clear_requires_admin(db, client):
+    from wms.models import User
+
+    worker = User(username="mpx-clear-worker", role="warehouse")
+    worker.set_password("x")
+    db.session.add(worker)
+    db.session.add(OzonArticleMapping(barcode="8880100001", article="Артикул-А"))
+    db.session.commit()
+    with client.session_transaction() as session:
+        session["_user_id"] = str(worker.id)
+        session["_fresh"] = True
+
+    resp = client.post("/marketplace-export/ozon-mapping/clear")
+
+    assert resp.status_code == 302
+    assert OzonArticleMapping.query.count() == 1
+
+
 def test_ozon_mapping_upload_requires_admin(db, client):
     from wms.models import User
 

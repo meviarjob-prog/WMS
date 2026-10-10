@@ -1,0 +1,254 @@
+{% extends "mvb/base.html" %}
+{% block title %}{{ 'Заявка ' ~ order.number if order else 'Новая заявка' }}{% endblock %}
+{% macro val(name, default='') -%}
+{%- if form is defined and form.get(name) is not none -%}{{ form.get(name) }}
+{%- elif order and order[name] is not none -%}{{ order[name] }}
+{%- else -%}{{ default }}{%- endif -%}
+{%- endmacro %}
+{% block content %}
+<h3 class="mb-3">{{ 'Заявка ' ~ order.number if order else 'Новая заявка' }}</h3>
+<form method="post" class="card p-3" style="max-width:860px">
+  {% if clients %}
+  <div class="mb-3">
+    <label class="form-label">Клиент</label>
+    <select name="client_id" class="form-select" required>
+      <option value="">— выберите —</option>
+      {% for c in clients %}<option value="{{ c.id }}" data-address="{{ c.address or '' }}" {{ 'selected' if val('client_id') == c.id|string }}>{{ c.name }}</option>{% endfor %}
+    </select>
+  </div>
+  {% endif %}
+  {%- set rows = [] -%}
+  {%- if form is defined and form.getlist('line_marketplace') -%}
+    {%- for mp in form.getlist('line_marketplace') -%}
+      {%- set i = loop.index0 -%}
+      {%- set _ = rows.append({'mp': mp, 'dest': (form.getlist('line_destination')[i] if i < form.getlist('line_destination')|length else ''), 'slot': (form.getlist('line_slot')[i] if i < form.getlist('line_slot')|length else ''), 'boxes': (form.getlist('line_boxes')[i] if i < form.getlist('line_boxes')|length else '')}) -%}
+    {%- endfor -%}
+  {%- elif order and order.lines -%}
+    {%- for l in order.lines -%}{%- set _ = rows.append({'mp': l.marketplace, 'dest': l.destination or '', 'slot': l.slot_date or '', 'boxes': l.box_count}) -%}{%- endfor -%}
+  {%- elif order -%}
+    {%- set _ = rows.append({'mp': order.marketplace, 'dest': order.destination or '', 'slot': order.slot_date or '', 'boxes': order.box_count}) -%}
+  {%- endif -%}
+  {%- set count = (form.get('direction_count')|int if form is defined and form.get('direction_count') else 0) or (order.lines|length if order and order.lines else 0) or 1 -%}
+  <div class="mb-3" style="max-width:320px">
+    <label class="form-label">Сколько направлений в заявке?</label>
+    <select name="direction_count" id="direction-count" class="form-select">
+      {% for n in range(1, max_directions + 1) %}<option value="{{ n }}" {{ 'selected' if n == count }}>{{ n }}</option>{% endfor %}
+    </select>
+  </div>
+  {% for n in range(max_directions) %}
+    {% set r = rows[n] if n < rows|length else {} %}
+    <div class="direction-row border rounded p-2 mb-2" data-n="{{ n + 1 }}">
+      <div class="small fw-bold mb-1">Направление {{ n + 1 }}</div>
+      <div class="row g-2">
+        <div class="col-12 col-md-4">
+          <label class="form-label small mb-0">Куда</label>
+          <select name="line_marketplace" class="form-select js-mp">
+            {% for code, label in MVB_MARKETPLACES.items() %}<option value="{{ code }}" {{ 'selected' if (r.mp or 'wb') == code }}>{{ label }}</option>{% endfor %}
+          </select>
+        </div>
+        {% if mvb_destinations %}
+        <div class="col-12 col-md-4">
+          <label class="form-label small mb-0">Город *</label>
+          <div class="autocomplete-box js-city-box">
+            <input type="text" class="form-control js-city-input" autocomplete="off" placeholder="Начните вводить город..." required>
+            <input type="hidden" class="js-city">
+            <div class="autocomplete-list"></div>
+          </div>
+        </div>
+        <div class="col-12 col-md-4 js-ff-wrap">
+          <label class="form-label small mb-0">Фулфилмент *</label>
+          <select class="form-select js-ff"></select>
+        </div>
+        <input type="hidden" name="line_destination" class="js-dest" value="{{ r.dest or '' }}" data-initial="{{ r.dest or '' }}">
+        {% else %}
+        <div class="col-12 col-md-4">
+          <label class="form-label small mb-0">Город (СЦ) / фулфилмент *</label>
+          <input name="line_destination" class="form-control" value="{{ r.dest or '' }}" placeholder="например, Коледино" required>
+        </div>
+        {% endif %}
+        <div class="col-7 col-md-6">
+          <label class="form-label small mb-0">Дата слота *</label>
+          <input name="line_slot" type="date" class="form-control" value="{{ r.slot or '' }}" required>
+        </div>
+        <div class="col-5 col-md-6">
+          <label class="form-label small mb-0">Коробов *</label>
+          <input name="line_boxes" type="number" min="1" max="500" inputmode="numeric" class="form-control" value="{{ r.boxes or '' }}" required>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+  <div class="form-text mb-3">Дата слота — дата поставки, забронированная на складе маркетплейса. Всего коробов: <b id="total-boxes">0</b>.</div>
+  <div class="row g-3">
+    <div class="col-sm-6">
+      <label class="form-label">Способ передачи</label>
+      <select name="delivery_method" class="form-select">
+        {% for code, label in MVB_DELIVERY_METHODS.items() %}<option value="{{ code }}" {{ 'selected' if val('delivery_method', 'pickup') == code }}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-12">
+      <label class="form-label">Адрес забора</label>
+      <input name="pickup_address" class="form-control" value="{{ val('pickup_address', default_address or '') }}">
+      <div class="form-text">Обязателен для забора транспортной компанией.</div>
+    </div>
+    {% if mvb_pickup_zones %}
+    <div class="col-sm-6 js-zone">
+      <label class="form-label">Зона забора *</label>
+      <select name="pickup_zone_id" class="form-select">
+        <option value="">— выберите —</option>
+        {% for z in mvb_pickup_zones %}<option value="{{ z.id }}" {{ 'selected' if val('pickup_zone_id') == z.id|string }}>{{ z.name }} — {{ '%g'|format(z.price) }} ₽</option>{% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <div class="col-12"></div>
+    <div class="col-sm-4">
+      <label class="form-label">Дата забора / сдачи</label>
+      <input name="planned_date" type="date" class="form-control" value="{{ val('planned_date') }}">
+    </div>
+    <div class="col-12">
+      <label class="form-label">Комментарий</label>
+      <textarea name="comment" class="form-control" rows="2">{{ val('comment') }}</textarea>
+    </div>
+  </div>
+  <div class="mt-3 d-flex gap-2">
+    <button class="btn btn-success">Сохранить</button>
+    <a class="btn btn-outline-secondary" href="{{ url_for('mvb.order_detail', order_id=order.id) if order else url_for('mvb.orders') }}">Отмена</a>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+  // Адрес клиента по умолчанию подставляется при выборе клиента (оператором).
+  const clientSelect = document.querySelector("select[name=client_id]");
+  const addressInput = document.querySelector("input[name=pickup_address]");
+  const countSelect = document.getElementById("direction-count");
+  const rows = [...document.querySelectorAll(".direction-row")];
+  const total = document.getElementById("total-boxes");
+  function refreshRows() {
+    const count = parseInt(countSelect.value, 10) || 1;
+    rows.forEach(row => {
+      const on = parseInt(row.dataset.n, 10) <= count;
+      row.classList.toggle("d-none", !on);
+      // Скрытые строки не отправляются и не мешают обязательными полями.
+      row.querySelectorAll("input, select").forEach(el => el.disabled = !on);
+    });
+    let sum = 0;
+    rows.forEach(row => {
+      const input = row.querySelector("input[name=line_boxes]");
+      if (!input.disabled) sum += parseInt(input.value, 10) || 0;
+    });
+    total.textContent = sum;
+  }
+  // Зона забора нужна только для забора.
+  const methodSelect = document.querySelector("select[name=delivery_method]");
+  const zoneBox = document.querySelector(".js-zone");
+  if (zoneBox) {
+    const zoneSync = () => {
+      const on = methodSelect.value === "pickup";
+      zoneBox.classList.toggle("d-none", !on);
+      zoneBox.querySelector("select").required = on;
+    };
+    methodSelect.addEventListener("change", zoneSync); zoneSync();
+  }
+  countSelect.addEventListener("change", refreshRows);
+  document.querySelectorAll("input[name=line_boxes]").forEach(el => el.addEventListener("input", refreshRows));
+  refreshRows();
+
+  // Пункты назначения из прайса: куда → город → (для ФФ) название.
+  {% set dd = [] %}{% for d in mvb_destinations %}{% set _ = dd.append({'mp': d.marketplace, 'city': d.city, 'value': d.value}) %}{% endfor %}
+  const DESTS = {{ dd|tojson }};
+  function option(value, text, selected) {
+    const o = document.createElement("option");
+    o.value = value; o.textContent = text; o.selected = !!selected;
+    return o;
+  }
+  rows.forEach(row => {
+    const mp = row.querySelector(".js-mp"), city = row.querySelector(".js-city");
+    const cityInput = row.querySelector(".js-city-input"), cityList = row.querySelector(".js-city-box .autocomplete-list");
+    const ff = row.querySelector(".js-ff"), ffWrap = row.querySelector(".js-ff-wrap"), dest = row.querySelector(".js-dest");
+    if (!city) return;
+    const initial = DESTS.find(d => d.mp === mp.value && d.value.toLowerCase() === (dest.dataset.initial || "").toLowerCase());
+    let cities = [];
+    let matches = [];
+    let activeIndex = -1;
+    function sync() {
+      dest.value = mp.value === "ff" ? ff.value : city.value;
+    }
+    function fillFf(selected) {
+      ff.innerHTML = "";
+      ff.appendChild(option("", "— выберите —"));
+      DESTS.filter(d => d.mp === "ff" && d.city === city.value)
+        .forEach(d => ff.appendChild(option(d.value, d.value, d.value === selected)));
+      sync();
+    }
+    function closeCityList() {
+      cityList.classList.remove("show");
+      cityList.innerHTML = "";
+      activeIndex = -1;
+    }
+    function updateActive() {
+      [...cityList.children].forEach((el, idx) => el.classList.toggle("active", idx === activeIndex));
+    }
+    function selectCity(c) {
+      city.value = c;
+      cityInput.value = c;
+      closeCityList();
+      if (mp.value === "ff") fillFf(); else sync();
+    }
+    // Список городов фильтруется по подстроке (не только с начала названия) —
+    // проще найти нужный город, зная только часть его названия (см. чат).
+    function renderCityList() {
+      const q = cityInput.value.trim().toLowerCase();
+      matches = q ? cities.filter(c => c.toLowerCase().includes(q)) : cities;
+      activeIndex = -1;
+      cityList.innerHTML = "";
+      if (matches.length === 0) { closeCityList(); return; }
+      matches.forEach(c => {
+        const div = document.createElement("div");
+        div.className = "autocomplete-item";
+        div.textContent = c;
+        div.addEventListener("mousedown", (e) => { e.preventDefault(); selectCity(c); });
+        cityList.appendChild(div);
+      });
+      cityList.classList.add("show");
+    }
+    function fillCities(selectedCity, selectedFf) {
+      cities = [...new Set(DESTS.filter(d => d.mp === mp.value).map(d => d.city))];
+      city.value = selectedCity || "";
+      cityInput.value = selectedCity || "";
+      const isFf = mp.value === "ff";
+      ffWrap.classList.toggle("d-none", !isFf);
+      ff.required = isFf && !row.classList.contains("d-none");
+      if (isFf) fillFf(selectedFf); else sync();
+    }
+    mp.addEventListener("change", () => fillCities());
+    cityInput.addEventListener("input", () => { city.value = ""; renderCityList(); });
+    cityInput.addEventListener("focus", renderCityList);
+    cityInput.addEventListener("blur", () => setTimeout(closeCityList, 150));
+    cityInput.addEventListener("keydown", (e) => {
+      if (!cityList.classList.contains("show")) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        activeIndex = Math.min(activeIndex + 1, matches.length - 1);
+        updateActive();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        activeIndex = Math.max(activeIndex - 1, 0);
+        updateActive();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (activeIndex >= 0) selectCity(matches[activeIndex]);
+        else if (matches.length === 1) selectCity(matches[0]);
+      }
+    });
+    ff.addEventListener("change", sync);
+    countSelect.addEventListener("change", () => { ff.required = mp.value === "ff" && !row.classList.contains("d-none"); });
+    fillCities(initial ? initial.city : null, initial ? initial.value : null);
+  });
+  if (clientSelect) {
+    clientSelect.addEventListener("change", () => {
+      const opt = clientSelect.selectedOptions[0];
+      if (opt && opt.dataset.address && !addressInput.value) addressInput.value = opt.dataset.address;
+    });
+  }
+</script>
+{% endblock %}

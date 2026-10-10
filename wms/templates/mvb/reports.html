@@ -1,0 +1,84 @@
+{% extends "mvb/base.html" %}
+{% block title %}Отчет по клиентам{% endblock %}
+{% macro num(v, money=False) %}{% if money %}{{ '{:,.2f}'.format(v).replace(',', ' ') }}{% else %}{{ v }}{% endif %}{% endmacro %}
+{% block content %}
+<h3 class="mb-3">Отчет по клиентам</h3>
+<form method="get" class="d-flex flex-wrap align-items-end gap-2 mb-3">
+  <div><label class="form-label small mb-0">С</label><input type="date" name="date_from" value="{{ date_from.isoformat() }}" class="form-control"></div>
+  <div><label class="form-label small mb-0">По</label><input type="date" name="date_to" value="{{ date_to.isoformat() }}" class="form-control"></div>
+  <button class="btn btn-outline-success">Показать</button>
+  <a class="btn btn-outline-secondary" href="{{ url_for('mvb.reports_xlsx', date_from=date_from.isoformat(), date_to=date_to.isoformat()) }}">⬇ Excel</a>
+</form>
+<p class="text-muted small">Заявки, стоимость и короба по этапам — по заявкам, оформленным в периоде. «Отправлено на СЦ», «Сдано», «Не сдано» — короба, отправленные рейсами в периоде.</p>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Клиент</th>{% for key, label in columns %}<th class="text-end">{{ label }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><a href="{{ url_for('mvb.orders', client_id=r.client.id) }}">{{ r.client.name }}</a></td>
+      {% for key, label in columns %}<td class="text-end {{ 'fw-bold' if key in ('shipped', 'total') }}">{{ num(r[key], key.endswith('cost') or key == 'total') }}</td>{% endfor %}
+    </tr>
+  {% else %}
+    <tr><td colspan="{{ columns|length + 1 }}" class="text-muted">За период данных нет</td></tr>
+  {% endfor %}
+  </tbody>
+  {% if rows %}
+  <tfoot><tr class="fw-bold"><td>Итого</td>{% for key, label in columns %}<td class="text-end">{{ num(totals[key], key.endswith('cost') or key == 'total') }}</td>{% endfor %}</tr></tfoot>
+  {% endif %}
+</table>
+</div>
+
+<h5 class="mt-4">По заявкам</h5>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Дата заявки</th><th>Заявка</th><th>Клиент</th><th>Направления</th>{% for key, label in order_columns %}<th class="text-end">{{ label }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in order_rows %}
+    <tr>
+      <td class="text-nowrap">{{ r.date.strftime('%d.%m.%Y %H:%M') if r.date else '' }}</td>
+      <td><a href="{{ url_for('mvb.order_detail', order_id=r.order.id) }}">{{ r.order.number }}</a></td>
+      <td>{{ r.order.client.name }}</td>
+      <td>{{ r.order.directions_label }}</td>
+      {% for key, label in order_columns %}<td class="text-end">{% if key == 'total' %}{{ num(r.total, True) if r.total is not none else '—' }}{% else %}{{ r[key] }}{% endif %}</td>{% endfor %}
+    </tr>
+  {% else %}
+    <tr><td colspan="{{ order_columns|length + 4 }}" class="text-muted">За период заявок нет</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h5 class="mt-4">По водителям</h5>
+<p class="text-muted small">Кто из водителей сколько коробов забрал и по каким заявкам — по дате скана забора в периоде.</p>
+<div class="table-responsive mb-3" style="max-width:420px">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Водитель</th><th class="text-end">Коробов</th></tr></thead>
+  <tbody>
+  {% for name, boxes in driver_totals %}
+    <tr><td>{{ name }}</td><td class="text-end fw-bold">{{ boxes }}</td></tr>
+  {% else %}
+    <tr><td colspan="2" class="text-muted">За период данных нет</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Водитель</th><th>Заявка</th><th>Клиент</th><th>Дата забора</th><th class="text-end">Коробов</th></tr></thead>
+  <tbody>
+  {% for r in driver_rows %}
+    <tr>
+      <td>{{ r.driver.display_name() if r.driver else 'Без водителя' }}</td>
+      <td><a href="{{ url_for('mvb.order_detail', order_id=r.order.id) }}">{{ r.order.number }}</a></td>
+      <td>{{ r.order.client.name }}</td>
+      <td class="text-nowrap">{{ r.picked_up_at.strftime('%d.%m.%Y %H:%M') if r.picked_up_at else '—' }}</td>
+      <td class="text-end fw-bold">{{ r.boxes }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="text-muted">За период заборов нет</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

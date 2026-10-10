@@ -1,0 +1,209 @@
+{% extends "mvb/base.html" %}
+{% block title %}Заявка {{ order.number }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h3 class="mb-1">Заявка {{ order.number }}</h3>
+    <div class="text-muted">{{ order.client.name }} · создана {{ (order.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</div>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    {% set can_edit = mvb_is_operator or mvb_is_client %}
+    {% if order.status == 'draft' and can_edit %}
+      <a class="btn btn-outline-primary" href="{{ url_for('mvb.order_edit', order_id=order.id) }}">Изменить</a>
+      <form method="post" action="{{ url_for('mvb.order_confirm', order_id=order.id) }}">
+        <button class="btn btn-success">Оформить и присвоить штрихкоды</button>
+      </form>
+    {% elif order.status == 'confirmed' %}
+      <a class="btn btn-success" target="_blank" href="{{ url_for('mvb.order_labels_pdf', order_id=order.id) }}">🖨 Этикетки на все короба</a>
+    {% endif %}
+    {% if can_edit and order.status != 'cancelled' and counts.created == order.boxes|length %}
+      <form method="post" action="{{ url_for('mvb.order_cancel', order_id=order.id) }}" onsubmit="return confirm('Отменить заявку?')">
+        <button class="btn btn-outline-danger">Отменить</button>
+      </form>
+    {% endif %}
+    {% if mvb_can_manage %}
+      <form method="post" action="{{ url_for('mvb.order_delete', order_id=order.id) }}" onsubmit="return confirm('Удалить заявку {{ order.number }} совсем? Короба и их история удалятся без возможности восстановления.')">
+        <button class="btn btn-danger">🗑 Удалить</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if mvb_is_operator and order.status == 'confirmed' and not order.client.is_internal %}
+<form method="post" action="{{ url_for('mvb.order_costs', order_id=order.id) }}" class="card p-3 mb-3 d-flex flex-row flex-wrap gap-2 align-items-end">
+  <div><label class="form-label small mb-0">Забор груза, ₽</label><input name="pickup_cost" class="form-control" value="{{ '%.2f'|format(order.pickup_cost) if order.pickup_cost is not none else '' }}" style="max-width:150px"></div>
+  <div><label class="form-label small mb-0">Отправка на СЦ, ₽</label><input name="sc_cost" class="form-control" value="{{ '%.2f'|format(order.sc_cost) if order.sc_cost is not none else '' }}" style="max-width:150px"></div>
+  <div><label class="form-label small mb-0">Палетирование, ₽</label><input name="pallet_cost" class="form-control" value="{{ '%.2f'|format(order.pallet_cost) if order.pallet_cost is not none else '' }}" style="max-width:150px"></div>
+  <button class="btn btn-outline-success">Сохранить стоимость</button>
+  <button class="btn btn-outline-secondary" name="action" value="recalc">Пересчитать по прайсу</button>
+</form>
+{% endif %}
+{% if order.client.is_internal and (order.wms_movement or order.lines|selectattr('wms_movement')|list) %}
+<div class="alert alert-secondary">Свои короба из WMS — сканируются по прежним этикеткам WMS.</div>
+{% endif %}
+{% if order.status == 'confirmed' %}
+<div class="card p-3 mb-3 border-warning border-2" style="background:#fff8e1">
+  <h5 class="mb-1">🚚 Данные водителя для пропуска на СЦ</h5>
+  <div class="small text-muted mb-2">Для заказа пропуска в личном кабинете маркетплейса — водитель, который везет на СЦ.</div>
+  {% for l in order.lines %}
+    {% set t = l.pass_trip %}
+    <div class="{{ 'border-top pt-2 mt-2' if not loop.first }}">
+      {% if order.lines|length > 1 %}<div class="fw-bold mb-1">{{ l.short_label() }}{% if l.slot_date %} · слот {{ l.slot_date.strftime('%d.%m.%Y') }}{% endif %}</div>{% endif %}
+      {% if t and t.pass_ready() %}
+        {% set pass_text %}Водитель: {{ t.driver_label() }}{% if t.driver_phone %}, тел. {{ t.driver_phone }}{% endif %}; авто: {{ t.transport_label() }}{% if t.slot_date %}; дата поставки: {{ t.slot_date.strftime('%d.%m.%Y') }}{% endif %}{% endset %}
+        <div class="fs-5">Водитель: <b>{{ t.driver_label() }}</b></div>
+        {% if t.driver_phone %}<div>Телефон: <b>{{ t.driver_phone }}</b></div>{% endif %}
+        {% if t.car_plate %}<div class="fs-5">Госномер: <b>{{ t.car_plate }}</b></div>{% endif %}
+        {% if t.car_model %}<div>Модель авто: <b>{{ t.car_model }}</b></div>{% endif %}
+        {% if not t.car_plate %}<div>Авто: <b>{{ t.transport_label() }}</b></div>{% endif %}
+        {% if t.planned_arrival_at %}<div class="text-muted small">Подача на погрузку: {{ (t.planned_arrival_at|msk).strftime('%d.%m.%Y %H:%M') }}</div>{% endif %}
+        <button type="button" class="btn btn-warning mt-2 js-copy" data-text="{{ pass_text|trim }}">Скопировать</button>
+      {% else %}
+        <div class="text-muted fst-italic">⏳ Здесь появятся данные водителя для пропуска</div>
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+{% endif %}
+<div class="row g-3 mb-3">
+  <div class="col-md-6">
+    <div class="card p-3 h-100">
+      <div><b>Статус:</b> {{ order.progress_label() }}</div>
+      <div><b>Способ:</b> {{ order.delivery_label }}</div>
+      {% if order.pickup_address %}<div><b>Адрес забора:</b> {{ order.pickup_address }}</div>{% endif %}
+      {% if order.pickup_zone and order.delivery_method == 'pickup' %}<div><b>Зона забора:</b> {{ order.pickup_zone.name }}</div>{% endif %}
+      <div><b>Дата забора / сдачи:</b> {{ order.planned_date.strftime('%d.%m.%Y') if order.planned_date else '—' }}{% if order.time_from %} {{ order.time_from }}{% if order.time_to %}–{{ order.time_to }}{% endif %}{% endif %}</div>
+      <div><b>Коробов всего:</b> {{ order.box_count }}{% if order.lines|length > 1 %} · направлений {{ order.lines|length }}{% endif %}</div>
+      {% if order.status == 'confirmed' and not order.client.is_internal and (mvb_is_operator or mvb_is_client) %}
+      <div><b>Стоимость:</b>
+        {% if order.total_cost is not none %}
+          {% if order.pickup_cost is not none %}забор {{ '%.2f'|format(order.pickup_cost) }} ₽ · {% endif %}{% if order.sc_cost is not none %}отправка на СЦ {{ '%.2f'|format(order.sc_cost) }} ₽ · {% endif %}{% if order.pallet_cost is not none %}палетирование {{ '%.2f'|format(order.pallet_cost) }} ₽ · {% endif %}<b>итого {{ '%.2f'|format(order.total_cost) }} ₽</b>
+        {% else %}не рассчитана{% endif %}
+      </div>
+      {% endif %}
+      {% if order.comment %}<div><b>Комментарий:</b> {{ order.comment }}</div>{% endif %}
+    </div>
+  </div>
+  {% if order.status == 'confirmed' %}
+  <div class="col-md-6">
+    <div class="card p-3 h-100">
+      {% for code, label in MVB_BOX_STATUSES %}
+        <div class="d-flex justify-content-between"><span>{{ label }}</span><b>{{ counts[code] }}</b></div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<h5>Направления</h5>
+<div class="d-md-none mb-3">
+  {% for l in order.lines %}
+  <div class="card p-2 mb-2">
+    <div class="d-flex justify-content-between gap-2">
+      <b>{% if order.lines|length > 1 %}{{ l.seq }}. {% endif %}{{ l.short_label() }}</b>
+      <span class="text-nowrap">{{ l.box_count }} кор.{% if order.status == 'confirmed' %} · сдано {{ l.boxes|selectattr('status', 'equalto', 'delivered')|list|length }}{% endif %}</span>
+    </div>
+    {% if l.wms_movement %}<div class="text-muted small">перемещение WMS {{ l.wms_movement.number }}</div>{% endif %}
+    {% set can_slot = order.status == 'confirmed' and (mvb_is_operator or mvb_is_client) and not (l.boxes|selectattr('status', 'in', ['shipped', 'delivered'])|list) %}
+    {% if can_slot %}
+    <form method="post" action="{{ url_for('mvb.order_slot', order_id=order.id) }}" class="d-flex gap-1 mt-1 align-items-center">
+      <span class="small text-muted">Слот:</span>
+      <input type="hidden" name="line_id" value="{{ l.id }}">
+      <input type="date" name="slot_date" class="form-control form-control-sm" value="{{ l.slot_date or '' }}" required>
+      <button class="btn btn-sm btn-outline-secondary">OK</button>
+    </form>
+    {% else %}<div class="small text-muted">Слот: {{ l.slot_date.strftime('%d.%m.%Y') if l.slot_date else '—' }}</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+<div class="table-responsive mb-3 d-none d-md-block">
+<table class="table table-sm align-middle">
+  <thead><tr><th>#</th><th>Куда</th><th>Слот на СЦ</th><th class="text-end">Коробов</th>{% if order.status == 'confirmed' %}<th class="text-end">Сдано на СЦ</th>{% endif %}</tr></thead>
+  <tbody>
+  {% for l in order.lines %}
+    <tr>
+      <td>{{ l.seq }}</td>
+      <td><b>{{ l.short_label() }}</b>{% if l.wms_movement %} <span class="text-muted small">· перемещение WMS {{ l.wms_movement.number }}</span>{% endif %}</td>
+      <td>
+        {% set can_slot = order.status == 'confirmed' and (mvb_is_operator or mvb_is_client) and not (l.boxes|selectattr('status', 'in', ['shipped', 'delivered'])|list) %}
+        {% if can_slot %}
+        <form method="post" action="{{ url_for('mvb.order_slot', order_id=order.id) }}" class="d-inline-flex gap-1 align-middle">
+          <input type="hidden" name="line_id" value="{{ l.id }}">
+          <input type="date" name="slot_date" class="form-control form-control-sm" value="{{ l.slot_date or '' }}" required style="max-width:150px">
+          <button class="btn btn-sm btn-outline-secondary">{{ 'Изменить' if l.slot_date else 'Указать' }}</button>
+        </form>
+        {% else %}{{ l.slot_date.strftime('%d.%m.%Y') if l.slot_date else '—' }}{% endif %}
+      </td>
+      <td class="text-end">{{ l.box_count }}</td>
+      {% if order.status == 'confirmed' %}<td class="text-end">{{ l.boxes|selectattr('status', 'equalto', 'delivered')|list|length }}</td>{% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+
+
+{% if order.status == 'confirmed' and order.delivery_method == 'pickup' and mvb_is_operator %}
+<form method="post" action="{{ url_for('mvb.order_assign_driver', order_id=order.id) }}" class="card p-3 mb-3 d-flex flex-row flex-wrap gap-2 align-items-center">
+  <b>Водитель на забор:</b>
+  <select name="driver_id" class="form-select w-auto">
+    <option value="">— не назначен —</option>
+    {% for d in drivers %}<option value="{{ d.id }}" {{ 'selected' if order.driver_id == d.id }}>{{ d.display_name() }}</option>{% endfor %}
+  </select>
+  <button class="btn btn-outline-success">Назначить</button>
+</form>
+{% elif order.driver %}
+<div class="mb-3"><b>Водитель на забор:</b> {{ order.driver.display_name() }}</div>
+{% endif %}
+
+{% if order.status == 'draft' %}
+  <div class="alert alert-info">Это черновик. После оформления каждому из {{ order.box_count }} коробов будет присвоен свой штрихкод — распечатайте этикетки и наклейте на каждый короб. Короб без штрихкода не принимается.</div>
+{% elif order.boxes %}
+{% set groups = [] %}
+{% for l in order.lines %}{% set _ = groups.append((l, l.boxes)) %}{% endfor %}
+{% set loose = order.boxes|rejectattr('line')|list %}
+{% if loose %}{% set _ = groups.append((none, loose)) %}{% endif %}
+{% for l, boxes in groups %}
+{% set delivered = boxes|selectattr('status', 'equalto', 'delivered')|list|length %}
+{% set received = boxes|selectattr('received_at')|list|length %}
+<div class="d-flex flex-wrap align-items-center gap-2 mt-3 mb-1">
+  <h5 class="mb-0">{% if l %}{% if groups|length > 1 %}{{ l.seq }}. {% endif %}{{ l.short_label() }}{% else %}Короба{% endif %}</h5>
+  {% if l and l.slot_date %}<span class="text-muted">слот {{ l.slot_date.strftime('%d.%m.%Y') }}</span>{% endif %}
+  <span class="badge bg-secondary">{{ boxes|length }} кор.</span>
+  <span class="badge bg-light text-dark">на складе {{ received }} / {{ boxes|length }}</span>
+  <span class="badge {{ 'bg-success' if delivered == boxes|length else 'bg-light text-dark' }}">сдано на СЦ {{ delivered }} / {{ boxes|length }}</span>
+  {% if l and groups|length > 1 %}<a class="btn btn-sm btn-outline-success" target="_blank" href="{{ url_for('mvb.order_labels_pdf', order_id=order.id, line=l.id) }}">🖨 Этикетки направления</a>{% endif %}
+</div>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>№</th><th>Штрихкод</th><th>Статус</th><th class="d-none d-md-table-cell">Забран</th><th class="d-none d-md-table-cell">На складе</th><th class="d-none d-md-table-cell">Погружен</th><th class="d-none d-md-table-cell">Отгружен на СЦ</th><th class="d-none d-md-table-cell">Сдан на СЦ</th><th></th></tr></thead>
+  <tbody>
+  {% for b in boxes %}
+    <tr>
+      <td class="text-nowrap">{{ loop.index }} / {{ boxes|length }}</td>
+      <td class="font-monospace text-nowrap small">{{ b.barcode }}</td>
+      <td>{{ b.status_label }}</td>
+      <td class="d-none d-md-table-cell">{{ (b.picked_up_at|msk).strftime('%d.%m %H:%M') if b.picked_up_at else '' }}</td>
+      <td class="d-none d-md-table-cell">{{ (b.received_at|msk).strftime('%d.%m %H:%M') if b.received_at else '' }}</td>
+      <td class="d-none d-md-table-cell">{{ (b.loaded_at|msk).strftime('%d.%m %H:%M') if b.loaded_at else '' }}{% if b.trip and mvb_is_staff %} <a href="{{ url_for('mvb.trip_detail', trip_id=b.trip.id) }}">{{ b.trip.number }}</a>{% endif %}</td>
+      <td class="d-none d-md-table-cell">{{ (b.shipped_at|msk).strftime('%d.%m %H:%M') if b.shipped_at else '' }}</td>
+      <td class="d-none d-md-table-cell">{{ (b.delivered_at|msk).strftime('%d.%m %H:%M') if b.delivered_at else '' }}</td>
+      <td><a target="_blank" href="{{ url_for('mvb.order_labels_pdf', order_id=order.id, seq=b.seq) }}" title="Этикетка">🖨</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+  document.querySelectorAll(".js-copy").forEach(btn => btn.addEventListener("click", () => {
+    const done = () => { btn.textContent = "Скопировано ✓"; setTimeout(() => btn.textContent = "Скопировать", 1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(btn.dataset.text).then(done);
+    else { const t = document.createElement("textarea"); t.value = btn.dataset.text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); done(); }
+  }));
+</script>
+{% endblock %}

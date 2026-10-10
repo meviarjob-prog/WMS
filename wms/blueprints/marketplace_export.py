@@ -134,6 +134,22 @@ def ozon_mapping():
     )
 
 
+@bp.route("/ozon-mapping/clear", methods=["POST"])
+def ozon_mapping_clear():
+    """Полная очистка сопоставления (см. чат: "для перезаливки") — загрузка
+    файла только ДОБАВЛЯЕТ/обновляет строки по штрихкоду, но никогда не
+    удаляет те, которых в новом файле уже нет, поэтому при смене
+    артикулов в личном кабинете Ozon старые записи иначе копятся вечно и
+    могут молча подставляться вместо актуальных."""
+    if not current_user.is_admin:
+        flash("Очищать сопоставление артикулов Ozon может только администратор", "danger")
+        return redirect(url_for("marketplace_export.ozon_mapping"))
+    deleted = OzonArticleMapping.query.delete()
+    db.session.commit()
+    flash(f"Сопоставление артикулов Ozon очищено: удалено {deleted} штрихкодов", "success")
+    return redirect(url_for("marketplace_export.ozon_mapping"))
+
+
 @bp.route("/movement/<int:doc_id>/ozon", methods=["GET", "POST"])
 def ozon_package_composition(doc_id):
     doc = _get_viewable_movement(doc_id)

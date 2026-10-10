@@ -67,3 +67,58 @@ def test_locate_shows_not_placed_for_box_with_no_location(db, client_logged_in):
     html = client_logged_in.get(f"/nomenclature/locate?barcode={item.barcode}").get_data(as_text=True)
 
     assert "не расставлен" in html
+
+
+def test_locate_shows_warehouse_arrived_date(db, client_logged_in):
+    """«В коробах» показывает, когда короб поступил на текущий склад (см.
+    чат: "добавим дату добавления на склад")."""
+    from datetime import datetime
+
+    from wms.utils.timezone import to_moscow
+
+    wh = _make_warehouse("WH-LOCATE-4")
+    item = _make_item("8880000504")
+    box = Box(box_number="BOX-LOCATE-4", warehouse_id=wh.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+    box.warehouse_arrived_at = datetime(2026, 3, 15, 10, 0)
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=1))
+    db.session.commit()
+
+    html = client_logged_in.get(f"/nomenclature/locate?barcode={item.barcode}").get_data(as_text=True)
+
+    expected = to_moscow(box.warehouse_arrived_at).strftime("%d.%m.%Y")
+    assert expected in html
+
+
+def test_box_warehouse_arrived_at_updates_on_movement_completion(db, client_logged_in):
+    """Дата поступления на склад переезжает вместе с коробом — обновляется,
+    когда перемещение завершается и короб переходит на склад назначения."""
+    from datetime import datetime, timedelta
+
+    from wms.models import MovementDocument, MovementLine, Nomenclature as Nom
+
+    sender = Warehouse(code="WH-LOCATE-5A", name="Отправитель")
+    dest = Warehouse(code="WH-LOCATE-5B", name="Получатель")
+    db.session.add_all([sender, dest])
+    db.session.commit()
+    item = Nom(sku="SKU-LOCATE-5", barcode="8880000505", name="Товар", unit="шт")
+    db.session.add(item)
+    db.session.commit()
+    box = Box(box_number="BOX-LOCATE-5", warehouse_id=sender.id, status="open")
+    db.session.add(box)
+    db.session.commit()
+    old_arrived = datetime.utcnow() - timedelta(days=30)
+    box.warehouse_arrived_at = old_arrived
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=1))
+    doc = MovementDocument(number="PER-LOCATE-5", from_warehouse_id=sender.id, to_warehouse_id=dest.id)
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(MovementLine(document_id=doc.id, box_id=box.id, from_warehouse_id=sender.id))
+    db.session.commit()
+
+    client_logged_in.post(f"/movement/{doc.id}/complete")
+
+    db.session.refresh(box)
+    assert box.warehouse_id == dest.id
+    assert box.warehouse_arrived_at > old_arrived

@@ -150,6 +150,8 @@ def test_summary_export_separates_boxed_and_actually_received_qty(db, client_log
             received_qty=7,
         )
     )
+    # Как при настоящей приемке: недовоз списан из короба.
+    box_item.qty = 7
     db.session.commit()
 
     resp = client_logged_in.get("/movement/export-summary.xlsx")

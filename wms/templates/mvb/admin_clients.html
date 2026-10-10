@@ -1,0 +1,62 @@
+{% extends "mvb/base.html" %}
+{% block title %}Клиенты{% endblock %}
+{% block content %}
+<h3 class="mb-3">Клиенты</h3>
+{% if pending %}
+<h5>Новые регистрации <span class="badge bg-warning text-dark">{{ pending|length }}</span></h5>
+<p class="text-muted small">Клиенты, зарегистрировавшиеся сами на странице входа. Пока регистрация не подтверждена, клиент не может войти и создавать заявки.</p>
+{% for c in pending %}
+  {% set login = c.users[0].username if c.users else '' %}
+  <div class="card p-3 mb-2 border-warning">
+    <div class="d-flex justify-content-between flex-wrap gap-2">
+      <div>
+        <b>{{ c.name }}</b>{% if c.phone %} · <a href="tel:{{ c.phone }}">{{ c.phone }}</a>{% endif %}<br>
+        <span class="text-muted">{{ c.address or 'адрес не указан' }} · логин: {{ login }} · {{ (c.created_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
+      </div>
+      <div class="d-flex gap-2 align-items-start">
+        <form method="post" action="{{ url_for('mvb.registration_action', client_id=c.id, action='approve') }}"><button class="btn btn-success">Подтвердить</button></form>
+        <form method="post" action="{{ url_for('mvb.registration_action', client_id=c.id, action='reject') }}" onsubmit="return confirm('Отклонить регистрацию {{ c.name }}?')"><button class="btn btn-outline-danger">Отклонить</button></form>
+      </div>
+    </div>
+  </div>
+{% endfor %}
+
+{% endif %}
+<form method="post" class="card p-3 mb-4">
+  <h6>Новый клиент</h6>
+  <div class="row g-2">
+    <div class="col-md-3"><input name="name" class="form-control" placeholder="Название *" required></div>
+    <div class="col-md-2"><input name="inn" class="form-control" placeholder="ИНН"></div>
+    <div class="col-md-2"><input name="contact_name" class="form-control" placeholder="Контакт"></div>
+    <div class="col-md-2"><input name="phone" class="form-control" placeholder="Телефон"></div>
+    <div class="col-md-3"><input name="address" class="form-control" placeholder="Адрес забора по умолчанию"></div>
+  </div>
+  <div class="mt-2"><button class="btn btn-success">Добавить</button></div>
+</form>
+<div class="table-responsive">
+<table class="table align-middle">
+  <thead><tr><th>Название</th><th>ИНН</th><th>Контакт</th><th>Телефон</th><th>Адрес</th><th>Логин</th><th>Активен</th><th></th></tr></thead>
+  <tbody>
+  {% for c in clients %}
+    <tr>
+        <td><input form="client-{{ c.id }}" name="name" class="form-control form-control-sm" value="{{ c.name }}" required></td>
+        <td><input form="client-{{ c.id }}" name="inn" class="form-control form-control-sm" value="{{ c.inn or '' }}"></td>
+        <td><input form="client-{{ c.id }}" name="contact_name" class="form-control form-control-sm" value="{{ c.contact_name or '' }}"></td>
+        <td><input form="client-{{ c.id }}" name="phone" class="form-control form-control-sm" value="{{ c.phone or '' }}"></td>
+        <td><input form="client-{{ c.id }}" name="address" class="form-control form-control-sm" value="{{ c.address or '' }}"></td>
+        <td class="small">{{ c.users|map(attribute='username')|join(', ') }}{% if c.approval == 'rejected' %} <span class="text-danger">регистрация отклонена</span>{% endif %}</td>
+        <td><input form="client-{{ c.id }}" type="checkbox" name="is_active" value="1" class="form-check-input" {{ 'checked' if c.is_active }}></td>
+        <td>
+          <form method="post" id="client-{{ c.id }}">
+            <input type="hidden" name="client_id" value="{{ c.id }}">
+            <button class="btn btn-sm btn-outline-primary">Сохранить</button>
+          </form>
+        </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="text-muted">Клиентов пока нет</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

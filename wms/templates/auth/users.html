@@ -27,6 +27,7 @@
             <option value="warehouse">Сотрудник склада (полный доступ)</option>
             <option value="production">Сотрудник производства (только сканирование ЧЗ)</option>
             <option value="logist">Логист (только перемещения, ожидающие транспорт)</option>
+            <option value="fulfillment">Фулфилмент (только приемка и перемещения своего склада)</option>
           </select>
         </div>
         <div class="mb-2">
@@ -172,6 +173,7 @@
                   <option value="warehouse" {% if u.role == 'warehouse' %}selected{% endif %}>Склад (полный доступ)</option>
                   <option value="production" {% if u.role == 'production' %}selected{% endif %}>Производство (только ЧЗ)</option>
                   <option value="logist" {% if u.role == 'logist' %}selected{% endif %}>Логист (ждут транспорта)</option>
+                  <option value="fulfillment" {% if u.role == 'fulfillment' %}selected{% endif %}>Фулфилмент (приемка+перемещения своего склада)</option>
                 </select>
                 {% if u.id != current_user.id or u.is_admin %}
                 <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>

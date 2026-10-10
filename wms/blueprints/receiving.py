@@ -5,6 +5,7 @@ from datetime import datetime
 from flask import (
     Blueprint,
     Response,
+    abort,
     current_app,
     flash,
     jsonify,
@@ -19,9 +20,12 @@ from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
 from ..models import (
+    AppSetting,
     Box,
     BoxItem,
     Nomenclature,
+    PHYSICAL_STOCK_WAREHOUSE_NAMES,
+    PlacementLine,
     ReceivingDocument,
     ReceivingLine,
     Supplier,
@@ -48,6 +52,13 @@ def _restrict_document_access():
         return None
 
     doc = ReceivingDocument.query.get_or_404(document_id)
+    if current_user.is_fulfillment_only():
+        # Фулфилмент ведет любую приемку своего склада, не только
+        # созданную лично им (на складе может работать несколько человек) —
+        # но ничего по другим складам (см. чат).
+        if doc.warehouse_id != current_user.warehouse_id:
+            abort(404)
+        return None
     if current_user.can_view_invoice_receivings() and doc.is_from_invoice_import():
         # Раньше это правило действовало только на GET — право "видит все
         # приемки по накладным" выдается приемщику/зав. складом именно
@@ -67,6 +78,10 @@ def _visible_receiving_query():
     query = ReceivingDocument.query
     if current_user.is_admin:
         return query
+    if current_user.is_fulfillment_only():
+        # Весь свой склад, а не только документы, созданные лично этим
+        # пользователем (см. чат).
+        return query.filter(ReceivingDocument.warehouse_id == current_user.warehouse_id)
     if current_user.can_view_invoice_receivings():
         return query.filter(
             or_(
@@ -78,17 +93,15 @@ def _visible_receiving_query():
 
 
 def _receiving_warehouses():
-    """В приемке доступны только согласованные физические склады."""
-    allowed_names = (
-        "основной",
-        "основной склад",
-        "склад №2",
-        "склад №2 (шоссейная 167)",
-    )
+    """В приемке доступны только согласованные физические склады.
+    Фулфилмент (см. чат) видит и может создавать приемки только на своем
+    складе — остальные физические склады ему не предлагаются."""
+    if current_user.is_fulfillment_only():
+        return [current_user.warehouse] if current_user.warehouse and current_user.warehouse.is_active else []
     warehouses = (
         Warehouse.query.filter(
             Warehouse.is_active.is_(True),
-            func.lower(func.trim(Warehouse.name)).in_(allowed_names),
+            func.lower(func.trim(Warehouse.name)).in_(PHYSICAL_STOCK_WAREHOUSE_NAMES),
         )
         .order_by(Warehouse.code)
         .all()
@@ -854,8 +867,12 @@ def update_line(doc_id, line_id):
     doc = ReceivingDocument.query.get_or_404(doc_id)
     # draft — обычная правка при вводе; recounting — исправление количества
     # по факту пересчета (см. send_to_recount), если оно не сошлось с тем,
-    # что внесли при приемке.
-    if doc.status not in ("draft", "recounting"):
+    # что внесли при приемке. completed — только администратору, задним
+    # числом, если ошибку в количестве заметили уже после завершения (см.
+    # чат); тогда переносим разницу на фактический остаток/короб, как и
+    # update_line_nomenclature переносит остаток при смене товара.
+    editing_after_completed = doc.status == "completed" and current_user.is_admin
+    if doc.status not in ("draft", "recounting") and not editing_after_completed:
         flash("Документ уже завершен", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc_id))
 
@@ -865,17 +882,38 @@ def update_line(doc_id, line_id):
         flash("Укажите корректное количество", "danger")
         return redirect(url_for("receiving.detail", doc_id=doc_id))
 
+    delta = qty - line.qty
     if line.box_id:
         try:
-            _check_box_qty_limit(line.box, qty - line.qty)
+            _check_box_qty_limit(line.box, delta)
         except BoxQtyLimitExceeded as exc:
             flash(str(exc), "danger")
             return redirect(url_for("receiving.detail", doc_id=doc_id))
         box_item = BoxItem.query.filter_by(box_id=line.box_id, nomenclature_id=line.nomenclature_id).first()
         if box_item:
-            box_item.qty += qty - line.qty
+            box_item.qty += delta
             if box_item.qty <= 0:
                 db.session.delete(box_item)
+    elif editing_after_completed and line.line_completed_at is not None:
+        # Короба нет — в неразмещенный остаток зачислено не обязательно все
+        # good_qty целиком: если в этой же приемке есть еще строки с тем же
+        # товаром, упакованные в короб, часть вычтена (см.
+        # _unboxed_credit_qty, чтобы не задваивать остаток). Поэтому старое
+        # и новое зачисленное количество считаем той же функцией, а не
+        # напрямую через delta по qty.
+        old_credit = _unboxed_credit_qty(doc, line, line.good_qty())
+        new_credit = _unboxed_credit_qty(doc, line, qty - line.defect_qty)
+        credit_delta = new_credit - old_credit
+        if credit_delta < 0 and UnplacedStock.available(doc.warehouse_id, line.nomenclature_id) < -credit_delta:
+            flash(
+                f"Нельзя уменьшить — товар «{line.nomenclature.name}» уже частично размещен в короба",
+                "danger",
+            )
+            return redirect(url_for("receiving.detail", doc_id=doc_id))
+        if credit_delta > 0:
+            UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, credit_delta, receiving_document=doc)
+        elif credit_delta < 0:
+            UnplacedStock.consume(doc.warehouse_id, line.nomenclature_id, -credit_delta)
 
     line.qty = qty
     if doc.status == "recounting" and line.expected_qty is not None:
@@ -1249,6 +1287,30 @@ def _apply_defect_qty_from_form(line):
     return None
 
 
+def _unboxed_credit_qty(doc, line, good_qty):
+    """Сколько из годного количества строки накладной зачислить в
+    неразмещенный остаток. Товар, который в этой же приемке уже упаковали в
+    короб (строки с box_id), — это те же единицы из накладной: они уже
+    лежат в коробе, и зачислять их еще раз неразмещенными нельзя (иначе
+    остаток задваивается: 40 в коробах + 40 «неразмещенных»). Упакованное
+    вычитается из строк накладной по этому товару по мере их завершения —
+    и при завершении целиком, и построчно."""
+    if line.box_id:
+        return 0
+    lines = list(doc.lines)
+    boxed = sum(
+        l.qty or 0 for l in lines if l.box_id and l.nomenclature_id == line.nomenclature_id
+    )
+    if not boxed:
+        return good_qty
+    done = sum(
+        l.good_qty() for l in lines
+        if not l.box_id and l.id != line.id and l.nomenclature_id == line.nomenclature_id
+        and l.line_completed_at is not None
+    )
+    return max(done + good_qty - boxed, 0) - max(done - boxed, 0)
+
+
 def _credit_receiving_line(doc, line):
     """Зачисляет годное количество строки в неразмещенный остаток и, если
     есть брак, заводит возврат поставщику — общая логика для завершения
@@ -1256,8 +1318,9 @@ def _credit_receiving_line(doc, line):
     Расхождение с накладной не является возвратом — SupplierReturn
     создается только из явно указанного defect_qty."""
     good_qty = line.good_qty()
-    if good_qty > 0:
-        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, good_qty, receiving_document=doc)
+    credit_qty = _unboxed_credit_qty(doc, line, good_qty)
+    if credit_qty > 0:
+        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, credit_qty, receiving_document=doc)
     if line.defect_qty:
         db.session.add(
             SupplierReturn(
@@ -1466,6 +1529,146 @@ def revert_to_sorting(doc_id):
         )
     flash(message, "warning" if synced_returns else "success")
     return redirect(url_for("receiving.detail", doc_id=doc.id))
+
+
+def _doubled_receipts():
+    """Явные задвоения неразмещенного остатка. По каждому товару и складу
+    проигрываем историю по времени, разрешая остатку уходить в минус:
+      + партия неразмещенного остатка (зачисление приемки, излишек и т.п.);
+      − приемка сразу в короб (время — создание документа приемки);
+      − размещение из неразмещенного в короба (время — создание документа).
+    Приемка в короб, когда неразмещенного остатка не было, уводит остаток в
+    минус; если потом этот минус закрывает зачисление другой (или той же)
+    приемки — это те же единицы, посчитанные второй раз: явное задвоение.
+    Приемки, где упакованное уже вычтено при завершении (после
+    исправления), учитываются без двойного вычета."""
+    events = {}
+
+    def add(key, when, qty, kind, ref):
+        events.setdefault(key, []).append((when or datetime.min, kind, qty, ref))
+
+    for lot in UnplacedStockLot.query.all():
+        add((lot.warehouse_id, lot.nomenclature_id), lot.received_at, lot.qty_received or 0, "credit", lot)
+
+    for doc in ReceivingDocument.query.all():
+        lines = list(doc.lines)
+        boxed, good = {}, {}
+        for line in lines:
+            if line.box_id:
+                boxed[line.nomenclature_id] = boxed.get(line.nomenclature_id, 0) + (line.qty or 0)
+            elif line.line_completed_at is not None:
+                good[line.nomenclature_id] = good.get(line.nomenclature_id, 0) + line.good_qty()
+        for nid, qty in boxed.items():
+            # Упакованное, которое приемка сама уже вычла из зачисления строки
+            # накладной (после исправления), повторно не вычитаем.
+            if nid in good:
+                credited = sum(
+                    l.qty_received for l in UnplacedStockLot.query.filter_by(
+                        receiving_document_id=doc.id, nomenclature_id=nid
+                    )
+                )
+                qty -= min(max(good[nid] - credited, 0), qty)
+            if qty > 0:
+                add((doc.warehouse_id, nid), doc.created_at or doc.completed_at, qty, "box", doc)
+
+    for line in PlacementLine.query.all():
+        pdoc = line.document
+        if pdoc is not None:
+            add((pdoc.warehouse_id, line.nomenclature_id), pdoc.created_at or pdoc.completed_at, line.qty or 0, "place", pdoc)
+
+    pairs = {}
+    for (warehouse_id, nid), items in events.items():
+        if not any(kind == "box" for _, kind, _, _ in items):
+            continue
+        # При равном времени сначала списания, потом зачисления.
+        items.sort(key=lambda e: (e[0], 0 if e[1] != "credit" else 1))
+        balance = 0.0
+        holes = []  # [кол-во в минусе, документ приемки в короб]
+        for when, kind, qty, ref in items:
+            if kind == "credit":
+                if balance < 0 and ref.receiving_document_id:
+                    cover = qty
+                    while cover > 0 and holes:
+                        take = min(holes[0][0], cover)
+                        key = (holes[0][1].id, ref.receiving_document_id, nid)
+                        pairs[key] = pairs.get(key, 0) + take
+                        holes[0][0] -= take
+                        cover -= take
+                        if holes[0][0] <= 0:
+                            holes.pop(0)
+                elif balance < 0:
+                    # Зачисление без приемки (излишек и т.п.) тоже закрывает минус,
+                    # но задвоением приемки не считается.
+                    cover = qty
+                    while cover > 0 and holes:
+                        take = min(holes[0][0], cover)
+                        holes[0][0] -= take
+                        cover -= take
+                        if holes[0][0] <= 0:
+                            holes.pop(0)
+                balance += qty
+            elif kind == "box":
+                shortfall = qty - max(balance, 0)
+                if shortfall > 0:
+                    holes.append([shortfall, ref])
+                balance -= qty
+            else:
+                balance -= qty
+
+    rows = []
+    for (box_doc_id, credit_doc_id, nid), qty in pairs.items():
+        box_doc = db.session.get(ReceivingDocument, box_doc_id)
+        credit_doc = db.session.get(ReceivingDocument, credit_doc_id)
+        item = db.session.get(Nomenclature, nid)
+        if box_doc is None or credit_doc is None or item is None:
+            continue  # документ или товар удалены — показывать нечего
+        fixed = db.session.get(AppSetting, f"rcv_dbl:{box_doc_id}:{credit_doc_id}:{nid}")
+        rows.append({
+            "key": f"rcv_dbl:{box_doc_id}:{credit_doc_id}:{nid}",
+            "box_doc": box_doc, "credit_doc": credit_doc, "item": item,
+            "warehouse": box_doc.warehouse, "doubled": round(qty, 3),
+            "box_qty": sum(l.qty or 0 for l in box_doc.lines if l.box_id and l.nomenclature_id == nid),
+            "unplaced": UnplacedStock.available(box_doc.warehouse_id, nid),
+            "fixed": fixed.value if fixed else None,
+        })
+    # Старые документы могут быть без даты создания (колонку добавили позже).
+    rows.sort(key=lambda r: r["box_doc"].created_at or r["box_doc"].completed_at or datetime.min, reverse=True)
+    rows.sort(key=lambda r: r["fixed"] is not None)
+    return rows
+
+
+@bp.route("/doubled", methods=["GET", "POST"])
+def doubled_receipts():
+    """Отчет «Задвоенные приемки» и списание задвоения (только админ)."""
+    if not current_user.is_admin:
+        flash("Доступно только администратору", "danger")
+        return redirect(url_for("receiving.list_documents"))
+    try:
+        rows = _doubled_receipts()
+    except Exception as exc:  # noqa: BLE001 — отчет по старым данным не должен ронять страницу
+        current_app.logger.exception("Отчет «Задвоенные приемки» не построился")
+        flash(f"Отчет не построился: {type(exc).__name__}: {exc}. Пришлите этот текст разработчику.", "danger")
+        return redirect(url_for("receiving.list_documents"))
+    if request.method == "POST":
+        wanted = set(request.form.getlist("key"))
+        done = 0
+        for row in rows:
+            if row["fixed"] or (row["key"] not in wanted and request.form.get("all") != "1"):
+                continue
+            qty = min(row["doubled"], UnplacedStock.available(row["warehouse"].id, row["item"].id))
+            if qty > 0:
+                UnplacedStock.consume(row["warehouse"].id, row["item"].id, qty)
+            db.session.add(AppSetting(key=row["key"], value=f"{qty:g} {datetime.utcnow():%d.%m.%Y} {current_user.username}"[:200]))
+            current_app.logger.warning(
+                "Задвоение списано: короба %s, зачисление %s, %s, %g (пользователь %s)",
+                row["box_doc"].number, row["credit_doc"].number, row["item"].name, qty, current_user.username,
+            )
+            done += 1
+        db.session.commit()
+        flash(f"Задвоение списано по {done} строкам", "success")
+        return redirect(url_for("receiving.doubled_receipts"))
+    # Списанные строки в отчете больше не показываем.
+    return render_template("receiving/doubled.html", rows=[r for r in rows if not r["fixed"]])
 
 
 @bp.route("/<int:doc_id>/export.xlsx")

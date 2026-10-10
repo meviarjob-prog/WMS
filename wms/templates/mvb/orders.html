@@ -1,0 +1,170 @@
+{% extends "mvb/base.html" %}
+{% block title %}{{ 'Мои заявки' if mvb_is_client else 'Заявки в работе' }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <h3 class="mb-0">{{ 'Мои заявки' if mvb_is_client else 'Заявки в работе' }}</h3>
+  <a class="btn btn-success" href="{{ url_for('mvb.order_new') }}">+ Новая заявка</a>
+</div>
+{% if mvb_is_client and not orders and not status %}
+<div class="card p-4 mb-3">
+  <h5>Добро пожаловать в МВБ Логистика!</h5>
+  <ol class="mb-3">
+    <li>Создайте заявку: маркетплейс, СЦ, количество коробов, адрес и время забора (или самопривоз).</li>
+    <li>Распечатайте этикетки — у каждого короба свой штрихкод — и наклейте на короба.</li>
+    <li>Водитель заберет короба, дальше статус каждого короба виден здесь до сдачи на СЦ.</li>
+  </ol>
+  <div><a class="btn btn-success btn-lg" href="{{ url_for('mvb.order_new') }}">+ Создать первую заявку</a></div>
+</div>
+{% else %}
+{% if need_driver and status != 'need_driver' %}
+<div class="alert alert-warning py-2">Новых заявок на забор без водителя: <b>{{ need_driver }}</b> · <a href="{{ url_for('mvb.orders', status='need_driver') }}">показать</a></div>
+{% endif %}
+{% if wms_rows %}
+{# Раздел "Из WMS" раньше был отдельной страницей — собранные перемещения
+   WMS на склады WB/Ozon, ожидающие передачи в МВБ, показываются сразу
+   здесь (см. чат: "убрать раздел из wms, он падает в заявки в работе"). #}
+<div class="card mb-3">
+  <div class="card-header fw-semibold">Из WMS — ожидают передачи в МВБ ({{ wms_rows|length }})</div>
+  <div class="card-body">
+    <p class="text-muted small">Собранные перемещения WMS на склады Wildberries и Ozon. Отметьте перемещения с одного склада-отправителя — получится одна заявка с несколькими направлениями, с теми же коробами и штрихкодами (этикетки не переклеиваются). Можно и без этого: скан этикетки короба WMS при заборе или приемке сам передаст его перемещение.</p>
+    <form method="post" action="{{ url_for('mvb.wms_import') }}">
+    <div class="table-responsive">
+    <table class="table align-middle table-sm">
+      <thead><tr><th></th><th>Перемещение</th><th>Откуда → куда</th><th class="text-end">Коробов</th><th>Слот (дата поставки)</th><th>Собрано</th><th>Заявка на МП</th><th>МВБ</th></tr></thead>
+      <tbody>
+      {% for r in wms_rows %}
+        {% set d = r.doc %}
+        <tr>
+          <td>{% if not r.order %}<input class="form-check-input" type="checkbox" name="doc_id" value="{{ d.id }}" data-from="{{ d.from_warehouse_id }}">{% endif %}</td>
+          <td>{{ d.number }}</td>
+          <td>{{ d.from_warehouse.name }} → {{ d.to_warehouse.name }}</td>
+          <td class="text-end">{{ r.boxes }}</td>
+          <td>{{ d.delivery_slot_date.strftime('%d.%m.%Y') if d.delivery_slot_date else '—' }}</td>
+          <td>{{ (d.completed_at|msk).strftime('%d.%m %H:%M') if d.completed_at else '' }}</td>
+          <td>{{ d.marketplace_request_number or '—' }}</td>
+          <td>
+            {% if r.order %}
+              <a href="{{ url_for('mvb.order_detail', order_id=r.order.id) }}">{{ r.order.number }}</a> · {{ r.order.progress_label() }}
+            {% else %}<span class="text-muted">не передано</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <select name="delivery_method" class="form-select w-auto">
+        <option value="pickup">Забор водителем</option>
+        <option value="self">Привезем сами</option>
+      </select>
+      <button class="btn btn-success">Передать отмеченные в МВБ одной заявкой</button>
+      <span class="wms-warn text-danger small"></span>
+    </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+<form class="row g-2 mb-3" method="get">
+  <div class="col-auto">
+    <select name="status" class="form-select" onchange="this.form.submit()">
+      <option value="">Все статусы</option>
+      <option value="draft" {{ 'selected' if status == 'draft' }}>Черновики</option>
+      <option value="confirmed" {{ 'selected' if status == 'confirmed' }}>Оформленные</option>
+      <option value="cancelled" {{ 'selected' if status == 'cancelled' }}>Отмененные</option>
+      {% if not mvb_is_client %}<option value="need_driver" {{ 'selected' if status == 'need_driver' }}>Забор без водителя</option>{% endif %}
+    </select>
+  </div>
+  {% if clients %}
+  <div class="col-auto">
+    <select name="client_id" class="form-select" onchange="this.form.submit()">
+      <option value="">Все клиенты</option>
+      {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if client_id == c.id }}>{{ c.name }}</option>{% endfor %}
+    </select>
+  </div>
+  {% endif %}
+</form>
+{# Телефон: карточки вместо таблицы, без прокрутки вбок #}
+<div class="d-md-none">
+  {% for o in orders %}
+  <div class="card mb-2">
+    <a class="card-body text-reset text-decoration-none pb-2" href="{{ url_for('mvb.order_detail', order_id=o.id) }}">
+      <div class="d-flex justify-content-between gap-2">
+        <b class="text-primary">{{ o.number }}</b>
+        <span class="small text-muted text-end">{{ o.progress_label() }}</span>
+      </div>
+      {% if not mvb_is_client %}<div class="fw-semibold">{{ o.client.name }}</div>{% endif %}
+      <div>{{ o.directions_label }}</div>
+      <div class="small text-muted">
+        {{ o.box_count }} кор.{% if o.slot_date %} · слот {{ o.slot_date.strftime('%d.%m.%Y') }}{% endif %} · {{ o.delivery_label }}{% if o.planned_date %} {{ o.planned_date.strftime('%d.%m') }}{% endif %}
+      </div>
+      <div class="d-flex justify-content-between small mt-1">
+        <span>{% if o.status == 'confirmed' and o.lines|selectattr('pass_trip')|map(attribute='pass_trip')|selectattr('pass_ready')|list %}🚚 Данные водителя для пропуска есть{% endif %}</span>
+        {% if o.total_cost is not none %}<b>{{ '%.2f'|format(o.total_cost) }} ₽</b>{% endif %}
+      </div>
+    </a>
+    {% if drivers and o.status == 'confirmed' and o.delivery_method == 'pickup' %}
+    <form method="post" action="{{ url_for('mvb.order_assign_driver', order_id=o.id) }}" class="d-flex gap-1 px-3 pb-3">
+      <input type="hidden" name="back" value="orders"><input type="hidden" name="status" value="{{ status }}">
+      <select name="driver_id" class="form-select form-select-sm {{ 'border-warning' if not o.driver_id }}">
+        <option value="">— водитель не назначен —</option>
+        {% for d in drivers %}<option value="{{ d.id }}" {{ 'selected' if o.driver_id == d.id }}>{{ d.display_name() }}</option>{% endfor %}
+      </select>
+      <button class="btn btn-sm btn-outline-success">OK</button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="text-muted text-center py-4">Заявок пока нет</div>
+  {% endfor %}
+</div>
+<div class="table-responsive d-none d-md-block">
+<table class="table table-hover align-middle">
+  <thead><tr>
+    <th>Номер</th>{% if not mvb_is_client %}<th>Клиент</th>{% endif %}<th>Куда</th><th>Слот на СЦ</th><th>Способ</th>
+    <th>Дата забора</th><th class="text-end">Коробов</th><th class="text-end">Стоимость, ₽</th><th>Статус</th>{% if drivers %}<th>Водитель</th>{% endif %}
+  </tr></thead>
+  <tbody>
+  {% for o in orders %}
+    <tr>
+      <td><a href="{{ url_for('mvb.order_detail', order_id=o.id) }}">{{ o.number }}</a></td>
+      {% if not mvb_is_client %}<td>{{ o.client.name }}</td>{% endif %}
+      <td>{{ o.directions_label }}</td>
+      <td class="text-nowrap">{{ o.slot_date.strftime('%d.%m.%Y') if o.slot_date else '—' }}</td>
+      <td>{{ o.delivery_label }}</td>
+      <td>{{ o.planned_date.strftime('%d.%m.%Y') if o.planned_date else '—' }}{% if o.time_from %} {{ o.time_from }}{% if o.time_to %}–{{ o.time_to }}{% endif %}{% endif %}</td>
+      <td class="text-end">{{ o.box_count }}</td>
+      <td class="text-end">{{ '%.2f'|format(o.total_cost) if o.total_cost is not none else '—' }}</td>
+      <td>{{ o.progress_label() }}</td>
+      {% if drivers %}
+      <td>
+        {% if o.status == 'confirmed' and o.delivery_method == 'pickup' %}
+        <form method="post" action="{{ url_for('mvb.order_assign_driver', order_id=o.id) }}" class="d-flex gap-1">
+          <input type="hidden" name="back" value="orders"><input type="hidden" name="status" value="{{ status }}">
+          <select name="driver_id" class="form-select form-select-sm {{ 'border-warning' if not o.driver_id }}" style="min-width:140px">
+            <option value="">— не назначен —</option>
+            {% for d in drivers %}<option value="{{ d.id }}" {{ 'selected' if o.driver_id == d.id }}>{{ d.display_name() }}</option>{% endfor %}
+          </select>
+          <button class="btn btn-sm btn-outline-success">OK</button>
+        </form>
+        {% else %}<span class="text-muted">—</span>{% endif %}
+      </td>
+      {% endif %}
+    </tr>
+  {% else %}
+    <tr><td colspan="10" class="text-muted text-center py-4">Заявок пока нет</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+  const wmsBoxes = [...document.querySelectorAll("input[name=doc_id]")];
+  const wmsWarn = document.querySelector(".wms-warn");
+  wmsBoxes.forEach(b => b.addEventListener("change", () => {
+    const from = new Set(wmsBoxes.filter(x => x.checked).map(x => x.dataset.from));
+    if (wmsWarn) wmsWarn.textContent = from.size > 1 ? "Отмечены перемещения с разных складов — в одну заявку объединяется только один склад-отправитель." : "";
+  }));
+</script>
+{% endblock %}

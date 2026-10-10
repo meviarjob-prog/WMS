@@ -275,6 +275,16 @@
                     onclick="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Годное количество зачислится в остаток, брак — в возврат поставщику. Отменить нельзя.');">✓ Готово</button>
           {% endif %}
         </td>
+        {% elif doc.status == 'completed' and current_user.is_admin %}
+        <td style="min-width:160px">
+          <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1">
+            <input type="number" name="qty" step="0.001" min="0" value="{{ line.qty }}" class="form-control form-control-sm" style="width:100px">
+            <button type="submit" class="btn btn-sm btn-outline-secondary flex-shrink-0"
+                    title="Изменить количество в завершенной приемке — перенесется на остаток/короб"
+                    onclick="return confirm('Изменить количество задним числом? Разница перенесется на фактический остаток (или короб). Отменить нельзя.');">✓</button>
+          </form>
+        </td>
+        <td>{% if line.defect_qty %}<span class="text-danger">{{ line.defect_qty }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
         {% else %}
         <td>{{ line.qty }} {{ line.nomenclature.unit }}</td>
         <td>{% if line.defect_qty %}<span class="text-danger">{{ line.defect_qty }}</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
@@ -343,6 +353,15 @@
                       class="btn btn-sm btn-outline-success mt-1"
                       onclick="return confirm('Завершить строку «{{ line.nomenclature.name }}»? Годное количество зачислится в остаток, брак — в возврат поставщику. Отменить нельзя.');">✓ Готово</button>
             {% endif %}
+          </div>
+          {% elif doc.status == 'completed' and current_user.is_admin %}
+          <div class="small text-end">
+            <form method="post" action="{{ url_for('receiving.update_line', doc_id=doc.id, line_id=line.id) }}" class="d-flex gap-1 justify-content-end">
+              <input type="number" name="qty" step="0.001" min="0" value="{{ line.qty }}" class="form-control form-control-sm" style="width:4.5em">
+              <button type="submit" class="btn btn-sm btn-outline-secondary"
+                      onclick="return confirm('Изменить количество задним числом? Разница перенесется на фактический остаток (или короб). Отменить нельзя.');">✓</button>
+            </form>
+            {% if line.defect_qty %}<div class="text-danger mt-1">брак: {{ line.defect_qty }}</div>{% endif %}
           </div>
           {% else %}
           <div class="small text-end">

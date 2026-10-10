@@ -1,0 +1,173 @@
+{% extends "mvb/base.html" %}
+{% block title %}Рейс {{ trip.number }}{% endblock %}
+{% macro dt(v) %}{{ (v|msk).strftime('%d.%m.%Y %H:%M') if v else '—' }}{% endmacro %}
+{% macro dtl(v) %}{{ (v|msk).strftime('%Y-%m-%dT%H:%M') if v else '' }}{% endmacro %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <div>
+    <h3 class="mb-1">Рейс {{ trip.number }} <span class="badge bg-success">{{ trip.status_label }}</span></h3>
+    <div class="text-muted">{% if trip.slot_date %}<b class="text-dark">Слот на СЦ: {{ trip.slot_date.strftime('%d.%m.%Y') }}</b> · {% endif %}{{ trip.route_label() }} · погружено {{ trip.boxes|length }}{% if trip.planned_boxes %} из {{ trip.planned_boxes }} план.{% endif %}</div>
+  </div>
+  {% if mvb_is_staff %}
+  <div class="d-flex flex-wrap gap-2">
+    {% if trip.status == 'assigned' %}
+      <form method="post" action="{{ url_for('mvb.trip_action', trip_id=trip.id, action='arrive') }}"><button class="btn btn-outline-success">Авто подано</button></form>
+    {% endif %}
+    {% if trip.status in ('assigned', 'arrived') %}
+      <form method="post" action="{{ url_for('mvb.trip_action', trip_id=trip.id, action='start_loading') }}"><button class="btn btn-outline-success">Начать погрузку</button></form>
+    {% endif %}
+    {% if trip.status in ('assigned', 'arrived', 'loading') %}
+      <form method="post" action="{{ url_for('mvb.trip_action', trip_id=trip.id, action='depart') }}" onsubmit="return confirm('Завершить погрузку и отправить рейс?')"><button class="btn btn-success">Погрузка завершена — отправить</button></form>
+    {% endif %}
+    {% if mvb_is_operator and trip.status in ('searching', 'assigned', 'arrived', 'loading') %}
+      <form method="post" action="{{ url_for('mvb.trip_action', trip_id=trip.id, action='cancel') }}" onsubmit="return confirm('Отменить рейс? Погруженные короба вернутся на склад.')"><button class="btn btn-outline-danger">Отменить</button></form>
+    {% endif %}
+    {% if mvb_can_manage %}
+      <form method="post" action="{{ url_for('mvb.trip_delete', trip_id=trip.id) }}" onsubmit="return confirm('Удалить рейс {{ trip.number }} совсем? Несданные короба вернутся на склад.')"><button class="btn btn-danger">🗑 Удалить</button></form>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card p-3 mb-3">
+  <h6>Маршрут</h6>
+  <ol class="list-group list-group-numbered mb-2">
+  {% for stop in trip.stops %}
+    <li class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div class="me-auto">
+        <b>{{ stop.label() }}</b>{% if stop.address %} <span class="small text-muted">· {{ stop.address }}</span>{% endif %}
+        <span class="text-muted">· погружено {{ stop.boxes|length }}{% if stop.planned_boxes %} из {{ stop.planned_boxes }} план.{% endif %}{% if ready.get(stop.id) %} · ждут на складе {{ ready[stop.id] }}{% endif %}</span>
+      </div>
+      {% if stop.result == 'delivered' %}
+        <span class="text-success">✓ сдано {{ dt(stop.delivered_at) }}</span>
+      {% elif stop.result == 'rejected' %}
+        <span class="text-danger">✗ не сдано {{ dt(stop.delivered_at) }}: {{ stop.delivery_comment }}</span>
+      {% elif trip.status == 'departed' %}
+        <span class="text-muted me-2">в пути</span>
+        {% if mvb_is_staff %}
+        {% include "mvb/_stop_result.html" %}
+        {% endif %}
+      {% elif mvb_is_operator and trip.status in ('searching','assigned','arrived','loading') %}
+        <div class="d-flex gap-1">
+          {% for act, icon in [('up', '↑'), ('down', '↓'), ('remove', '✕')] %}
+          <form method="post" action="{{ url_for('mvb.trip_stop_action', trip_id=trip.id, stop_id=stop.id, action=act) }}"><button class="btn btn-sm btn-outline-secondary" title="{{ {'up': 'Выше', 'down': 'Ниже', 'remove': 'Убрать точку'}[act] }}">{{ icon }}</button></form>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </li>
+  {% else %}
+    <li class="list-group-item text-muted">Точек нет — добавьте СЦ</li>
+  {% endfor %}
+  </ol>
+  {% if mvb_is_operator and trip.status in ('searching','assigned','arrived','loading') %}
+  <form method="post" action="{{ url_for('mvb.trip_add_stop', trip_id=trip.id) }}" class="d-flex flex-wrap gap-2">
+    <select name="marketplace" class="form-select w-auto">
+      {% for code, label in MVB_MARKETPLACES.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+    </select>
+    <input name="destination" class="form-control w-auto" list="mvb-city-list" placeholder="Город (СЦ)">
+    <button class="btn btn-outline-success">+ Точка</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-5">
+    <div class="card p-3 h-100">
+      <h6>План / факт</h6>
+      <table class="table table-sm mb-0">
+        <tr><th></th><th>План</th><th>Факт</th></tr>
+        <tr><td>Подача авто</td><td>{{ dt(trip.planned_arrival_at) }}</td><td>{{ dt(trip.arrived_at) }}</td></tr>
+        <tr><td>Начало погрузки</td><td>{{ dt(trip.planned_load_start_at) }}</td><td>{{ dt(trip.load_started_at) }}</td></tr>
+        <tr><td>Конец погрузки</td><td>{{ dt(trip.planned_load_end_at) }}</td><td>{{ dt(trip.load_finished_at) }}</td></tr>
+        <tr><td>Отправлен</td><td></td><td>{{ dt(trip.departed_at) }}</td></tr>
+        <tr><td>Маршрут завершен</td><td></td><td>{{ dt(trip.delivered_at) }}</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="card p-3 h-100">
+      <h6>Авто и водитель</h6>
+      {% if mvb_is_operator and trip.status not in ('departed', 'delivered', 'cancelled') %}
+      <form method="post" action="{{ url_for('mvb.trip_plan', trip_id=trip.id) }}" class="row g-2">
+        <div class="col-md-3"><label class="form-label small">Госномер *</label><input name="car_plate" class="form-control" value="{{ trip.car_plate or '' }}" placeholder="А123ВС77" required></div>
+        <div class="col-md-3"><label class="form-label small">Модель авто</label><input name="car_model" class="form-control" value="{{ trip.car_model or '' }}" placeholder="ГАЗель Next"></div>
+        <div class="col-md-3"><label class="form-label small">ФИО водителя</label><input name="driver_name" class="form-control" value="{{ trip.driver_name or '' }}"></div>
+        <div class="col-md-3"><label class="form-label small">Телефон</label><input name="driver_phone" class="form-control" value="{{ trip.driver_phone or '' }}" placeholder="+7"></div>
+        <div class="col-md-4"><label class="form-label small">Подача (план)</label><input type="datetime-local" name="planned_arrival_at" class="form-control" value="{{ dtl(trip.planned_arrival_at) }}"></div>
+        <div class="col-md-4"><label class="form-label small">Начало погрузки (план)</label><input type="datetime-local" name="planned_load_start_at" class="form-control" value="{{ dtl(trip.planned_load_start_at) }}"></div>
+        <div class="col-md-4"><label class="form-label small">Конец погрузки (план)</label><input type="datetime-local" name="planned_load_end_at" class="form-control" value="{{ dtl(trip.planned_load_end_at) }}"></div>
+        {% if trip.driver_id %}<input type="hidden" name="driver_id" value="{{ trip.driver_id }}">{% endif %}
+        {% if trip.capacity_boxes %}<input type="hidden" name="capacity_boxes" value="{{ trip.capacity_boxes }}">{% endif %}
+        <div class="col-12"><button class="btn btn-success">Назначить на рейс</button></div>
+      </form>
+      {% else %}
+        <div>{{ trip.transport_label() or '—' }}{% if trip.capacity() %} · {{ trip.capacity() }} кор.{% endif %}</div>
+        <div>{{ trip.driver_label() }}{% if trip.driver_phone %} · <a href="tel:{{ trip.driver_phone }}">{{ trip.driver_phone }}</a>{% endif %}</div>
+        {% if trip.comment %}<div class="text-muted">{{ trip.comment }}</div>{% endif %}
+      {% endif %}
+      {% if driver_link and trip.status not in ('delivered', 'cancelled') %}
+      <hr>
+      <label class="form-label small mb-1">Ссылка для водителя (без входа): маршрут и «Сдан / Не сдан» по заявкам</label>
+      <div class="input-group">
+        <input id="driverLink" class="form-control" readonly value="{{ driver_link }}">
+        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('driverLink').value); this.textContent='Скопировано'">Копировать</button>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if mvb_is_staff and trip.status in ('assigned', 'arrived', 'loading') %}
+<h5>📷 Погрузка</h5>
+<p class="text-muted">Кладовщик сканирует погружаемые короба или паллету целиком — короб сам попадает на свою точку маршрута. Первый скан отмечает начало погрузки.</p>
+{% set scan_url = url_for('mvb.trip_scan', trip_id=trip.id) %}
+{% set scan_placeholder = 'Штрихкод короба или паллеты' %}
+{% include "mvb/_scan_widget.html" %}
+{% elif trip.status == 'searching' %}
+<div class="alert alert-info">Укажите госномер наемного авто или выберите авто из справочника — после этого откроется погрузка.</div>
+{% endif %}
+
+{% if trip.planned_lines %}
+<h5>Заявки в рейсе (направления целиком)</h5>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Заявка</th><th>Клиент</th><th>Направление</th><th>Слот</th><th class="text-end">Коробов</th><th class="text-end">Погружено</th></tr></thead>
+  <tbody>
+  {% for l in trip.planned_lines %}
+    {% set loaded = l.boxes|selectattr('trip_id', 'equalto', trip.id)|list|length %}
+    <tr class="{{ 'table-success' if loaded == l.boxes|length else '' }}">
+      <td><a href="{{ url_for('mvb.order_detail', order_id=l.order.id) }}">{{ l.order.number }}</a></td>
+      <td>{{ l.order.client.name }}</td>
+      <td>{{ l.short_label() }}</td>
+      <td>{{ l.slot_date.strftime('%d.%m') if l.slot_date else '—' }}</td>
+      <td class="text-end">{{ l.boxes|length }}</td>
+      <td class="text-end">{{ loaded }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+<h5>Погружено <a class="btn btn-sm btn-outline-secondary ms-2" href="{{ url_for('mvb.trip_detail', trip_id=trip.id) }}">Обновить</a></h5>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Штрихкод</th><th>Точка</th><th>Паллета</th><th>Клиент</th><th>Заявка</th><th>Погружен</th><th>Статус</th></tr></thead>
+  <tbody>
+  {% for b in trip.boxes %}
+    <tr>
+      <td class="font-monospace text-nowrap">{{ b.barcode }}</td>
+      <td>{{ b.trip_stop.label() if b.trip_stop else '' }}</td>
+      <td>{{ b.pallet.number if b.pallet else '' }}</td>
+      <td>{{ b.order.client.name }}</td>
+      <td><a href="{{ url_for('mvb.order_detail', order_id=b.order.id) }}">{{ b.order.number }}</a></td>
+      <td>{{ (b.loaded_at|msk).strftime('%d.%m %H:%M') if b.loaded_at else '' }}</td>
+      <td>{{ b.status_label }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="text-muted">Пока ничего не погружено</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

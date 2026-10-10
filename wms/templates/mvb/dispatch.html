@@ -1,0 +1,82 @@
+{% extends "mvb/base.html" %}
+{% block title %}К отправке{% endblock %}
+{% block content %}
+<h3 class="mb-1">Готово к отправке на СЦ</h3>
+<p class="text-muted">Принятые на складе и еще не погруженные короба по направлениям, самые давние сверху (FIFO). Программа предлагает, как скомпоновать рейсы по наполненности авто, <b>не разбивая заявки</b>: каждая заявка едет целиком в одной машине, заявки с разными датами слота в одну машину не попадают; сверху — ближайшие слоты. Каждый рейс сразу получает статус «Поиск авто».</p>
+
+<form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-3">
+  <label class="form-label mb-0">Вместимость машины, коробов:</label>
+  <input type="number" min="1" name="capacity" value="{{ capacity or '' }}" class="form-control w-auto" style="max-width:110px" list="capList">
+  <datalist id="capList">{% for c in capacities %}<option value="{{ c }}">{% endfor %}</datalist>
+  <button class="btn btn-outline-secondary">Пересчитать</button>
+  {% if capacities %}<span class="text-muted small">в справочнике транспорта: {{ capacities|join(', ') }}</span>{% else %}<span class="text-warning small">Добавьте машины в «Водители» или «Машины для СЦ», чтобы вместимость подставлялась сама</span>{% endif %}
+</form>
+
+{% if rows %}
+<div class="card p-3 mb-3">
+  <div class="fs-5">Всего ждут отправки: <b>{{ total }}</b> кор.{% if total_vehicles %} · нужно машин по {{ capacity }} кор.: <b>{{ total_vehicles }}</b>{% endif %}</div>
+  <div class="text-muted" id="selSummary">Отмечено: 0 кор.</div>
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('mvb.trip_new') }}">
+<input type="hidden" name="capacity" value="{{ capacity or '' }}">
+<div class="table-responsive">
+<table class="table align-middle">
+  <thead><tr><th><input type="checkbox" class="form-check-input" id="dirAll" title="Отметить все"></th><th>Направление</th><th>Слот на СЦ</th><th class="text-end">Коробов</th><th class="text-end">Заявок</th><th class="text-end">Машин</th><th>Паллеты</th><th>Клиенты</th><th>Ждет с</th><th>Рейсы</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><input type="checkbox" class="form-check-input mvb-dir" name="dir" value="{{ r.key }}" data-boxes="{{ r.boxes }}" id="dir{{ loop.index }}"></td>
+      <td><label for="dir{{ loop.index }}"><b>{{ MVB_MARKETPLACES[r.marketplace] }}</b>{% if r.destination %} · {{ r.destination }}{% endif %}</label></td>
+      <td class="text-nowrap">{% if r.slot_date %}<b>{{ r.slot_date.strftime('%d.%m.%Y') }}</b>{% else %}<span class="text-muted">не указан</span>{% endif %}</td>
+      <td class="text-end fs-5">{{ r.boxes }}</td>
+      <td class="text-end" title="{% for i in r.orders %}{{ i.order.number }}: {{ i.boxes }} кор.&#10;{% endfor %}">{{ r.orders|length }}{% if r.orders %} <span class="text-muted small">(макс. {{ r.orders|map(attribute='boxes')|max }})</span>{% endif %}</td>
+      <td class="text-end">{{ r.vehicles if r.vehicles is not none else '—' }}</td>
+      <td>{{ r.pallets|sort|join(', ') or '—' }}</td>
+      <td>{{ r.clients|sort|join(', ') }}</td>
+      <td>{{ (r.oldest|msk).strftime('%d.%m %H:%M') if r.oldest else '' }}</td>
+      <td>{% for t in r.trips %}<a href="{{ url_for('mvb.trip_detail', trip_id=t.id) }}">{{ t.number }}</a> ({{ t.status_label }}){% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="10" class="text-muted">Нет коробов, ожидающих отправки</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if proposal %}
+<div class="card p-3 mb-3">
+  <h6>Предложение по рейсам (все направления, машины по {{ capacity }} кор.)</h6>
+  <ol class="mb-0">
+  {% for b in proposal %}
+    <li class="{{ 'text-danger' if b.boxes > capacity else '' }}">{% if b.slot_date %}слот <b>{{ b.slot_date.strftime('%d.%m') }}</b> · {% endif %}<b>{{ b.boxes }}</b> кор.{% if b.boxes > capacity %} — заявка больше машины{% endif %}:
+      {% for i in b['items'] %}{{ i.order.number }}{% if i.order.lines|length > 1 %}/{{ i.line.seq }}{% endif %} ({{ MVB_MARKETPLACES[i.marketplace] }}{% if i.destination %} · {{ i.destination }}{% endif %}, {{ i.boxes }}){% if not loop.last %}, {% endif %}{% endfor %}</li>
+  {% endfor %}
+  </ol>
+</div>
+{% endif %}
+{% if rows %}
+<div class="d-flex flex-wrap gap-2">
+  {% if capacity %}<button class="btn btn-success" name="mode" value="fill">Скомпоновать рейсы по {{ capacity }} кор. (отмеченные)</button>{% endif %}
+  <button class="btn btn-outline-success" name="mode" value="single">Один рейс по отмеченным точкам</button>
+</div>
+{% endif %}
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const cap = {{ capacity or 0 }};
+  const boxes = document.querySelectorAll(".mvb-dir");
+  const summary = document.getElementById("selSummary");
+  function update() {
+    let n = 0;
+    boxes.forEach((b) => { if (b.checked) n += parseInt(b.dataset.boxes, 10); });
+    if (summary) summary.textContent = `Отмечено: ${n} кор.` + (cap && n ? ` · машин: не меньше ${Math.ceil(n / cap)}` : "");
+  }
+  boxes.forEach((b) => b.addEventListener("change", update));
+  const all = document.getElementById("dirAll");
+  if (all) all.addEventListener("change", () => { boxes.forEach((b) => { b.checked = all.checked; }); update(); });
+})();
+</script>
+{% endblock %}

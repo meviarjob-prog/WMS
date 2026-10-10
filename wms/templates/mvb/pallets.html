@@ -1,0 +1,37 @@
+{% extends "mvb/base.html" %}
+{% block title %}Паллеты{% endblock %}
+{% block content %}
+<h3 class="mb-3">Паллеты</h3>
+<form method="post" class="card p-3 mb-4 d-flex flex-row flex-wrap gap-2 align-items-end">
+  <div>
+    <label class="form-label">Маркетплейс</label>
+    <select name="marketplace" class="form-select">
+      {% for code, label in MVB_MARKETPLACES.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="form-label">СЦ</label>
+    <input name="destination" class="form-control" list="mvb-city-list" placeholder="Город (СЦ)">
+  </div>
+  <button class="btn btn-success">Новая паллета</button>
+</form>
+<div class="table-responsive">
+<table class="table table-hover align-middle">
+  <thead><tr><th>Паллета</th><th>Направление</th><th class="text-end">Коробов</th><th>Где</th><th>Создана</th></tr></thead>
+  <tbody>
+  {% for p in pallets %}
+    {% set trip_box = p.boxes|selectattr('trip')|first %}
+    <tr>
+      <td><a href="{{ url_for('mvb.pallet_detail', pallet_id=p.id) }}">{{ p.number }}</a></td>
+      <td>{{ p.marketplace_label }}{% if p.destination %} · {{ p.destination }}{% endif %}</td>
+      <td class="text-end">{{ p.boxes|length }}</td>
+      <td>{% if trip_box %}Рейс {{ trip_box.trip.number }}{% else %}На складе{% endif %}</td>
+      <td>{{ (p.created_at|msk).strftime('%d.%m %H:%M') }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="text-muted">Паллет пока нет</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

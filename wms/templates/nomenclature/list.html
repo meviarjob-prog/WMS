@@ -146,7 +146,9 @@
             <td>{{ item.category.name if item.category else '—' }}</td>
             {% endif %}
             {% for wh in stock_warehouses %}
-            <td><a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}</a></td>
+            {% set unplaced = unplaced_by_item_warehouse.get((item.id, wh.id), 0) %}
+            <td><a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}</a>
+              {% if unplaced %}<div class="small text-muted" title="Принято, но не упаковано в короб">в т.ч. неразм. {{ '%g' % unplaced }}</div>{% endif %}</td>
             {% endfor %}
             <td><a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}">🖨 Этикетка</a></td>
             {% if current_user.is_admin %}
@@ -223,7 +225,7 @@
             {% endif %}
             <div class="small mt-1">
               {% for wh in stock_warehouses %}
-              {{ wh.name }}: <a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}</a>{% if not loop.last %} · {% endif %}
+              {{ wh.name }}: <a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}</a>{% if unplaced_by_item_warehouse.get((item.id, wh.id)) %} <span class="text-muted">(неразм. {{ '%g' % unplaced_by_item_warehouse.get((item.id, wh.id)) }})</span>{% endif %}{% if not loop.last %} · {% endif %}
               {% endfor %}
             </div>
             {% if current_user.is_admin %}

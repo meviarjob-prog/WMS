@@ -16,7 +16,7 @@
 
 <form method="post" action="{{ url_for('movement.receive', doc_id=doc.id) }}">
   <div class="card p-3">
-    <table class="table table-sm align-middle">
+    <table class="table table-sm align-middle" id="receiveTable">
       <thead><tr><th>Товар</th><th>Отправлено</th><th style="width:160px">Принято по факту</th></tr></thead>
       <tbody>
       {% for row in rows %}
@@ -34,4 +34,84 @@
     <button type="submit" class="btn btn-warning">📥 Подтвердить приемку</button>
   </div>
 </form>
+
+<div class="card p-3 mt-3">
+  <h5>Добавить товар, которого не было в отправке</h5>
+  <p class="text-muted small mb-2">
+    Если по факту на складе оказался товар, которого вообще не было в коробах этого перемещения
+    (прислали излишком не из заявленного) — найдите его здесь и впишите количество. Строка
+    добавится в таблицу выше как чистый излишек и попадет в общую форму приемки.
+  </p>
+  <div class="row g-2 align-items-end">
+    <div class="col-md-7">
+      <div class="autocomplete-box d-flex gap-2" data-autocomplete-nomenclature>
+        <input type="text" id="extraItemInput" class="form-control ac-input" placeholder="Штрихкод, артикул или наименование..." autocomplete="off">
+        <input type="hidden" class="ac-value">
+        <div class="autocomplete-list"></div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <input type="number" step="0.001" min="0.001" id="extraItemQty" class="form-control" placeholder="Кол-во" value="1">
+    </div>
+    <div class="col-md-2">
+      <button type="button" class="btn btn-outline-primary w-100" id="addExtraItemBtn">+ Добавить строку</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.getElementById("addExtraItemBtn").addEventListener("click", function () {
+    var input = document.getElementById("extraItemInput");
+    var hidden = input.closest(".autocomplete-box").querySelector(".ac-value");
+    var qtyInput = document.getElementById("extraItemQty");
+    var id = hidden.value;
+    if (!id) {
+      alert("Выберите товар из списка подсказок");
+      return;
+    }
+    var qty = parseFloat(qtyInput.value);
+    if (!qty || qty <= 0) {
+      alert("Укажите количество больше нуля");
+      return;
+    }
+    if (document.querySelector('#receiveTable input[name="qty_' + id + '"]')) {
+      alert("Этот товар уже есть в таблице выше");
+      return;
+    }
+    var name = input.dataset.selectedName || input.value;
+    var unit = input.dataset.selectedUnit || "";
+    var tbody = document.querySelector("#receiveTable tbody");
+    var tr = document.createElement("tr");
+    var tdName = document.createElement("td");
+    tdName.textContent = name + " ";
+    var badge = document.createElement("span");
+    badge.className = "badge bg-info text-dark";
+    badge.textContent = "излишек, не заявлен";
+    tdName.appendChild(badge);
+    var extraInput = document.createElement("input");
+    extraInput.type = "hidden";
+    extraInput.name = "extra_nomenclature_id";
+    extraInput.value = id;
+    tdName.appendChild(extraInput);
+    var tdExpected = document.createElement("td");
+    tdExpected.textContent = "0 " + unit;
+    var tdQty = document.createElement("td");
+    var qtyField = document.createElement("input");
+    qtyField.type = "number";
+    qtyField.step = "0.001";
+    qtyField.min = "0.001";
+    qtyField.name = "qty_" + id;
+    qtyField.className = "form-control form-control-sm";
+    qtyField.value = qty;
+    tdQty.appendChild(qtyField);
+    tr.appendChild(tdName);
+    tr.appendChild(tdExpected);
+    tr.appendChild(tdQty);
+    tbody.appendChild(tr);
+    input.value = "";
+    hidden.value = "";
+    qtyInput.value = "1";
+  });
+</script>
 {% endblock %}

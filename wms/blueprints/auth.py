@@ -4,7 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from flask_login import current_user, login_required, login_user, logout_user
 
 from ..extensions import db
-from ..models import SECTIONS, User, Warehouse
+from ..models import MVB_ROLES, SECTIONS, User, Warehouse
 
 bp = Blueprint("auth", __name__)
 
@@ -24,6 +24,9 @@ def login():
     if not user or not user.is_active_user or not user.check_password(password):
         flash("Неверный логин или пароль", "danger")
         return render_template("auth/login.html", username=username)
+    if user.is_mvb_user():
+        flash("Это учетная запись МВБ Логистики — войдите через её страницу входа", "warning")
+        return redirect(url_for("mvb.login"))
 
     login_user(user, remember=True)
     session["session_version"] = user.session_version or 0
@@ -58,7 +61,11 @@ def users():
         return redirect(url_for("main.index"))
     from .movement import get_shipping_label_sender_override
 
-    all_users = User.query.order_by(User.username).all()
+    # Пользователи МВБ Логистики управляются в своем разделе (/mvb/admin/users).
+    all_users = (
+        User.query.filter(User.role.notin_(list(MVB_ROLES)))
+        .order_by(User.username).all()
+    )
     warehouses = Warehouse.query.order_by(Warehouse.code).all()
 
     return render_template(
@@ -82,11 +89,15 @@ def create_user():
     shift_minutes = request.form.get("shift_minutes", type=int) or 480
     role = request.form.get("role", "warehouse")
     warehouse_id = request.form.get("warehouse_id", type=int)
-    if role not in ("warehouse", "production", "logist"):
+    if role not in ("warehouse", "production", "logist", "fulfillment"):
         role = "warehouse"
 
     if not username:
         flash("Укажите логин", "danger")
+        return redirect(url_for("auth.users"))
+
+    if role == "fulfillment" and not warehouse_id:
+        flash("Для роли «Фулфилмент» нужно выбрать склад", "danger")
         return redirect(url_for("auth.users"))
 
     if User.query.filter_by(username=username).first():
@@ -101,6 +112,10 @@ def create_user():
         shift_minutes=shift_minutes,
         role=role,
         warehouse_id=warehouse_id,
+        # Фулфилмент видит только приемку и перемещения своего склада (см.
+        # User.is_fulfillment_only) — остальные разделы закрыты этим же
+        # точечным механизмом, что и у обычных пользователей с allowed_sections.
+        allowed_sections="receiving,movement" if role == "fulfillment" else None,
     )
     user.set_password(temp_password)
     db.session.add(user)
@@ -166,21 +181,28 @@ def update_shift_minutes(user_id):
 def update_role(user_id):
     """Роль ограничивает доступ: "production" видит только сканирование ЧЗ
     на производстве, "logist" — только перемещения, ожидающие транспорт,
-    ничего больше (проверяется в before_request)."""
+    "fulfillment" — только приемку и перемещения своего склада, ничего
+    больше (проверяется в before_request/allowed_sections)."""
     if not _require_admin():
         return redirect(url_for("main.index"))
 
     user = User.query.get_or_404(user_id)
     role = request.form.get("role", "warehouse")
-    if role not in ("warehouse", "production", "logist"):
+    if role not in ("warehouse", "production", "logist", "fulfillment"):
         flash("Некорректная роль", "danger")
         return redirect(url_for("auth.users"))
 
-    if user.id == current_user.id and role in ("production", "logist") and not user.is_admin:
+    if user.id == current_user.id and role in ("production", "logist", "fulfillment") and not user.is_admin:
         flash("Нельзя ограничить самого себя до этой роли", "danger")
         return redirect(url_for("auth.users"))
 
+    if role == "fulfillment" and not user.warehouse_id:
+        flash("Для роли «Фулфилмент» у пользователя должен быть выбран склад", "danger")
+        return redirect(url_for("auth.users"))
+
     user.role = role
+    if role == "fulfillment":
+        user.allowed_sections = "receiving,movement"
     db.session.commit()
     flash(f"Роль для «{user.username}» обновлена", "success")
     return redirect(url_for("auth.users"))
