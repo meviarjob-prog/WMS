@@ -270,6 +270,31 @@ def received_wms_totals():
     return {key: value["received"] for key, value in movement_wms_totals().items()}
 
 
+def movement_sender_totals(period_start=None):
+    """{(склад-город, склад-отправитель): кол-во} — сколько всего отгружено
+    на каждый склад-город с каждого склада-отправителя с даты начала
+    периода (та же семантика "отгружено", что и у movement_wms_totals —
+    исходное количество из коробов, без вычета недовоза при приемке, см.
+    MovementDocument.total_sent_qty). Нужно для разбивки вклада
+    складов-отправителей в «Выполнении плана» по городам (см. чат)."""
+    totals = defaultdict(float)
+    documents = MovementDocument.query.filter(
+        MovementDocument.status == "completed",
+        MovementDocument.shipped_at.isnot(None),
+    ).all()
+    for document in documents:
+        shipped_at = document.shipped_at
+        if period_start and (
+            not shipped_at or shipped_at < datetime.combine(period_start, time(0, 1))
+        ):
+            continue
+        warehouse = document.to_warehouse
+        if not warehouse.marketplace:
+            continue
+        totals[(warehouse.id, document.from_warehouse_id)] += document.total_sent_qty()
+    return totals
+
+
 def build_wms_movement_rows():
     """Агрегирует только факт WMS. Повторный экспорт всегда дает тот же
     результат, поэтому сетевой повтор не способен задвоить количество."""

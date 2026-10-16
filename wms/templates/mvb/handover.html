@@ -1,0 +1,25 @@
+{% extends "mvb/base.html" %}
+{% block title %}Приемка от водителей{% endblock %}
+{% block content %}
+<h3 class="mb-1">Приемка от водителей</h3>
+<p class="text-muted">Водитель привез короба с забора. Пересчитайте короба по каждой заявке, впишите количество и подтвердите — короба встанут на склад МВБ.</p>
+{% for r in rows %}
+  {% set o = r.order %}
+  <div class="card p-3 mb-2">
+    <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center">
+      <div>
+        <div><a href="{{ url_for('mvb.order_detail', order_id=o.id) }}"><b>{{ o.number }}</b></a> · {{ o.client.name }}</div>
+        <div class="text-muted small">Водитель: {{ r.driver.display_name() if r.driver else '—' }}{% if r.last %} · забрано {{ (r.last|msk).strftime('%d.%m %H:%M') }}{% endif %}</div>
+        <div class="fs-5">Водитель забрал: <b>{{ r.count }}</b> кор.</div>
+      </div>
+      <form method="post" class="d-flex gap-2 align-items-center" onsubmit="return confirm('Подтвердить приемку ' + this.count.value + ' кор. по заявке {{ o.number }}?')">
+        <input type="hidden" name="order_id" value="{{ o.id }}">
+        <input type="number" name="count" class="form-control form-control-lg" style="width:110px" min="0" max="{{ r.count }}" placeholder="Кол-во" required inputmode="numeric">
+        <button class="btn btn-success btn-lg text-nowrap">✓ Принять</button>
+      </form>
+    </div>
+  </div>
+{% else %}
+  <div class="text-muted">Нет коробов от водителей, ожидающих приемки.</div>
+{% endfor %}
+{% endblock %}

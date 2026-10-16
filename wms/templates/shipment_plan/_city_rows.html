@@ -1,0 +1,28 @@
+{# Строки городов карточки плана-маркетплейса (см. чат). Отдельный файл,
+   чтобы тот же HTML отдавался и при полной загрузке дашборда, и как
+   AJAX-фрагмент при смене даты одной из волн отгрузки (без перезагрузки
+   страницы) — см. shipment_plan.update_city_deadline. #}
+{% for row in cities %}
+<tr>
+  <td>{{ row.warehouse.marketplace_city }}</td>
+  <td>
+    <form class="city-deadline-form" method="post"
+          action="{{ url_for('shipment_plan.update_city_deadline', plan_id=plan.id, warehouse_id=row.warehouse.id) }}">
+      <input type="date" name="ship_by_date" class="form-control form-control-sm city-deadline-input" style="width:9.5em"
+             value="{{ row.deadline.isoformat() if row.deadline else '' }}">
+    </form>
+    {% if row.deadline %}
+    <div class="small text-muted mt-1" title="Нарастающим итогом с начала периода по эту дату включительно, пересчитывается каждый раз заново">
+      факт к дате: <b>{{ row.shipped_through | round(0) | int }}</b>
+      {% if row.shipped_through_percent is not none %}({{ row.shipped_through_percent | round(0) | int }}%){% endif %}
+    </div>
+    {% endif %}
+  </td>
+  <td>{{ row.planned | round(0) | int }}</td>
+  <td>{% if row.in_transit %}<span class="text-warning-emphasis">{{ row.in_transit | round(0) | int }}</span>{% else %}—{% endif %}</td>
+  <td>{% if row.percent is not none %}{{ row.percent | round(1) }}%{% else %}—{% endif %}</td>
+  {% for entry in row.sender_breakdown %}
+  <td class="sender-col">{% if entry.qty %}{{ entry.qty | round(0) | int }} <span class="text-muted small">({{ entry.percent | round(0) | int }}%)</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+  {% endfor %}
+</tr>
+{% endfor %}

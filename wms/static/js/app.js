@@ -44,6 +44,7 @@ function initNomenclatureAutocomplete(root) {
     hidden.value = item.id;
     input.dataset.selectedName = item.name;
     input.dataset.selectedUnit = item.unit || "";
+    input.dataset.selectedBarcode = item.barcode || "";
     closeList();
     input.dispatchEvent(new CustomEvent("nomenclature-selected", { detail: item }));
     // После выбора (кликом, стрелками или автоматически по скану) сразу

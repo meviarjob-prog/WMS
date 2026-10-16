@@ -101,6 +101,14 @@
     {% elif doc.status == 'completed' and doc.received_at %}
     <span class="badge bg-success">Принято МП {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
     {% if doc.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ doc.total_shortage_qty() | round(3) }}</span>{% elif doc.discrepancies %}<span class="badge bg-info text-dark">Излишек при приемке</span>{% endif %}
+    {% if doc.receipt_from_act %}<span class="badge bg-primary" title="Количества в коробах приведены к акту приёмки">По акту</span>{% endif %}
+    {% if doc.receipt_returned_boxes %}<span class="badge bg-danger" title="Не приняты, возвращены на склад-отправитель: {{ doc.receipt_returned_boxes }}">Возвращено коробов: {{ doc.receipt_returned_boxes.split(',') | length }}</span>{% endif %}
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('movement.unreceive', doc_id=doc.id) }}" class="d-inline"
+          onsubmit="return confirm('Вернуть приемку {{ doc.number }} в работу? Принятое количество и расхождения сбросятся, приемку нужно будет отметить заново.');">
+      <button type="submit" class="btn btn-outline-warning">↩ Вернуть в работу</button>
+    </form>
+    {% endif %}
     {% endif %}
     {% if current_user.is_admin %}
     <form method="post" action="{{ url_for('movement.delete_document', doc_id=doc.id) }}" class="d-inline"

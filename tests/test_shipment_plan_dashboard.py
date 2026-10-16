@@ -81,8 +81,8 @@ def test_dashboard_top_summary_shows_in_transit(db, client_logged_in):
 
     resp = client_logged_in.get("/shipment-plan/")
     html = resp.get_data(as_text=True)
-    idx = html.find("Город")
-    assert "10" in html[idx : idx + 400]
+    idx = html.find("<tbody>", html.find("Город"))
+    assert "10" in html[idx : idx + 700]
 
 
 def test_city_in_transit_includes_shipped_sku_missing_from_current_plan(
@@ -124,7 +124,7 @@ def test_city_in_transit_includes_shipped_sku_missing_from_current_plan(
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
     city_idx = html.find("<td>Город</td>")
-    city_snippet = html[city_idx : city_idx + 300]
+    city_snippet = html[city_idx : city_idx + 1500]
     assert ">834<" in city_snippet
     top_idx = html.find("в пути")
     assert "<b>834</b>" in html[top_idx : top_idx + 100]
@@ -246,7 +246,7 @@ def test_marketplace_header_uses_only_completed_movement_fact(db, client_logged_
     assert "Выполнено" not in html
 
     city_idx = html.find("<td>Город</td>")
-    city_snippet = html[city_idx : city_idx + 500]
+    city_snippet = html[city_idx : city_idx + 1500]
     assert "Все завершенные перемещения с 00:01 даты листа" in html
     assert ">10<" in city_snippet
 

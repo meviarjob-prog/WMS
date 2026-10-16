@@ -35,6 +35,17 @@ FULFILLMENT_WAREHOUSE_NAME = "Товары в пути на Фулфилмент
 DIRECT_TRANSFER_WAREHOUSE_NAMES = {"Основной склад", "Склад №2 (Шоссейная 167)"}
 
 
+def _warehouse_name_for_1c(warehouse):
+    """Название СОБСТВЕННОГО склада в 1С: то, что задано в сопоставлении на
+    странице «Склады» (Warehouse.fulfillment_1c_name), а если не задано —
+    название склада в WMS, как было раньше (см. чат: для перемещений между
+    собственными складами в сопоставлении должны быть и собственные склады,
+    чтобы в 1С подтягивался нужный склад)."""
+    if warehouse is None:
+        return ""
+    return warehouse.fulfillment_1c_name or warehouse.name
+
+
 def _to_warehouse_name_for_1c(doc):
     """Каждый документ перемещения выгружается сам по себе, как и раньше —
     здесь меняется только то, ЧЬЕ имя склада подставляется в него в поле
@@ -42,6 +53,10 @@ def _to_warehouse_name_for_1c(doc):
     собой."""
     from_name = doc.from_warehouse.name if doc.from_warehouse else ""
     to_name = doc.to_warehouse.name if doc.to_warehouse else ""
+    # Явное сопоставление получателя (и склада-города, и собственного
+    # склада) главнее любых умолчаний ниже.
+    if doc.to_warehouse and doc.to_warehouse.fulfillment_1c_name:
+        return doc.to_warehouse.fulfillment_1c_name
     if (
         from_name in DIRECT_TRANSFER_WAREHOUSE_NAMES
         and to_name in DIRECT_TRANSFER_WAREHOUSE_NAMES
@@ -164,7 +179,7 @@ def _movement_payload(doc):
         "id": doc.id,
         "number": doc.number,
         "date": (doc.completed_at or doc.created_at).isoformat(),
-        "from_warehouse": doc.from_warehouse.name if doc.from_warehouse else "",
+        "from_warehouse": _warehouse_name_for_1c(doc.from_warehouse),
         "to_warehouse": _to_warehouse_name_for_1c(doc),
         # Реальный склад-город WMS (например, "ОЗОН: Казань") — когда
         # to_warehouse выше подменен на общий "Товары в пути на
@@ -180,7 +195,7 @@ def _inventory_payload(doc):
         "id": doc.id,
         "number": doc.number,
         "date": (doc.completed_at or doc.created_at).isoformat(),
-        "warehouse": doc.warehouse.name if doc.warehouse else "",
+        "warehouse": _warehouse_name_for_1c(doc.warehouse),
         "comment": f"WMS: {doc.number}",
         "lines": [
             {
@@ -254,6 +269,10 @@ def _receiving_reconciliation_payload(doc):
                 "qty": line.qty,
             }
             for line in doc.lines
+            # нулевая строка (товар не привезли) в 1С не создается — если
+            # отдать ее на сверку, получим «расхождение»: строка есть в WMS и
+            # нет в 1С
+            if line.qty and line.qty > 0
         ),
     }
 
@@ -327,7 +346,7 @@ def _supplier_returns_export():
                 "order_number": order_number or "",
                 "supplier": first.supplier_name or "",
                 "supplier_inn": supplier_inn or "",
-                "warehouse": first.warehouse.name if first.warehouse else "",
+                "warehouse": _warehouse_name_for_1c(first.warehouse),
                 "comment": f"WMS: возврат по приемке {first.invoice_number}",
                 "lines": [
                     {
@@ -417,6 +436,7 @@ def _receiving_adjustments_export():
                         "qty": line.qty,
                     }
                     for line in lines
+                    if line.qty and line.qty > 0
                 ],
             }
         )
@@ -440,9 +460,11 @@ def _receiving_adjustments_candidates():
     )
     result = []
     for doc in documents:
+        # Строки с нулем (товар совсем не привезли) в 1С не создаются и не
+        # правятся — расхождением для 1С они не считаются.
         diff_lines = [
             line for line in doc.lines.all()
-            if line.expected_qty is not None and line.qty != line.expected_qty
+            if line.expected_qty is not None and line.qty > 0 and line.qty != line.expected_qty
         ]
         if diff_lines:
             result.append((doc, diff_lines))

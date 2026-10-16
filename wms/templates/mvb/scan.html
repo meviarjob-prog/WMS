@@ -1,0 +1,38 @@
+{% extends "mvb/base.html" %}
+{% block title %}{{ mode_info.title }}{% endblock %}
+{% block content %}
+<h3 class="mb-3">📷 {{ mode_info.title }}</h3>
+<p class="text-muted">Сканируйте каждый короб — статус станет «{{ MVB_BOX_STATUS_LABELS[mode_info.to] }}».</p>
+{% set scan_url = url_for('mvb.scan_box', mode=mode) %}
+{% if mode == 'pickup' %}
+<div id="mvbPickupDone" class="card p-3 mb-3 border-success {{ '' if current else 'd-none' }}" style="max-width:560px">
+  <div class="fs-5 mb-2"><span id="mvbPickupClient">{{ current.client.name if current else '' }}</span>:
+    отсканировано <b id="mvbPickupDoneCount">{{ current_progress.order_done if current else 0 }}</b>
+    из <b id="mvbPickupTotal">{{ current_progress.order_total if current else 0 }}</b> кор.</div>
+  <form method="post" id="mvbPickupForm" action="{{ url_for('mvb.driver_pickup_done', order_id=current.id) if current else '' }}">
+    <button class="btn btn-lg w-100 {{ 'btn-success' if current and current_progress.order_done >= current_progress.order_total else 'btn-outline-secondary' }}" id="mvbPickupBtn">✓ Готово</button>
+    <button name="partial" value="1" id="mvbPickupPartial" onclick="return confirm('Забрать только отсканированные короба? Остаток вернётся в заявки на забор.')"
+      class="btn btn-outline-warning w-100 mt-2 {{ '' if current and 0 < current_progress.order_done < current_progress.order_total else 'd-none' }}">Не влезает — забрал часть</button>
+  </form>
+</div>
+{% endif %}
+{% include "mvb/_scan_widget.html" %}
+{% endblock %}
+{% block scripts %}
+{% if mode == 'pickup' %}
+<script>
+document.addEventListener("mvb:scanned", (e) => {
+  const d = e.detail;
+  if (!d.order_id) return;
+  document.getElementById("mvbPickupDone").classList.remove("d-none");
+  document.getElementById("mvbPickupClient").textContent = d.client;
+  document.getElementById("mvbPickupDoneCount").textContent = d.order_done;
+  document.getElementById("mvbPickupTotal").textContent = d.order_total;
+  document.getElementById("mvbPickupForm").action = "{{ url_for('mvb.driver_pickup_done', order_id=0) }}".replace("/0/", `/${d.order_id}/`);
+  const btn = document.getElementById("mvbPickupBtn");
+  btn.className = "btn btn-lg w-100 " + (d.order_done >= d.order_total ? "btn-success" : "btn-outline-secondary");
+  document.getElementById("mvbPickupPartial").classList.toggle("d-none", !(d.order_done > 0 && d.order_done < d.order_total));
+});
+</script>
+{% endif %}
+{% endblock %}

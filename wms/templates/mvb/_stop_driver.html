@@ -1,0 +1,23 @@
+{# Точка маршрута для водителя на СЦ: адрес, сколько паллет сдать и
+   «Сдан на СЦ». Нужны trip и stop; с public_token — ссылка без входа. #}
+<a target="_blank" class="fw-bold" href="https://yandex.ru/maps/?text={{ stop.map_query()|urlencode }}">📍 {{ stop.address or stop.label() }}</a>
+{% if stop.address %}<div class="small text-muted">{{ stop.label() }}</div>{% endif %}
+{% set pallets = stop.pallet_count() %}{% set loose = stop.loose_boxes() %}
+<div class="fs-5 my-1">Сдать: {% if pallets %}<b>{{ pallets }}</b> пал.{% endif %}{% if pallets and loose %} + {% endif %}{% if loose %}<b>{{ loose }}</b> кор.{% endif %}{% if not pallets and not loose %}<b>{{ stop.planned_boxes }}</b> кор. (план){% endif %}</div>
+{% if stop.result == 'delivered' %}
+  <div class="text-success">✓ сдан на СЦ {{ (stop.delivered_at|msk).strftime('%d.%m %H:%M') }}</div>
+{% elif stop.result == 'rejected' %}
+  <div class="text-danger">✗ не сдан: {{ stop.delivery_comment }}</div>
+{% elif trip.status == 'departed' %}
+  {% macro stop_url(act) %}{% if public_token %}{{ url_for('mvb.trip_public_stop', token=public_token, stop_id=stop.id, action=act) }}{% else %}{{ url_for('mvb.trip_stop_action', trip_id=trip.id, stop_id=stop.id, action=act) }}{% endif %}{% endmacro %}
+  <form method="post" action="{{ stop_url('deliver') }}" class="mb-2">
+    <button class="btn btn-success btn-lg w-100">✓ Сдан на СЦ</button>
+  </form>
+  <details>
+    <summary class="small text-muted">Не приняли?</summary>
+    <form method="post" action="{{ stop_url('reject') }}" class="d-flex gap-1 mt-1">
+      <input name="comment" class="form-control" placeholder="Причина" required>
+      <button class="btn btn-outline-danger text-nowrap">Не сдан</button>
+    </form>
+  </details>
+{% endif %}
