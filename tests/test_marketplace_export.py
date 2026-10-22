@@ -119,6 +119,42 @@ def test_ozon_mapping_upload_skips_rows_where_first_column_is_not_a_barcode(db, 
     assert "не похожа на штрихкод" in resp.get_data(as_text=True)
 
 
+def test_ozon_mapping_clear_removes_all_rows(db, client_logged_in):
+    """Загрузка файла только добавляет/обновляет по штрихкоду, но никогда
+    не удаляет лишнее — для перезаливки сопоставления заново нужна явная
+    очистка (см. чат)."""
+    db.session.add_all(
+        [
+            OzonArticleMapping(barcode="8880100001", article="Артикул-А"),
+            OzonArticleMapping(barcode="8880100002", article="Артикул-Б"),
+        ]
+    )
+    db.session.commit()
+
+    resp = client_logged_in.post("/marketplace-export/ozon-mapping/clear")
+
+    assert resp.status_code == 302
+    assert OzonArticleMapping.query.count() == 0
+
+
+def test_ozon_mapping_clear_requires_admin(db, client):
+    from wms.models import User
+
+    worker = User(username="mpx-clear-worker", role="warehouse")
+    worker.set_password("x")
+    db.session.add(worker)
+    db.session.add(OzonArticleMapping(barcode="8880100001", article="Артикул-А"))
+    db.session.commit()
+    with client.session_transaction() as session:
+        session["_user_id"] = str(worker.id)
+        session["_fresh"] = True
+
+    resp = client.post("/marketplace-export/ozon-mapping/clear")
+
+    assert resp.status_code == 302
+    assert OzonArticleMapping.query.count() == 1
+
+
 def test_ozon_mapping_upload_requires_admin(db, client):
     from wms.models import User
 
@@ -187,6 +223,43 @@ def test_ozon_export_adds_second_sheet_with_box_to_gm_mapping(db, client_logged_
         ("BOX-MPX-1", "GM-0001", item1.name, 5.0),
         ("BOX-MPX-2", "GM-0002", item2.name, 7.0),
     ]
+
+
+def test_ozon_export_remembers_cargo_place_mapping_and_replaces_on_reexport(db, client_logged_in):
+    from wms.models import MovementCargoPlace
+
+    doc, item1, item2 = _make_ozon_movement()
+    client_logged_in.post(
+        f"/marketplace-export/movement/{doc.id}/ozon",
+        data={"cargo_barcodes": "GM-0001\nGM-0002"},
+    )
+    places = MovementCargoPlace.query.filter_by(document_id=doc.id).order_by(MovementCargoPlace.id).all()
+    assert [(p.cargo_barcode, p.box_number) for p in places] == [
+        ("GM-0001", "BOX-MPX-1"),
+        ("GM-0002", "BOX-MPX-2"),
+    ]
+    assert places[0].items() == [{"barcode": item1.barcode, "qty": 5}]
+    assert places[1].items() == [{"barcode": item2.barcode, "qty": 7}]
+
+    client_logged_in.post(
+        f"/marketplace-export/movement/{doc.id}/ozon",
+        data={"cargo_barcodes": "GM-0009\nGM-0010"},
+    )
+    places = MovementCargoPlace.query.filter_by(document_id=doc.id).order_by(MovementCargoPlace.id).all()
+    assert [p.cargo_barcode for p in places] == ["GM-0009", "GM-0010"]
+
+
+def test_ozon_export_rejects_duplicate_cargo_barcodes(db, client_logged_in):
+    from wms.models import MovementCargoPlace
+
+    doc, _, _ = _make_ozon_movement()
+    resp = client_logged_in.post(
+        f"/marketplace-export/movement/{doc.id}/ozon",
+        data={"cargo_barcodes": "GM-0001\nGM-0001"},
+    )
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/html"
+    assert MovementCargoPlace.query.count() == 0
 
 
 def test_ozon_export_leaves_article_blank_when_not_mapped(db, client_logged_in):

@@ -5,6 +5,9 @@
   <h3 class="mb-0">Производство — учет выработки</h3>
   <div>
     <a class="btn btn-outline-secondary" href="{{ url_for('production.efficiency') }}">📊 Отчет по эффективности</a>
+    {% if not current_user.is_production_only() %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('production.employee_output') }}">📈 Выработка сотрудников</a>
+    {% endif %}
     {% if current_user.is_admin %}
     <a class="btn btn-outline-secondary" href="{{ url_for('production.settings') }}">⚙ Настройки</a>
     {% endif %}

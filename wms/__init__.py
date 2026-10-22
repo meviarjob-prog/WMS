@@ -1,7 +1,8 @@
+import contextlib
 import os
 import secrets
 
-from flask import Flask, flash, redirect, request, session, url_for
+from flask import Flask, current_app, flash, redirect, request, session, url_for
 from flask_login import current_user, logout_user
 from sqlalchemy import event, inspect, select, text
 from sqlalchemy.engine import Engine
@@ -14,6 +15,26 @@ from .utils.timezone import to_moscow
 
 
 _sqlite_functions_registered = False
+
+
+@contextlib.contextmanager
+def _startup_lock(app):
+    """На сервере gunicorn запускает несколько процессов, и каждый при старте
+    обновляет схему базы и заносит справочники. Без блокировки они делают это
+    одновременно: второй процесс падает (повторная колонка, дубль города), и
+    сервер не поднимается (502). Файловая блокировка пускает их по очереди."""
+    try:
+        import fcntl
+    except ImportError:  # Windows (сборка .exe) — там один процесс
+        yield
+        return
+    os.makedirs(app.instance_path, exist_ok=True)
+    with open(os.path.join(app.instance_path, ".startup.lock"), "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def _ensure_columns():
@@ -95,6 +116,19 @@ def _ensure_columns():
                         "[schema] warehouses.fulfillment_1c_name заполнен известными "
                         "складами 1С по городу"
                     )
+                if table.name == "boxes" and column.name == "warehouse_arrived_at":
+                    # Точный момент переезда короба на текущий склад для уже
+                    # существующих коробов неизвестен — created_at ближайшая
+                    # доступная оценка (для коробов, которые с тех пор не
+                    # переезжали, она и верна).
+                    with db.engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                "UPDATE boxes SET warehouse_arrived_at = created_at "
+                                "WHERE warehouse_arrived_at IS NULL"
+                            )
+                        )
+                    print("[schema] boxes.warehouse_arrived_at заполнен из created_at для уже существующих коробов")
                 if table.name == "users" and column.name == "nomenclature_edit_allowed":
                     # ALTER TABLE ADD COLUMN не проставляет DEFAULT задним
                     # числом — у уже существующих пользователей колонка
@@ -183,6 +217,47 @@ def _ensure_columns():
                 print(f"[schema] Не удалось добавить {table.name}.{column.name}: {exc}")
 
 
+def _cleanup_zero_receiving_lines():
+    """Однократная чистка старых данных: в приемках по накладной, уже
+    ушедших на разбраковку/завершенных, остались строки с нулем (товар не
+    привезли). В 1С такой строки нет, поэтому сверка показывала расхождение.
+    Теперь такие строки удаляются при переходе на разбраковку (см.
+    receiving._remove_zero_lines); здесь добиваем то, что накопилось раньше.
+    Повторный запуск ничего не меняет."""
+    import json
+
+    from .models import ReceivingDocument, ReceivingLine
+
+    docs = (
+        ReceivingDocument.query.filter(
+            ReceivingDocument.invoice_file_name.isnot(None),
+            ReceivingDocument.status.in_(("sorting", "completed")),
+        ).all()
+    )
+    cleaned = 0
+    for doc in docs:
+        zero_lines = [
+            line for line in doc.lines.all()
+            if (line.qty or 0) <= 0 and not line.box_id and (line.defect_qty or 0) <= 0
+        ]
+        if not zero_lines:
+            continue
+        removed = list(doc.removed_zero_items())
+        for line in zero_lines:
+            if line.expected_qty is not None:
+                removed.append({
+                    "barcode": line.nomenclature.barcode,
+                    "name": line.nomenclature.name,
+                    "expected_qty": line.expected_qty,
+                })
+            db.session.delete(line)
+            cleaned += 1
+        doc.removed_zero_lines = json.dumps(removed, ensure_ascii=False)
+    if cleaned:
+        db.session.commit()
+        print(f"[schema] удалено строк с нулевым количеством в приемках по накладной: {cleaned}")
+
+
 def _ensure_indexes():
     """Аналогично _ensure_columns(), но для индексов: index=True в модели
     заставляет create_all() создать индекс только для НОВОЙ таблицы — для
@@ -252,6 +327,159 @@ def _ensure_indexes():
             )
 
 
+def _ensure_mvb_lines():
+    """МВБ: заявки, созданные до появления направлений, получают одно
+    направление по своим полям; их короба и план рейса переносятся на него.
+    Повторный запуск ничего не делает."""
+    from .models import MvbBox, MvbOrder, MvbOrderLine
+
+    orders = MvbOrder.query.filter(~MvbOrder.lines.any()).all()
+    for order in orders:
+        line = MvbOrderLine(
+            seq=1,
+            marketplace=order.marketplace or "wb",
+            destination=order.destination,
+            slot_date=order.slot_date,
+            box_count=order.box_count or len(order.boxes) or 1,
+            planned_trip_id=order.planned_trip_id,
+            wms_movement_id=order.wms_movement_id,
+        )
+        order.lines.append(line)
+        for box in order.boxes:
+            box.line = line
+    if orders:
+        db.session.commit()
+        print(f"[schema] МВБ: направления созданы для заявок — {len(orders)}")
+    orphan = MvbBox.query.filter(MvbBox.line_id.is_(None)).count()
+    if orphan:
+        for box in MvbBox.query.filter(MvbBox.line_id.is_(None)).all():
+            if box.order.lines:
+                box.line = box.order.lines[0]
+        db.session.commit()
+
+
+def _ensure_mvb_destinations():
+    """МВБ: справочник городов с прайсом + пункты назначения.
+    - старые адреса города (общие для WB / Ozon) переносятся в пункты
+      назначения WB / Ozon, адреса у города очищаются;
+    - у каждого пункта назначения есть город в справочнике;
+    - прайс, заведенный на пункт назначения, переезжает на его город."""
+    from .models import MvbCity, MvbDestination, MvbPriceTier
+
+    changed = 0
+    for city in MvbCity.query.all():
+        if not (city.address_wb or city.address_ozon or city.address):
+            continue
+        for marketplace, address in (("wb", city.address_wb or city.address), ("ozon", city.address_ozon)):
+            if not address and marketplace == "ozon":
+                continue
+            if not MvbDestination.query.filter_by(marketplace=marketplace, city=city.name, ff_name=None).first():
+                db.session.add(MvbDestination(marketplace=marketplace, city=city.name, address=address,
+                                              is_active=city.is_active))
+        city.address_wb = city.address_ozon = city.address = None
+        changed += 1
+    db.session.flush()
+
+    for dest in MvbDestination.query.all():
+        if MvbCity.find(dest.city) is None:
+            db.session.add(MvbCity(name=dest.city))
+            db.session.flush()
+            changed += 1
+
+    for tier in MvbPriceTier.query.filter(MvbPriceTier.destination_id.isnot(None)).all():
+        dest = db.session.get(MvbDestination, tier.destination_id)
+        city = MvbCity.find(dest.city) if dest else None
+        tier.destination_id = None
+        if city is None or tier.city_id:
+            db.session.delete(tier)
+        elif MvbPriceTier.query.filter_by(kind=tier.kind, city_id=city.id, min_boxes=tier.min_boxes).first():
+            db.session.delete(tier)  # у города уже есть такая ступень
+        else:
+            tier.city_id = city.id
+        changed += 1
+    if changed:
+        db.session.commit()
+        print(f"[schema] МВБ: справочник городов и прайс по городам обновлены — {changed}")
+
+
+# Прайс MWB по умолчанию (прайсы WB и Ozon от 2026-10-03): ступени «от N
+# коробов — цена за короб» по городу и пункты назначения в нем.
+MVB_DEFAULT_TIERS = {
+    "msk": [(1, 550), (11, 420)],
+    "kzn": [(1, 600), (11, 420)],
+    "sib": [(1, 1050), (11, 870), (16, 790)],
+    "ekb": [(1, 950), (11, 750), (16, 690)],
+    "vlg": [(1, 450), (11, 400)],
+    "spb": [(1, 750), (11, 550)],
+    "ady": [(1, 300), (11, 250)],
+    "thk": [(1, 300)],
+    "nev": [(1, 150)],
+}
+MVB_DEFAULT_CITIES = [
+    # город, ступени, маркетплейсы
+    ("Гривно", "msk", ("ozon",)),
+    ("Ногинск", "msk", ("ozon",)),
+    ("Софьино", "msk", ("ozon",)),
+    ("Хоругвино", "msk", ("ozon",)),
+    ("Пушкино", "msk", ("ozon",)),
+    ("Домодедово", "msk", ("ozon",)),
+    ("Петровское", "msk", ("ozon",)),
+    ("Чашниково", "msk", ("wb",)),
+    ("Радумля", "msk", ("wb",)),
+    ("Никольское", "msk", ("wb",)),
+    ("Щеглово", "msk", ("wb",)),
+    ("Подольск 4", "msk", ("wb",)),
+    ("Домодедово 2", "msk", ("wb",)),
+    ("Казань", "kzn", ("wb", "ozon")),
+    ("Самара", "kzn", ("wb",)),
+    ("Новосибирск", "sib", ("wb", "ozon")),
+    ("Омск", "sib", ("wb", "ozon")),
+    ("Екатеринбург", "ekb", ("wb", "ozon")),
+    ("Волгоград", "vlg", ("ozon",)),
+    ("Санкт-Петербург", "spb", ("ozon",)),
+    ("Бугры", "spb", ("ozon",)),
+    ("Шушары", "spb", ("wb", "ozon")),
+    ("Колпино", "spb", ("ozon",)),
+    ("Порошкино", "spb", ("ozon",)),
+    ("Адыгейск", "ady", ("ozon",)),
+    ("Тахтамукай", "thk", ("wb",)),
+    ("Невинномысск", "nev", ("wb", "ozon")),
+]
+MVB_DEFAULT_PICKUP_ZONES = [("Черкесск", 1000), ("Регионы", 1500), ("Хабез", 1800), ("Отрадная", 2800)]
+
+
+def _seed_mvb_default_prices():
+    """Один раз заносит прайс MWB по умолчанию: города с прайсом, пункты
+    назначения WB / Ozon и зоны забора. То, что оператор уже завел, не
+    трогает (город со своим прайсом, существующий пункт, уже заданные
+    зоны); после первого запуска больше не срабатывает — удаленное
+    оператором не возвращается."""
+    from .models import AppSetting, MvbCity, MvbDestination, MvbPickupZone, MvbPriceTier
+
+    key = "mvb_default_prices_v1"
+    if db.session.get(AppSetting, key) is not None:
+        return
+    for name, tiers_key, marketplaces in MVB_DEFAULT_CITIES:
+        city = MvbCity.find(name)
+        if city is None:
+            city = MvbCity(name=name)
+            db.session.add(city)
+            db.session.flush()
+        if not MvbPriceTier.query.filter_by(kind="sc", city_id=city.id).first():
+            for min_boxes, price in MVB_DEFAULT_TIERS[tiers_key]:
+                db.session.add(MvbPriceTier(kind="sc", city_id=city.id, min_boxes=min_boxes, price_per_box=price))
+        for marketplace in marketplaces:
+            if MvbDestination.find(marketplace, city.name) is None:
+                db.session.add(MvbDestination(marketplace=marketplace, city=city.name))
+        db.session.flush()
+    if not MvbPickupZone.query.first():
+        for name, price in MVB_DEFAULT_PICKUP_ZONES:
+            db.session.add(MvbPickupZone(name=name, price=price))
+    db.session.add(AppSetting(key=key, value="1"))
+    db.session.commit()
+    print("[schema] МВБ: занесен прайс по умолчанию (города, пункты WB/Ozon, зоны забора)")
+
+
 def _register_sqlite_tuning():
     """SQLite-специфичные настройки:
     - LOWER/UPPER на Python-реализации (сравнение LIKE/ILIKE по умолчанию
@@ -297,6 +525,15 @@ def _bootstrap_admin():
     if User.query.count() > 0:
         return
 
+    # Демо-режим (WMS_DEMO=1): пароль известен заранее ("demo", см.
+    # demo_data.py) и печатать случайный не нужно — он бы только запутал.
+    if current_app.config.get("DEMO_MODE"):
+        admin = User(username="admin", full_name="Администратор", is_admin=True)
+        admin.set_password("demo")
+        db.session.add(admin)
+        db.session.commit()
+        return
+
     password = secrets.token_urlsafe(8)
     admin = User(username="admin", full_name="Администратор", is_admin=True)
     admin.set_password(password)
@@ -310,6 +547,30 @@ def _bootstrap_admin():
     print("Сохраните этот пароль — он больше нигде не показывается.")
     print("Сменить его можно после входа или в разделе «Пользователи».")
     print("=" * 60)
+
+
+# Эндпоинты вне приемки/перемещений, доступные роли "фулфилмент" (см. чат:
+# видят свой склад, печатают стикеры своих коробов, видят общую номенклатуру,
+# при приемке подтягивается вся номенклатура). Только чтение и печать; кто
+# какие именно короба может открыть — проверяется в самих view по складу
+# пользователя.
+FULFILLMENT_EXTRA_ENDPOINTS = frozenset(
+    {
+        # подсказки/сканирование при приемке и перемещении
+        "api.search_nomenclature",
+        "api.nomenclature_by_barcode",
+        "api.box_by_number",
+        # общая номенклатура (остаток — только своего склада)
+        "nomenclature.list_nomenclature",
+        # короба своего склада и печать их стикеров
+        "boxes.list_boxes",
+        "boxes.detail",
+        "labels.box_label",
+        "labels.box_label_pdf",
+        "labels.boxes_label_batch_pdf",
+        "labels.box_items_labels",
+    }
+)
 
 
 def create_app(config_class=Config):
@@ -358,6 +619,7 @@ def create_app(config_class=Config):
     from .blueprints.onboarding import bp as onboarding_bp
     from .blueprints.marketplace_export import bp as marketplace_export_bp
     from .blueprints.management import bp as management_bp
+    from .blueprints.mvb import bp as mvb_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
@@ -378,14 +640,20 @@ def create_app(config_class=Config):
     app.register_blueprint(onboarding_bp, url_prefix="/onboarding")
     app.register_blueprint(marketplace_export_bp, url_prefix="/marketplace-export")
     app.register_blueprint(management_bp, url_prefix="/management")
+    app.register_blueprint(mvb_bp, url_prefix="/mvb")
 
-    with app.app_context():
+    with app.app_context(), _startup_lock(app):
         from . import models  # noqa: F401
         from .utils.categorize import bootstrap_categories
 
         db.create_all()
         _ensure_columns()
         _ensure_indexes()
+        _cleanup_zero_receiving_lines()
+        _ensure_mvb_lines()
+        _ensure_mvb_destinations()
+        if not app.config.get("TESTING"):
+            _seed_mvb_default_prices()
         _bootstrap_admin()
         bootstrap_categories()
 
@@ -402,6 +670,7 @@ def create_app(config_class=Config):
         from .blueprints.production_orders import (
             GOOGLE_SHEETS_PUBLIC_ENDPOINTS as PRODUCTION_ORDERS_PUBLIC_ENDPOINTS,
         )
+        from .blueprints.mvb import MVB_PUBLIC_ENDPOINTS
         from .models import User
 
         if request.endpoint is None:
@@ -426,17 +695,39 @@ def create_app(config_class=Config):
                 logout_user()
                 session.pop("session_version", None)
                 flash("Сессия завершена администратором. Войдите снова.", "warning")
+                if request.endpoint.startswith("mvb."):
+                    return redirect(url_for("mvb.login"))
                 return redirect(url_for("auth.login"))
+        # Страницы WMS из auth.* (настройки, смена пароля) пользователям МВБ
+        # тоже не показываем — только выход.
+        if (
+            current_user.is_authenticated
+            and current_user.is_mvb_user()
+            and request.endpoint.startswith("auth.")
+            and request.endpoint != "auth.logout"
+        ):
+            return redirect(url_for("mvb.index"))
         if (
             request.endpoint == "static"
             or request.endpoint.startswith("auth.")
             or request.endpoint in API_1C_PUBLIC_ENDPOINTS
             or request.endpoint in GOOGLE_SHEETS_PUBLIC_ENDPOINTS
             or request.endpoint in PRODUCTION_ORDERS_PUBLIC_ENDPOINTS
+            or request.endpoint in MVB_PUBLIC_ENDPOINTS
         ):
             return None
         if not current_user.is_authenticated:
+            # У «МВБ Логистики» своя страница входа.
+            if request.endpoint.startswith("mvb."):
+                return redirect(url_for("mvb.login"))
             return redirect(url_for("auth.login", next=request.full_path))
+        # Пользователи МВБ Логистики видят только свой раздел /mvb, остальной
+        # WMS им недоступен (доступ к /mvb для пользователей WMS проверяет
+        # сам blueprint mvb).
+        if current_user.is_mvb_user():
+            if request.endpoint.startswith("mvb."):
+                return None
+            return redirect(url_for("mvb.index"))
         # Роль "производство" — доступ только к сканированию ЧЗ, ничего
         # больше (даже при прямом вводе адреса другой страницы) — кроме
         # страницы обучения, она должна быть доступна всем сотрудникам
@@ -457,6 +748,21 @@ def create_app(config_class=Config):
             and not request.endpoint.startswith("onboarding.")
         ):
             return redirect(url_for("movement.transport_list"))
+        # Роль "фулфилмент" — приемка и перемещения своего склада (видимость
+        # внутри самих разделов дополнительно сужается по warehouse_id, см.
+        # receiving._visible_receiving_query/movement._visible_movement_query),
+        # плюс точечный список FULFILLMENT_EXTRA_ENDPOINTS: подсказки
+        # номенклатуры при приемке, общая номенклатура (только просмотр),
+        # короба своего склада и печать их стикеров (см. чат). Остальное
+        # закрыто.
+        if (
+            current_user.is_fulfillment_only()
+            and not request.endpoint.startswith("receiving.")
+            and not request.endpoint.startswith("movement.")
+            and not request.endpoint.startswith("onboarding.")
+            and request.endpoint not in FULFILLMENT_EXTRA_ENDPOINTS
+        ):
+            return redirect(url_for("receiving.list_documents"))
         # Точечное ограничение разделов (см. User.allowed_sections) — тоже
         # проверяем при прямом вводе адреса, не только скрываем пункт меню.
         section = request.endpoint.split(".")[0]
@@ -471,6 +777,10 @@ def create_app(config_class=Config):
 
         from .models import CELL_CAPACITY
 
-        return {"current_year": datetime.now().year, "CELL_CAPACITY": CELL_CAPACITY}
+        return {
+            "current_year": datetime.now().year,
+            "CELL_CAPACITY": CELL_CAPACITY,
+            "demo_mode": app.config.get("DEMO_MODE", False),
+        }
 
     return app

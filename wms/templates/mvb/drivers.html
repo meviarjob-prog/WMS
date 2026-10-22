@@ -1,0 +1,54 @@
+{% extends "mvb/base.html" %}
+{% block title %}Водители{% endblock %}
+{% block content %}
+<h3 class="mb-1">Водители на забор</h3>
+<p class="text-muted">Водителей заводит оператор: ФИО, закреплённое авто, логин и пароль. Выдайте водителю логин и пароль — он входит на странице МВБ. Самостоятельной регистрации у водителей нет.</p>
+<form method="post" class="card p-3 mb-4" id="mvbDriverNew">
+  <h6>Новый водитель</h6>
+  <div class="row g-2">
+    <div class="col-md-3"><label class="form-label small mb-0">ФИО *</label><input name="full_name" class="form-control" value="{{ form.full_name }}" required></div>
+    <div class="col-md-2"><label class="form-label small mb-0">Модель авто *</label><input name="model" class="form-control" value="{{ form.model }}" placeholder="ГАЗель Next" required></div>
+    <div class="col-md-2"><label class="form-label small mb-0">Госномер *</label><input name="plate" class="form-control" value="{{ form.plate }}" placeholder="А001АА09" required></div>
+    <div class="col-md-2"><label class="form-label small mb-0">Вмещает коробов *</label><input name="capacity_boxes" type="number" min="1" class="form-control" value="{{ form.capacity_boxes }}" required></div>
+  </div>
+  <div class="row g-2 mt-1">
+    <div class="col-md-3"><label class="form-label small mb-0">Логин *</label><input name="username" class="form-control" value="{{ form.username }}" autocomplete="off" required></div>
+    <div class="col-md-3"><label class="form-label small mb-0">Пароль * (от 6 символов)</label>
+      <div class="input-group">
+        <input name="password" type="text" minlength="6" class="form-control font-monospace" id="mvbDriverPassword" autocomplete="off" required>
+        <button type="button" class="btn btn-outline-secondary" id="mvbGenPassword" title="Придумать пароль">🎲</button>
+      </div>
+    </div>
+    <div class="col-md-3 d-flex align-items-end"><button class="btn btn-success w-100">+ Добавить водителя</button></div>
+  </div>
+</form>
+
+{% for r in rows %}
+{% set u = r.user %}{% set v = r.vehicle %}
+<form method="post" class="card p-3 mb-2 {{ '' if u.is_active_user else 'opacity-50' }}">
+  <input type="hidden" name="driver_id" value="{{ u.id }}">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-3"><label class="form-label small mb-0">ФИО</label><input name="full_name" class="form-control form-control-sm" value="{{ u.full_name or '' }}" required></div>
+    <div class="col-6 col-md-2"><label class="form-label small mb-0">Модель авто</label><input name="model" class="form-control form-control-sm" value="{{ v.model if v and v.model else '' }}" required></div>
+    <div class="col-6 col-md-2"><label class="form-label small mb-0">Госномер</label><input name="plate" class="form-control form-control-sm" value="{{ v.plate if v else '' }}" required></div>
+    <div class="col-6 col-md-1"><label class="form-label small mb-0">Коробов</label><input name="capacity_boxes" type="number" min="1" class="form-control form-control-sm" value="{{ v.capacity_boxes if v else '' }}" required></div>
+    <div class="col-6 col-md-2"><label class="form-label small mb-0">Логин: <b class="font-monospace">{{ u.username }}</b></label><input name="password" type="text" minlength="6" class="form-control form-control-sm" placeholder="Новый пароль" autocomplete="off"></div>
+    <div class="col-6 col-md-auto"><div class="form-check mb-1"><input type="checkbox" name="is_active" value="1" class="form-check-input" id="act{{ u.id }}" {{ 'checked' if u.is_active_user }}><label class="form-check-label small" for="act{{ u.id }}">Работает</label></div></div>
+    <div class="col-6 col-md-auto"><button class="btn btn-sm btn-outline-primary w-100">Сохранить</button></div>
+  </div>
+  {% if not v %}<div class="small text-danger mt-1">Авто не закреплено — укажите модель, госномер и вместимость.</div>{% endif %}
+</form>
+{% else %}
+<p class="text-muted">Водителей пока нет.</p>
+{% endfor %}
+<p class="small text-muted mt-3">Наёмные машины без водителя для рейсов на СЦ: <a href="{{ url_for('mvb.vehicles') }}">«Машины для СЦ»</a>{% if free_vehicles %} · {{ free_vehicles }} шт.{% endif %}.</p>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById("mvbGenPassword").addEventListener("click", () => {
+  const abc = "abcdefghjkmnpqrstuvwxyz23456789";
+  const buf = new Uint32Array(8); crypto.getRandomValues(buf);
+  document.getElementById("mvbDriverPassword").value = Array.from(buf, (n) => abc[n % abc.length]).join("");
+});
+</script>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Задвоенные приемки{% endblock %}
+{% block content %}
+<h3 class="mb-1">Задвоенные приемки</h3>
+<p class="text-muted">Товар приняли сразу в короба, когда неразмещенного остатка по нему на складе не было, и неразмещенный остаток ушел бы в минус.
+  Позже этот минус закрыло зачисление приемки, то есть те же единицы посчитаны второй раз: они лежат в коробах и числятся неразмещенными.
+  История проигрывается по времени. Время приемки в короб — это дата создания ее документа.</p>
+<form method="post" onsubmit="return confirm('Списать задвоение по отмеченным строкам? Отменить нельзя.')">
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th></th><th>Склад</th><th>Товар</th><th>Принято в короба</th><th>Задвоило зачисление</th><th class="text-end">Задвоено</th><th class="text-end">Неразм. сейчас</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr class="{{ 'text-muted' if r.fixed }}">
+      <td>{% if not r.fixed %}<input type="checkbox" class="form-check-input" name="key" value="{{ r.key }}">{% endif %}</td>
+      <td>{{ r.warehouse.name }}</td>
+      <td>{{ r.item.name }}<div class="small text-muted">{{ r.item.barcode }}</div></td>
+      <td><a href="{{ url_for('receiving.detail', doc_id=r.box_doc.id) }}">{{ r.box_doc.number }}</a>
+        <div class="small text-muted">{{ (r.box_doc.created_at | msk).strftime('%d.%m.%Y %H:%M') if r.box_doc.created_at }} · в коробах {{ '%g' % r.box_qty }}</div></td>
+      <td><a href="{{ url_for('receiving.detail', doc_id=r.credit_doc.id) }}">{{ r.credit_doc.number }}</a>
+        <div class="small text-muted">{{ (r.credit_doc.completed_at | msk).strftime('%d.%m.%Y %H:%M') if r.credit_doc.completed_at }}{% if r.credit_doc.supplier %} · {{ r.credit_doc.supplier }}{% endif %}{% if r.credit_doc.id == r.box_doc.id %} · та же приемка{% endif %}</div></td>
+      <td class="text-end fw-bold">{{ '%g' % r.doubled }}</td>
+      <td class="text-end">{% if r.fixed %}<span class="badge bg-secondary">списано {{ r.fixed }}</span>{% else %}{{ '%g' % r.unplaced }}{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="text-muted">Явных задвоений не найдено.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if rows|selectattr('fixed', 'none')|list %}
+<div class="d-flex gap-2">
+  <button class="btn btn-outline-danger">Списать отмеченные</button>
+  <button class="btn btn-danger" name="all" value="1">Списать все</button>
+</div>
+<div class="small text-muted mt-2">Списывается задвоенное количество, но не больше текущего неразмещенного остатка на складе.</div>
+{% endif %}
+</form>
+{% endblock %}

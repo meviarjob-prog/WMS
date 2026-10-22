@@ -1,0 +1,198 @@
+{% extends "mvb/base.html" %}
+{% block title %}Прайс{% endblock %}
+{% macro tier_table(kind, rows, city_id=None) %}
+<table class="table table-sm align-middle">
+  <thead><tr><th>От коробов</th><th>Цена за короб, руб.</th><th></th></tr></thead>
+  <tbody>
+  {% for t in rows %}
+    <tr>
+      <td><input form="tier-{{ t.id }}" name="min_boxes" type="number" min="1" class="form-control form-control-sm" value="{{ t.min_boxes }}" style="max-width:110px"></td>
+      <td><input form="tier-{{ t.id }}" name="price_per_box" class="form-control form-control-sm" value="{{ '%g'|format(t.price_per_box) }}" style="max-width:130px"></td>
+      <td class="d-flex gap-1">
+        <form method="post" id="tier-{{ t.id }}">
+          <input type="hidden" name="tier_id" value="{{ t.id }}"><input type="hidden" name="kind" value="{{ kind }}">
+          {% if city_id %}<input type="hidden" name="city_id" value="{{ city_id }}">{% endif %}
+          <button class="btn btn-sm btn-outline-primary">Сохранить</button>
+        </form>
+        <form method="post">
+          <input type="hidden" name="tier_id" value="{{ t.id }}"><input type="hidden" name="action" value="delete">
+          <button class="btn btn-sm btn-outline-danger">✕</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="3" class="text-muted">{{ caller() }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<form method="post" class="d-flex flex-wrap gap-2">
+  <input type="hidden" name="kind" value="{{ kind }}">
+  {% if city_id %}<input type="hidden" name="city_id" value="{{ city_id }}">{% endif %}
+  <input name="min_boxes" type="number" min="1" class="form-control w-auto" placeholder="от, кор." style="max-width:110px" required>
+  <input name="price_per_box" class="form-control w-auto" placeholder="руб. за короб" style="max-width:140px" required>
+  <button class="btn btn-success">+ Ступень</button>
+</form>
+{% endmacro %}
+{% block content %}
+<h3 class="mb-1">Прайс</h3>
+<p class="text-muted">Цена за короб с градацией по количеству коробов: «от N коробов — X руб. за короб». Отправка на СЦ считается по каждому направлению заявки по прайсу его города — одинаково для WB, Ozon и ФФ этого города (если у города нет своего прайса — по общему). Стоимость ставится при оформлении заявки, оператор может её поправить.</p>
+
+<div class="card p-3 mb-3">
+  <h5>Города и прайс отправки на СЦ</h5>
+  <p class="text-muted small mb-2">Добавьте город и задайте ему прайс. Скрытый город и его пункты в заявке не выбрать.</p>
+  <form method="post" class="d-flex flex-wrap gap-2 mb-3">
+    <input type="hidden" name="action" value="city_add">
+    <input name="name" class="form-control w-auto" placeholder="Город *" required style="min-width:200px">
+    <button class="btn btn-success">+ Город</button>
+  </form>
+  <div class="row g-3">
+    {% for c in cities %}
+    <div class="col-lg-6">
+      <div class="border rounded p-2 h-100 {{ '' if c.is_active else 'bg-light text-muted' }}">
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          <form method="post" class="d-flex gap-2 flex-grow-1">
+            <input type="hidden" name="action" value="city_save"><input type="hidden" name="city_id" value="{{ c.id }}">
+            <input name="name" class="form-control form-control-sm fw-bold" value="{{ c.name }}" style="max-width:220px">
+            <button class="btn btn-sm btn-outline-primary">Сохранить</button>
+          </form>
+          <form method="post">
+            <input type="hidden" name="action" value="city_toggle"><input type="hidden" name="city_id" value="{{ c.id }}">
+            <button class="btn btn-sm btn-outline-secondary">{{ 'Скрыть' if c.is_active else 'Вернуть' }}</button>
+          </form>
+        </div>
+        {% call tier_table('sc', city_tiers[c.id], c.id) %}Своего прайса нет — считается по общему{% endcall %}
+      </div>
+    </div>
+    {% else %}
+    <div class="col-12 text-muted">Городов пока нет.</div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <h5>Пункты назначения</h5>
+  <p class="text-muted small mb-2">Сначала куда — WB, Ozon или фулфилмент, затем город из справочника выше, для ФФ — его название. Из этого списка клиент выбирает направление в заявке; по адресу водителю строится маршрут. Скрытый пункт в заявке не выбрать, старые заявки с ним сохраняются.{% if not destinations %} Пока список пуст, направление в заявке вписывают вручную.{% endif %}</p>
+  {% if destinations %}
+  <div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead><tr><th>Куда</th><th>Город</th><th>Название ФФ</th><th>Адрес</th><th></th></tr></thead>
+    <tbody>
+    {% for d in destinations %}
+      <tr class="{{ '' if d.is_active else 'text-muted table-light' }}">
+        <td><select form="dest-{{ d.id }}" name="marketplace" class="form-select form-select-sm js-dest-mp" style="min-width:120px">
+          {% for code, label in MVB_MARKETPLACES.items() %}<option value="{{ code }}" {{ 'selected' if d.marketplace == code }}>{{ label }}</option>{% endfor %}
+        </select></td>
+        <td><select form="dest-{{ d.id }}" name="city" class="form-select form-select-sm" style="min-width:120px">
+          {% for c in cities %}<option value="{{ c.name }}" {{ 'selected' if c.name == d.city }}>{{ c.name }}</option>{% endfor %}
+        </select></td>
+        <td><input form="dest-{{ d.id }}" name="ff_name" class="form-control form-control-sm js-dest-ff" value="{{ d.ff_name or '' }}" style="min-width:120px"></td>
+        <td><input form="dest-{{ d.id }}" name="address" class="form-control form-control-sm" value="{{ d.address or '' }}" style="min-width:220px"></td>
+        <td class="text-nowrap">
+          <form method="post" id="dest-{{ d.id }}" class="d-inline">
+            <input type="hidden" name="action" value="dest_save"><input type="hidden" name="destination_id" value="{{ d.id }}">
+            <button class="btn btn-sm btn-outline-primary">Сохранить</button>
+          </form>
+          <form method="post" class="d-inline">
+            <input type="hidden" name="action" value="dest_toggle"><input type="hidden" name="destination_id" value="{{ d.id }}">
+            <button class="btn btn-sm btn-outline-secondary">{{ 'Скрыть' if d.is_active else 'Вернуть' }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  <form method="post" class="row g-2">
+    <input type="hidden" name="action" value="dest_add">
+    <div class="col-md-2"><select name="marketplace" class="form-select js-dest-mp">
+      {% for code, label in MVB_MARKETPLACES.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+    </select></div>
+    <div class="col-md-2"><select name="city" class="form-select" required>
+      <option value="">Город *</option>
+      {% for c in cities if c.is_active %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+    </select></div>
+    <div class="col-md-2"><input name="ff_name" class="form-control js-dest-ff" placeholder="Название ФФ *"></div>
+    <div class="col-md-4"><input name="address" class="form-control" placeholder="Адрес (для маршрута)"></div>
+    <div class="col-md-2"><button class="btn btn-success w-100">+ Добавить</button></div>
+  </form>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card p-3 h-100">
+      <h5>{{ kinds['pickup'] }} — зоны</h5>
+      <div class="small text-muted mb-2">Фиксированная цена за забор; клиент выбирает зону в заявке.</div>
+      <table class="table table-sm align-middle">
+        <thead><tr><th>Зона</th><th>Цена забора, руб.</th><th></th></tr></thead>
+        <tbody>
+        {% for z in zones %}
+          <tr class="{{ '' if z.is_active else 'text-muted table-light' }}">
+            <td><input form="zone-{{ z.id }}" name="name" class="form-control form-control-sm" value="{{ z.name }}"></td>
+            <td><input form="zone-{{ z.id }}" name="price" class="form-control form-control-sm" value="{{ '%g'|format(z.price) }}" style="max-width:120px"></td>
+            <td class="text-nowrap">
+              <form method="post" id="zone-{{ z.id }}" class="d-inline"><input type="hidden" name="action" value="zone_save"><input type="hidden" name="zone_id" value="{{ z.id }}"><button class="btn btn-sm btn-outline-primary">Сохранить</button></form>
+              <form method="post" class="d-inline"><input type="hidden" name="action" value="zone_toggle"><input type="hidden" name="zone_id" value="{{ z.id }}"><button class="btn btn-sm btn-outline-secondary">{{ 'Скрыть' if z.is_active else 'Вернуть' }}</button></form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="text-muted">Зон нет — забор считается по цене за короб ниже</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <form method="post" class="d-flex flex-wrap gap-2">
+        <input type="hidden" name="action" value="zone_add">
+        <input name="name" class="form-control w-auto" placeholder="Зона *" required style="max-width:160px">
+        <input name="price" class="form-control w-auto" placeholder="руб." required style="max-width:110px">
+        <button class="btn btn-success">+ Зона</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card p-3 h-100">
+      <h5>{{ kinds['pickup'] }} — за короб</h5>
+      <div class="small text-muted mb-1">Если зон забора нет.</div>
+      {% call tier_table('pickup', tiers['pickup']) %}Не заполнено — стоимость забора считаться не будет{% endcall %}
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card p-3 h-100">
+      <h5>Палетирование</h5>
+      <div class="small text-muted mb-2">Клиенту выставляется, только если у заявки на паллетах не меньше порога коробов: цена × число паллет (по максимуму коробов на паллете, неполная — тоже паллета). Меньше порога — бесплатно. Больше максимума на паллету не сканируется.</div>
+      <form method="post" class="d-flex flex-wrap gap-2 align-items-center">
+        <input type="hidden" name="action" value="pallet_price">
+        <input name="pallet_price" class="form-control w-auto" value="{{ '%g'|format(pallet_price) }}" style="max-width:110px" required>
+        <span>руб. за паллету</span>
+        <span>· клиенту от</span>
+        <input name="pallet_min" type="number" min="1" class="form-control w-auto" value="{{ '%g'|format(pallet_min) }}" style="max-width:80px" required>
+        <span>кор. · на паллете максимум</span>
+        <input name="pallet_max" type="number" min="1" class="form-control w-auto" value="{{ '%g'|format(pallet_max) }}" style="max-width:80px" required>
+        <span>кор.</span>
+        <button class="btn btn-outline-primary">Сохранить</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card p-3 h-100">
+      <h5>{{ kinds['sc'] }} — общий</h5>
+      <div class="small text-muted mb-1">Для городов без своего прайса.</div>
+      {% call tier_table('sc', tiers['sc']) %}Не заполнено{% endcall %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  // Название ФФ нужно только для фулфилмента.
+  document.querySelectorAll(".js-dest-mp").forEach(sel => {
+    const ff = sel.closest("tr, form").querySelector(".js-dest-ff");
+    if (!ff) return;
+    const update = () => {
+      const isFf = sel.value === "ff";
+      ff.disabled = !isFf; ff.required = isFf;
+      if (!isFf) ff.placeholder = "—"; else ff.placeholder = "Название ФФ *";
+    };
+    sel.addEventListener("change", update); update();
+  });
+</script>
+{% endblock %}

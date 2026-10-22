@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import hmac
 import json
 import os
@@ -34,6 +34,7 @@ from ..models import (
     ReceivingDocument,
     ReceivingLine,
     ShipmentPlan,
+    ShipmentPlanCityDeadline,
     ShipmentPlanLine,
     UnplacedStock,
     Warehouse,
@@ -49,6 +50,7 @@ from ..utils.shipment_plan_import import (
 from ..utils.google_sheets import (
     google_sheets_configured,
     load_distribution_workbook,
+    movement_sender_totals,
     movement_wms_totals,
     received_wms_totals,
     write_distribution_facts,
@@ -76,6 +78,10 @@ GOOGLE_SYNC_SHEETS_KEY = "google_sheets_last_names"
 # при каждом заходе на дашборд, а не только сразу после нажатия кнопки.
 GOOGLE_SYNC_MISSING_KEY = "google_sheets_last_missing_marketplaces"
 GOOGLE_SYNC_TOKEN_KEY = "google_sheets_trigger_token"
+# Фоновая синхронизация кнопкой на дашборде: когда запущена и чем закончилась.
+GOOGLE_SYNC_RUNNING_KEY = "google_sheets_sync_running_since"
+GOOGLE_SYNC_RESULT_KEY = "google_sheets_sync_last_result"
+GOOGLE_SYNC_STALE_MINUTES = 15
 _google_sync_lock = threading.Lock()
 
 # Этот endpoint вызывается серверами Google Apps Script и поэтому не имеет
@@ -125,24 +131,52 @@ def _received_since_by_warehouse_and_item(window_start):
     в Google Таблицу (local_received). Приемка за пределами интервала (до
     начала периода или после дедлайна +PERIOD_DAYS) к текущему плану
     отношения не имеет и не учитывается."""
-    totals = {}
-    documents = MovementDocument.query.filter(
+    from ..models import BoxItem, MovementLine, MovementReceiptDiscrepancy
+
+    # Несколько запросов с группировкой в БД вместо обхода документ → строка
+    # → короб → позиция через ORM (на большой базе тот обход занимал десятки
+    # секунд и приводил к 504 при синхронизации плана).
+    in_window = [
         MovementDocument.received_at.isnot(None),
         func.coalesce(
             MovementDocument.shipped_at,
             MovementDocument.received_at,
             MovementDocument.created_at,
         ) >= window_start,
-    ).all()
-    for document in documents:
-        actual = {}
-        for movement_line in document.lines:
-            for item in movement_line.box.items:
-                actual[item.nomenclature_id] = actual.get(item.nomenclature_id, 0) + item.qty
-        for discrepancy in document.discrepancies:
-            actual[discrepancy.nomenclature_id] = discrepancy.received_qty
-        for nomenclature_id, qty in actual.items():
-            key = (document.to_warehouse_id, nomenclature_id)
+    ]
+    to_warehouse = {
+        doc_id: wh_id
+        for doc_id, wh_id in db.session.query(MovementDocument.id, MovementDocument.to_warehouse_id)
+        .filter(*in_window).all()
+    }
+    if not to_warehouse:
+        return {}
+    actual = {}
+    for doc_id, nomenclature_id, qty in (
+        db.session.query(MovementLine.document_id, BoxItem.nomenclature_id, func.sum(BoxItem.qty))
+        .join(MovementDocument, MovementDocument.id == MovementLine.document_id)
+        .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
+        .filter(*in_window)
+        .group_by(MovementLine.document_id, BoxItem.nomenclature_id)
+        .all()
+    ):
+        actual.setdefault(doc_id, {})[nomenclature_id] = qty or 0
+    for doc_id, nomenclature_id, received_qty in (
+        db.session.query(
+            MovementReceiptDiscrepancy.document_id,
+            MovementReceiptDiscrepancy.nomenclature_id,
+            MovementReceiptDiscrepancy.received_qty,
+        )
+        .join(MovementDocument, MovementDocument.id == MovementReceiptDiscrepancy.document_id)
+        .filter(*in_window)
+        .all()
+    ):
+        actual.setdefault(doc_id, {})[nomenclature_id] = received_qty
+
+    totals = {}
+    for doc_id, items in actual.items():
+        for nomenclature_id, qty in items.items():
+            key = (to_warehouse[doc_id], nomenclature_id)
             totals[key] = totals.get(key, 0) + qty
     return totals
 
@@ -174,10 +208,23 @@ def _apply_plan(marketplace, parsed, uploaded_by_id=None):
     }
 
     barcodes = {row["barcode"] for row in parsed.rows}
-    nomenclature_by_barcode = {
-        n.barcode: n
-        for n in Nomenclature.query.filter(Nomenclature.barcode.in_(barcodes)).all()
-    }
+    # Ищем и по основному, и по ДОП. штрихкоду (см. чат: штрихкод из файла
+    # плана может совпадать с Nomenclature.barcode2, а не с основным —
+    # например, товар переклеили другим кодом, а в плане остался старый).
+    # Nomenclature.find_by_barcode() ищет так же, но по одному штрихкоду —
+    # здесь нужен массовый запрос сразу по всем штрихкодам листа.
+    matched_nomenclature = Nomenclature.query.filter(
+        db.or_(Nomenclature.barcode.in_(barcodes), Nomenclature.barcode2.in_(barcodes))
+    ).all()
+    nomenclature_by_barcode = {}
+    for n in matched_nomenclature:
+        if n.barcode2 in barcodes:
+            nomenclature_by_barcode.setdefault(n.barcode2, n)
+    for n in matched_nomenclature:
+        # Основной штрихкод проставляем вторым проходом, чтобы он всегда
+        # побеждал доп. штрихкод при случайном совпадении значений.
+        if n.barcode in barcodes:
+            nomenclature_by_barcode[n.barcode] = n
     # Уже подтвержденное приемкой перемещением в WMS — подстраховка от
     # потери fulfilled_qty при замене строк плана (plan.lines.delete() ниже).
     # Факт пересчитывается отдельно для каждой даты листа. Верхней границы
@@ -395,6 +442,11 @@ def _apply_priority_distribution():
                 line.distributed_target_qty = 0.0
 
 
+def _get_setting_value(key):
+    setting = AppSetting.query.get(key)
+    return setting.value if setting else None
+
+
 def _set_sync_setting(key, value):
     setting = AppSetting.query.get(key)
     if setting is None:
@@ -403,13 +455,26 @@ def _set_sync_setting(key, value):
     setting.value = (value or "")[:200]
 
 
+def _google_sync_running(since_text):
+    """Фоновая синхронизация идет, если отметка о запуске свежая (старше
+    GOOGLE_SYNC_STALE_MINUTES считаем зависшей/оставшейся после перезапуска
+    сервера — иначе кнопка заблокировалась бы навсегда)."""
+    if not since_text:
+        return False
+    try:
+        started = datetime.strptime(since_text, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return datetime.utcnow() - started < timedelta(minutes=GOOGLE_SYNC_STALE_MINUTES)
+
+
 def _google_sync_status():
     values = {
         row.key: row.value
         for row in AppSetting.query.filter(
             AppSetting.key.in_((
                 GOOGLE_SYNC_AT_KEY, GOOGLE_SYNC_ERROR_KEY, GOOGLE_SYNC_SHEETS_KEY,
-                GOOGLE_SYNC_MISSING_KEY,
+                GOOGLE_SYNC_MISSING_KEY, GOOGLE_SYNC_RUNNING_KEY, GOOGLE_SYNC_RESULT_KEY,
             ))
         ).all()
     }
@@ -419,6 +484,8 @@ def _google_sync_status():
         "last_error": values.get(GOOGLE_SYNC_ERROR_KEY),
         "sheet_names": values.get(GOOGLE_SYNC_SHEETS_KEY),
         "missing_marketplaces": values.get(GOOGLE_SYNC_MISSING_KEY),
+        "running": _google_sync_running(values.get(GOOGLE_SYNC_RUNNING_KEY)),
+        "last_result": values.get(GOOGLE_SYNC_RESULT_KEY),
     }
 
 
@@ -600,35 +667,88 @@ def upload():
     return redirect(url_for("shipment_plan.dashboard"))
 
 
+def _sync_result_text(summary, sheet_names, exported, updated_cells):
+    return (
+        "Google Таблица синхронизирована: "
+        + "; ".join(summary)
+        + f"; выгружено строк на лист «WMS — перемещения»: {exported}; "
+        + f"обновлено ячеек факта: {updated_cells}; "
+        + f"листов: {len(sheet_names)}"
+    )
+
+
+def _run_google_sync_background(app, user_id):
+    """Синхронизация в отдельном потоке: запрос кнопки возвращается сразу, а
+    не ждет чтения/записи Google Таблицы — иначе веб-сервер (nginx) обрывал
+    долгий запрос с 504 Gateway Time-out."""
+    with app.app_context():
+        try:
+            summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements(
+                uploaded_by_id=user_id
+            )
+            result = _sync_result_text(summary, sheet_names, exported, updated_cells)
+        except Exception as exc:  # noqa: BLE001
+            db.session.rollback()
+            app.logger.exception("Фоновая синхронизация Google Таблицы не удалась")
+            _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, str(exc))
+            result = f"Не удалось синхронизировать Google Таблицу: {exc}"
+        _set_sync_setting(GOOGLE_SYNC_RESULT_KEY, result)
+        _set_sync_setting(GOOGLE_SYNC_RUNNING_KEY, "")
+        db.session.commit()
+        db.session.remove()
+        _google_sync_lock.release()
+
+
 @bp.route("/sync-google", methods=["POST"])
 def sync_google():
     if not current_user.is_admin:
         flash("Синхронизировать Google Таблицу может только администратор", "danger")
         return redirect(url_for("shipment_plan.dashboard"))
-    if not _google_sync_lock.acquire(False):
+    if _google_sync_running(_get_setting_value(GOOGLE_SYNC_RUNNING_KEY)) or not _google_sync_lock.acquire(False):
         flash("Синхронизация уже выполняется. Дождитесь ее завершения.", "warning")
         return redirect(url_for("shipment_plan.dashboard"))
-    try:
-        summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements(
-            uploaded_by_id=current_user.id
-        )
-    except Exception as exc:  # noqa: BLE001
-        db.session.rollback()
-        _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, str(exc))
-        db.session.commit()
-        flash(f"Не удалось синхронизировать Google Таблицу: {exc}", "danger")
-    else:
-        flash(
-            "Google Таблица синхронизирована: "
-            + "; ".join(summary)
-            + f"; выгружено строк на лист «WMS — перемещения»: {exported}; "
-            + f"обновлено ячеек факта: {updated_cells}; "
-            + f"листов: {len(sheet_names)}",
-            "success",
-        )
-    finally:
-        _google_sync_lock.release()
+
+    if current_app.config.get("SYNC_GOOGLE_INLINE", current_app.config.get("TESTING")):
+        # В тестах выполняем сразу, без потока (SYNC_GOOGLE_INLINE=False
+        # включает фоновый режим принудительно).
+        try:
+            summary, sheet_names, exported, updated_cells = sync_google_plans_and_movements(
+                uploaded_by_id=current_user.id
+            )
+        except Exception as exc:  # noqa: BLE001
+            db.session.rollback()
+            _set_sync_setting(GOOGLE_SYNC_ERROR_KEY, str(exc))
+            db.session.commit()
+            flash(f"Не удалось синхронизировать Google Таблицу: {exc}", "danger")
+        else:
+            flash(_sync_result_text(summary, sheet_names, exported, updated_cells), "success")
+        finally:
+            _google_sync_lock.release()
+        return redirect(url_for("shipment_plan.dashboard"))
+
+    _set_sync_setting(GOOGLE_SYNC_RUNNING_KEY, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    _set_sync_setting(GOOGLE_SYNC_RESULT_KEY, "")
+    db.session.commit()
+    threading.Thread(
+        target=_run_google_sync_background,
+        args=(current_app._get_current_object(), current_user.id),
+        daemon=True,
+    ).start()
+    flash(
+        "Синхронизация запущена в фоне — обычно занимает до минуты. Страница сама обновится, "
+        "когда закончится; результат будет в блоке «Google Таблица» ниже.",
+        "info",
+    )
     return redirect(url_for("shipment_plan.dashboard"))
+
+
+@bp.route("/sync-google/status")
+def sync_google_status():
+    """Для автообновления страницы, пока синхронизация идет в фоне."""
+    if not current_user.is_admin:
+        return jsonify(running=False), 403
+    status = _google_sync_status()
+    return jsonify(running=status["running"], result=status["last_result"] or "")
 
 
 @bp.route("/google-trigger", methods=["POST"])
@@ -1075,6 +1195,139 @@ def _group_picking_list(picking_list, sender_warehouses, ozon_cities, wb_cities)
     return ordered
 
 
+def _shipped_qty_through_date(warehouse_id, day, period_start=None):
+    """Сколько реально отгружено (total_sent_qty по завершенным
+    перемещениям, забранным транспортом) НАРАСТАЮЩИМ ИТОГОМ — с начала
+    периода плана по указанную дату ВКЛЮЧИТЕЛЬНО — на указанный
+    склад-город (см. чат: "отгружено к этой дате включительно", не только
+    за один день). Пересчитывается каждый раз заново по живым данным, а
+    не хранится."""
+    end = datetime.combine(day, time.max)
+    query = MovementDocument.query.filter(
+        MovementDocument.to_warehouse_id == warehouse_id,
+        MovementDocument.status == "completed",
+        MovementDocument.shipped_at <= end,
+    )
+    if period_start:
+        query = query.filter(MovementDocument.shipped_at >= datetime.combine(period_start, time.min))
+    return sum(doc.total_sent_qty() for doc in query.all())
+
+
+def _city_rows_for_plan(plan, sender_warehouses):
+    """Строки городов для карточки плана-маркетплейса на дашборде: план/в
+    пути/%, «Дата плана» с фактом (шт и % нарастающим итогом по эту дату
+    включительно, см. _shipped_qty_through_date) и разбивка вклада
+    каждого склада-отправителя.
+
+    Общая функция для полного дашборда и для AJAX-ответа при смене даты
+    (см. чат: "без перезагрузки страницы") — чтобы расчет факта и
+    сортировка считались одинаково в обоих местах."""
+    lines = plan.lines.all()
+    movement_totals_by_period = {}
+
+    def _totals_for(period_start):
+        if period_start not in movement_totals_by_period:
+            movement_totals_by_period[period_start] = movement_wms_totals(period_start)
+        return movement_totals_by_period[period_start]
+
+    # «В пути» — весь товар, который транспорт забрал с 00:01 даты
+    # конкретного листа. Завершение сборки и заявка МП сами по себе
+    # отгрузкой не считаются.
+    for line in lines:
+        period_start = line.period_start or plan.period_start
+        quantities = _totals_for(period_start).get((line.warehouse_id, line.nomenclature_id), {})
+        line.current_fulfilled_qty = 0.0
+        line.in_transit_qty = quantities.get("shipped", 0.0)
+        line.fulfilled_with_transit_qty = line.in_transit_qty
+        # Товар-новинка одной площадки (0w/0o) не должен считаться
+        # потребностью ДРУГОЙ площадки (см. чат: "приоритет 0w
+        # отгружается на озон").
+        line.effective_remaining_qty = (
+            0.0
+            if line._blocked_by_novelty_marketplace()
+            else max(line.planned_qty - line.fulfilled_with_transit_qty, 0)
+        )
+
+    by_warehouse = {}
+    for line in lines:
+        row = by_warehouse.setdefault(
+            line.warehouse_id,
+            {"warehouse": line.warehouse, "planned": 0, "fulfilled_with_transit": 0, "in_transit": 0},
+        )
+        row["planned"] += line.planned_qty
+        row["fulfilled_with_transit"] += line.fulfilled_with_transit_qty
+        row["in_transit"] += line.in_transit_qty
+
+    # Карточка города показывает ВСЕ завершенные перемещения на этот склад
+    # с даты плана, в том числе товары, которых уже нет (или еще нет) среди
+    # строк актуального плана — иначе городская сумма меньше сводного
+    # экспорта перемещений.
+    city_totals = _totals_for(plan.period_start)
+    shipped_by_warehouse = {}
+    for (warehouse_id, _nomenclature_id), quantities in city_totals.items():
+        shipped_by_warehouse[warehouse_id] = (
+            shipped_by_warehouse.get(warehouse_id, 0.0) + quantities.get("shipped", 0.0)
+        )
+    for warehouse_id, row in by_warehouse.items():
+        row["in_transit"] = shipped_by_warehouse.get(warehouse_id, 0.0)
+        row["fulfilled_with_transit"] = row["in_transit"]
+
+    sender_totals = movement_sender_totals(plan.period_start)
+    deadlines = {
+        d.warehouse_id: d
+        for d in ShipmentPlanCityDeadline.query.filter_by(plan_id=plan.id).all()
+    }
+
+    cities = list(by_warehouse.values())
+    for row in cities:
+        row["remaining"] = max(row["planned"] - row["fulfilled_with_transit"], 0)
+        # % выполнения по городу — тот же принцип, что и общий % в шапке
+        # карточки маркетплейса (fulfilled_with_transit/planned), только
+        # построчно по каждому городу.
+        row["percent"] = (
+            100 * row["fulfilled_with_transit"] / row["planned"] if row["planned"] else None
+        )
+
+        deadline = deadlines.get(row["warehouse"].id)
+        row["deadline"] = deadline.ship_by_date if deadline else None
+        if row["deadline"]:
+            qty = _shipped_qty_through_date(row["warehouse"].id, row["deadline"], plan.period_start)
+            row["shipped_through"] = qty
+            row["shipped_through_percent"] = 100 * qty / row["planned"] if row["planned"] else None
+        else:
+            row["shipped_through"] = None
+            row["shipped_through_percent"] = None
+
+        # Вклад каждого склада-отправителя в то, что уже уехало на этот
+        # город — в штуках и в процентах от суммы по всем отправителям (не
+        # от плана города — она может не сойтись с планом, если отгрузили
+        # больше/меньше заявленного).
+        sender_qty_by_warehouse = {
+            wh.id: sender_totals.get((row["warehouse"].id, wh.id), 0.0) for wh in sender_warehouses
+        }
+        sender_total_qty = sum(sender_qty_by_warehouse.values())
+        row["sender_breakdown"] = [
+            {
+                "warehouse": wh,
+                "qty": sender_qty_by_warehouse[wh.id],
+                "percent": (
+                    100 * sender_qty_by_warehouse[wh.id] / sender_total_qty
+                    if sender_total_qty else None
+                ),
+            }
+            for wh in sender_warehouses
+        ]
+
+    # По возрастанию первой волны (см. чат: "сортировку оставь по первой
+    # дате") — у кого ближе срок первой отгрузки, тот выше. Города без
+    # даты вообще — в конце, сортировать их не по чему; имя города —
+    # просто детерминированный довесок при равенстве/отсутствии дат.
+    cities.sort(
+        key=lambda r: (r["deadline"] is None, r["deadline"] or date.max, r["warehouse"].marketplace_city)
+    )
+    return cities
+
+
 def _dashboard_context():
     plans = {p.marketplace: p for p in ShipmentPlan.query.all()}
     sender_ids = _sender_warehouse_ids()
@@ -1097,8 +1350,6 @@ def _dashboard_context():
     for nomenclature_id, qty in _pending_sorting_by_nomenclature(sender_ids).items():
         stock[nomenclature_id] = stock.get(nomenclature_id, 0) + qty
         unplaced_stock[nomenclature_id] = unplaced_stock.get(nomenclature_id, 0) + qty
-    movement_totals_by_period = {}
-
     marketplaces_data = []
     lines_by_marketplace = {}
     for marketplace in MARKETPLACES:
@@ -1112,73 +1363,7 @@ def _dashboard_context():
         lines = plan.lines.all()
         lines_by_marketplace[marketplace] = lines
 
-        # «В пути» — весь товар, который транспорт забрал с 00:01 даты
-        # конкретного листа. Завершение сборки и заявка МП сами по себе
-        # отгрузкой не считаются.
-        for line in lines:
-            period_start = line.period_start or plan.period_start
-            if period_start not in movement_totals_by_period:
-                movement_totals_by_period[period_start] = movement_wms_totals(period_start)
-            quantities = movement_totals_by_period[period_start].get(
-                (line.warehouse_id, line.nomenclature_id), {}
-            )
-            line.current_fulfilled_qty = 0.0
-            line.in_transit_qty = quantities.get("shipped", 0.0)
-            line.fulfilled_with_transit_qty = line.in_transit_qty
-            # Товар-новинка одной площадки (0w/0o) не должен считаться
-            # потребностью ДРУГОЙ площадки, даже если в файле плана
-            # случайно осталось ненулевое число в чужой колонке (см. чат:
-            # "приоритет 0w отгружается на озон" и
-            # ShipmentPlanLine._blocked_by_novelty_marketplace).
-            line.effective_remaining_qty = (
-                0.0
-                if line._blocked_by_novelty_marketplace()
-                else max(line.planned_qty - line.fulfilled_with_transit_qty, 0)
-            )
-
-        by_warehouse = {}
-        for line in lines:
-            row = by_warehouse.setdefault(
-                line.warehouse_id,
-                {
-                    "warehouse": line.warehouse,
-                    "planned": 0,
-                    "fulfilled_with_transit": 0,
-                    "in_transit": 0,
-                },
-            )
-            row["planned"] += line.planned_qty
-            row["fulfilled_with_transit"] += line.fulfilled_with_transit_qty
-            row["in_transit"] += line.in_transit_qty
-
-        # Карточка города показывает ВСЕ завершенные перемещения на этот
-        # склад с даты плана, в том числе товары, которых уже нет (или еще
-        # нет) среди строк актуального плана. Иначе городская сумма меньше
-        # сводного экспорта перемещений: такие SKU просто не находят
-        # ShipmentPlanLine и выпадают. Позиционная таблица и маршрутизация
-        # выше по-прежнему считают только совпавшие SKU.
-        city_totals = movement_totals_by_period.setdefault(
-            plan.period_start,
-            movement_wms_totals(plan.period_start),
-        )
-        shipped_by_warehouse = {}
-        for (warehouse_id, _nomenclature_id), quantities in city_totals.items():
-            shipped_by_warehouse[warehouse_id] = (
-                shipped_by_warehouse.get(warehouse_id, 0.0)
-                + quantities.get("shipped", 0.0)
-            )
-        for warehouse_id, row in by_warehouse.items():
-            row["in_transit"] = shipped_by_warehouse.get(warehouse_id, 0.0)
-            row["fulfilled_with_transit"] = row["in_transit"]
-        cities = sorted(by_warehouse.values(), key=lambda r: r["warehouse"].marketplace_city)
-        for row in cities:
-            row["remaining"] = max(row["planned"] - row["fulfilled_with_transit"], 0)
-            # % выполнения по городу — тот же принцип, что и общий % в
-            # шапке карточки маркетплейса (fulfilled_with_transit/planned),
-            # только построчно по каждому городу (см. чат).
-            row["percent"] = (
-                100 * row["fulfilled_with_transit"] / row["planned"] if row["planned"] else None
-            )
+        cities = _city_rows_for_plan(plan, sender_warehouses)
 
         # Штрихкоды с невыполненным остатком, для которых нечем отгружать —
         # только для значка-счетчика на карточке; сам список товаров теперь
@@ -1459,6 +1644,57 @@ def dashboard():
         **_dashboard_context(),
         google_sync=_google_sync_status(),
     )
+
+
+@bp.route("/<int:plan_id>/cities/<int:warehouse_id>/deadline", methods=["POST"])
+def update_city_deadline(plan_id, warehouse_id):
+    """Дата, к которой нужно отгрузить план по конкретному городу (см.
+    чат) — одна запись на (план, склад), перезаписывается при повторном
+    сохранении. Пустое значение из календаря удаляет дату.
+
+    При AJAX-запросе (fetch с заголовком X-Requested-With — см.
+    dashboard.html) отдает HTML-фрагмент пересчитанных и пересортированных
+    строк городов вместо редиректа, чтобы смена даты обновляла дашборд без
+    перезагрузки страницы (см. чат: "без перезагрузки страницы")."""
+    plan = ShipmentPlan.query.get_or_404(plan_id)
+    warehouse = Warehouse.query.get_or_404(warehouse_id)
+    raw = request.form.get("ship_by_date", "").strip()
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    try:
+        ship_by_date = date.fromisoformat(raw) if raw else None
+    except ValueError:
+        if is_ajax:
+            return "Некорректная дата", 400
+        flash("Некорректная дата", "danger")
+        return redirect(url_for("shipment_plan.dashboard"))
+
+    deadline = ShipmentPlanCityDeadline.query.filter_by(plan_id=plan.id, warehouse_id=warehouse.id).first()
+    if ship_by_date is None:
+        if deadline:
+            db.session.delete(deadline)
+    elif deadline:
+        deadline.ship_by_date = ship_by_date
+    else:
+        db.session.add(
+            ShipmentPlanCityDeadline(plan_id=plan.id, warehouse_id=warehouse.id, ship_by_date=ship_by_date)
+        )
+    db.session.commit()
+
+    if is_ajax:
+        sender_warehouses = (
+            Warehouse.query.filter(Warehouse.name.in_(DIRECT_TRANSFER_WAREHOUSE_NAMES))
+            .order_by(Warehouse.name)
+            .all()
+        )
+        cities = _city_rows_for_plan(plan, sender_warehouses)
+        return render_template(
+            "shipment_plan/_city_rows.html",
+            plan=plan,
+            cities=cities,
+            sender_warehouses=sender_warehouses,
+        )
+
+    return redirect(url_for("shipment_plan.dashboard"))
 
 
 @bp.route("/comment/<path:barcode>", methods=["POST"])
