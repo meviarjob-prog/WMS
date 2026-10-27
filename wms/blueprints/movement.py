@@ -1941,6 +1941,33 @@ def receive_act(doc_id):
     )
 
 
+def _render_receive_form(doc, expected, received_by_nomenclature=None):
+    """Строит строки и рендерит форму ручной приемки (movement/receive.html).
+    "Отправлено" — всегда expected; значение по умолчанию в поле "Принято
+    по факту" — из received_by_nomenclature, если передано (например,
+    после сверки с Ozon API на расхождение, см. receive_via_ozon_api —
+    чат: "после проверки кол-во принято по факту вносится автоматически",
+    чтобы не перебивать совпавшие позиции руками), иначе как раньше равно
+    expected (обычная приемка без расхождений)."""
+    received_by_nomenclature = received_by_nomenclature or {}
+    nomenclature_by_id = {
+        n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(expected.keys())).all()
+    }
+    rows = sorted(
+        (
+            {
+                "nomenclature": nomenclature_by_id[nid],
+                "expected_qty": qty,
+                "received_qty": received_by_nomenclature.get(nid, qty),
+            }
+            for nid, qty in expected.items()
+            if nid in nomenclature_by_id
+        ),
+        key=lambda r: r["nomenclature"].name,
+    )
+    return render_template("movement/receive.html", doc=doc, rows=rows)
+
+
 @bp.route("/<int:doc_id>/receive", methods=["GET", "POST"])
 def receive(doc_id):
     """Единственная кнопка "Принято на складе" (см. чат: раньше рядом была
@@ -1965,18 +1992,7 @@ def receive(doc_id):
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
     if request.method == "GET":
-        nomenclature_by_id = {
-            n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(expected.keys())).all()
-        }
-        rows = sorted(
-            (
-                {"nomenclature": nomenclature_by_id[nid], "expected_qty": qty}
-                for nid, qty in expected.items()
-                if nid in nomenclature_by_id
-            ),
-            key=lambda r: r["nomenclature"].name,
-        )
-        return render_template("movement/receive.html", doc=doc, rows=rows)
+        return _render_receive_form(doc, expected)
 
     if request.form.get("act_payload"):
         try:
@@ -2232,10 +2248,11 @@ def receive_via_ozon_api(doc_id):
         flash(
             f"Ozon API показывает расхождение ({details}) — автоприемка умеет принимать только "
             f"если сошлось полностью (разбивки по коробам у этого метода нет, непонятно, какой "
-            f"короб не доехал). Примите вручную (форма ниже) или по акту файлом.",
+            f"короб не доехал). Поля «Принято по факту» ниже уже проставлены по данным Ozon — "
+            f"проверьте и подтвердите приемку, или поправьте вручную.",
             "warning",
         )
-        return redirect(url_for("movement.receive", doc_id=doc.id))
+        return _render_receive_form(doc, expected, totals)
 
     _, _, total_received_qty = _apply_receive(doc, expected, expected)
     flash(
@@ -2246,10 +2263,19 @@ def receive_via_ozon_api(doc_id):
 
 
 def _pending_ozon_receive_documents():
-    """Завершенные перемещения на Ozon, еще не принятые на складе, с
-    заполненным номером заявки — кандидаты для массовой проверки (см.
-    receive_review/receive_review_run)."""
-    return (
+    """Завершенные перемещения на Ozon, еще не принятые на складе, —
+    кандидаты для массовой проверки (см. receive_review/receive_review_run).
+    Исключены (чат: "исключить... даты слотов не наступивших и также
+    перемещения без числовых номеров заявки"):
+      - без номера заявки или с номером не из одних цифр (например "fbs" —
+        попадает в это поле не как настоящий номер поставки Ozon и ведет
+        только к ошибке/лишнему запросу к API, см. чат про такие записи);
+      - с датой слота приемки (delivery_slot_date), которая еще не
+        наступила — поставка физически еще не может быть принята Ozon, и
+        такие даты заполняются вручную заранее, поэтому НЕ являются
+        признаком ошибки (см. отличие от записей без номера заявки выше)."""
+    today = date.today()
+    candidates = (
         MovementDocument.query.join(Warehouse, MovementDocument.to_warehouse_id == Warehouse.id)
         .filter(
             MovementDocument.status == "completed",
@@ -2261,6 +2287,12 @@ def _pending_ozon_receive_documents():
         .order_by(MovementDocument.shipped_at.asc())
         .all()
     )
+    return [
+        doc
+        for doc in candidates
+        if doc.marketplace_request_number.strip().isdigit()
+        and (doc.delivery_slot_date is None or doc.delivery_slot_date <= today)
+    ]
 
 
 def _find_single_missing_box(doc, mismatches):

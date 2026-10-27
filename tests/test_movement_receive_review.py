@@ -9,7 +9,7 @@
 перемещении из этой же проверки (ошибка при отправке — короб попал не в
 ту поставку)."""
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 from wms.extensions import db
@@ -109,8 +109,8 @@ def test_non_admin_cannot_see_or_run_review(db, client):
 def test_full_match_auto_accepted(mock_orders, mock_items, db, client_logged_in):
     sender, dest = _warehouses(1)
     n1 = _nomenclature(1)
-    doc, boxes = _make_doc("PER-RV0001", "REQ-RV1", sender, dest, [[(n1, 10)]])
-    mock_orders.return_value = [_order("REQ-RV1", 701)]
+    doc, boxes = _make_doc("PER-RV0001", "20000001", sender, dest, [[(n1, 10)]])
+    mock_orders.return_value = [_order("20000001", 701)]
     mock_items.return_value = _act_items({n1.barcode: 10})
 
     resp = client_logged_in.get("/movement/receive-review")
@@ -131,8 +131,8 @@ def test_full_match_auto_accepted(mock_orders, mock_items, db, client_logged_in)
 def test_single_missing_box_returned_and_rest_accepted(mock_orders, mock_items, db, client_logged_in):
     sender, dest = _warehouses(2)
     n1 = _nomenclature(2)
-    doc, boxes = _make_doc("PER-RV0002", "REQ-RV2", sender, dest, [[(n1, 10)], [(n1, 4)]])
-    mock_orders.return_value = [_order("REQ-RV2", 702)]
+    doc, boxes = _make_doc("PER-RV0002", "20000002", sender, dest, [[(n1, 10)], [(n1, 4)]])
+    mock_orders.return_value = [_order("20000002", 702)]
     # Принято только 10 (как в первом коробе) — второй короб (4 шт) не доехал.
     mock_items.return_value = _act_items({n1.barcode: 10})
 
@@ -159,8 +159,8 @@ def test_ambiguous_shortage_goes_to_manual(mock_orders, mock_items, db, client_l
     n1 = _nomenclature(3)
     # Один короб на 10 шт, принято 7 — недостача 3 шт не совпадает ни с
     # одним коробом целиком (короб только один, и он не пуст).
-    doc, boxes = _make_doc("PER-RV0003", "REQ-RV3", sender, dest, [[(n1, 10)]])
-    mock_orders.return_value = [_order("REQ-RV3", 703)]
+    doc, boxes = _make_doc("PER-RV0003", "20000003", sender, dest, [[(n1, 10)]])
+    mock_orders.return_value = [_order("20000003", 703)]
     mock_items.return_value = _act_items({n1.barcode: 7})
 
     resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
@@ -182,8 +182,8 @@ def test_surplus_blocks_box_return_heuristic(mock_orders, mock_items, db, client
     # Второй короб (4 шт) как бы "не доехал", но есть еще и неожиданный
     # излишек по этому же товару — автоматически считать короб недоехавшим
     # нельзя (расхождение может быть ошибкой, а не доехавшим коробом).
-    doc, boxes = _make_doc("PER-RV0004", "REQ-RV4", sender, dest, [[(n1, 10)], [(n1, 4)]])
-    mock_orders.return_value = [_order("REQ-RV4", 704)]
+    doc, boxes = _make_doc("PER-RV0004", "20000004", sender, dest, [[(n1, 10)], [(n1, 4)]])
+    mock_orders.return_value = [_order("20000004", 704)]
     mock_items.return_value = _act_items({n1.barcode: 11})  # 10 + 1 неожиданного излишка
 
     resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
@@ -204,14 +204,14 @@ def test_cross_movement_mixup_hint(mock_orders, mock_items, db, client_logged_in
     # Перемещение А: недостача 3 шт, не совпадающая ровно с коробом (значит
     # не авто-возврат короба). Перемещение Б: излишек ровно 3 шт того же
     # товара — похоже, короб перепутали между отправками.
-    doc_a, _ = _make_doc("PER-RV0005", "REQ-RV5A", sender, dest, [[(n1, 10)]])
-    doc_b, _ = _make_doc("PER-RV0006", "REQ-RV5B", sender, dest, [[(n1, 5)]])
+    doc_a, _ = _make_doc("PER-RV0005", "20000005", sender, dest, [[(n1, 10)]])
+    doc_b, _ = _make_doc("PER-RV0006", "20000006", sender, dest, [[(n1, 5)]])
 
     def orders_side_effect(client_id, api_key, order_number=None, days_back=None, **kwargs):
-        if order_number == "REQ-RV5A":
-            return [_order("REQ-RV5A", 705)]
-        if order_number == "REQ-RV5B":
-            return [_order("REQ-RV5B", 706)]
+        if order_number == "20000005":
+            return [_order("20000005", 705)]
+        if order_number == "20000006":
+            return [_order("20000006", 706)]
         return []
 
     def items_side_effect(client_id, api_key, supply_id, **kwargs):
@@ -241,7 +241,7 @@ def test_cross_movement_mixup_hint(mock_orders, mock_items, db, client_logged_in
 def test_ozon_api_error_goes_to_manual(mock_orders, db, client_logged_in):
     sender, dest = _warehouses(6)
     n1 = _nomenclature(6)
-    doc, _ = _make_doc("PER-RV0007", "REQ-RV7", sender, dest, [[(n1, 10)]])
+    doc, _ = _make_doc("PER-RV0007", "20000007", sender, dest, [[(n1, 10)]])
     mock_orders.side_effect = OzonApiError("Ozon API вернул ошибку 500: boom")
 
     resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
@@ -261,15 +261,15 @@ def test_pending_list_excludes_wb_and_already_received_and_missing_request_numbe
     db.session.commit()
     n1 = _nomenclature(7)
 
-    ok_doc, _ = _make_doc("PER-RV0008", "REQ-RV8", sender, dest, [[(n1, 1)]])
+    ok_doc, _ = _make_doc("PER-RV0008", "20000008", sender, dest, [[(n1, 1)]])
 
     no_number_doc, _ = _make_doc("PER-RV0009", "", sender, dest, [[(n1, 1)]])
     no_number_doc.marketplace_request_number = None
     no_number_doc.marketplace_request_created_at = None
 
-    wb_doc, _ = _make_doc("PER-RV0010", "REQ-RV10", sender, wb_dest, [[(n1, 1)]])
+    wb_doc, _ = _make_doc("PER-RV0010", "20000010", sender, wb_dest, [[(n1, 1)]])
 
-    received_doc, _ = _make_doc("PER-RV0011", "REQ-RV11", sender, dest, [[(n1, 1)]])
+    received_doc, _ = _make_doc("PER-RV0011", "20000011", sender, dest, [[(n1, 1)]])
     received_doc.received_at = datetime.utcnow()
     db.session.commit()
 
@@ -279,6 +279,40 @@ def test_pending_list_excludes_wb_and_already_received_and_missing_request_numbe
     assert "PER-RV0009" not in html
     assert "PER-RV0010" not in html
     assert "PER-RV0011" not in html
+
+
+def test_pending_list_excludes_non_numeric_request_number_and_future_slot(db, client_logged_in):
+    """Чат: "исключить из проверки перемещения с датами слотов не
+    наступивших и также перемещения без числовых номеров заявки" —
+    нечисловой номер (например "fbs" — попадает в это поле не как
+    настоящий номер поставки Ozon, который всегда числовой) ведет только
+    к бесполезному обращению к Ozon API; дата слота в будущем означает,
+    что поставка физически еще не может быть принята."""
+    sender, dest = _warehouses(16)
+    n1 = _nomenclature(16)
+    today = date.today()
+
+    fbs_doc, _ = _make_doc("PER-RV0016A", "fbs", sender, dest, [[(n1, 1)]])
+
+    future_slot_doc, _ = _make_doc("PER-RV0016B", "20000020", sender, dest, [[(n1, 1)]])
+    future_slot_doc.delivery_slot_date = today + timedelta(days=1)
+
+    past_slot_doc, _ = _make_doc("PER-RV0016C", "20000021", sender, dest, [[(n1, 1)]])
+    past_slot_doc.delivery_slot_date = today - timedelta(days=1)
+
+    today_slot_doc, _ = _make_doc("PER-RV0016D", "20000022", sender, dest, [[(n1, 1)]])
+    today_slot_doc.delivery_slot_date = today
+
+    no_slot_doc, _ = _make_doc("PER-RV0016E", "20000023", sender, dest, [[(n1, 1)]])
+    db.session.commit()
+
+    resp = client_logged_in.get("/movement/receive-review")
+    html = resp.get_data(as_text=True)
+    assert "PER-RV0016A" not in html
+    assert "PER-RV0016B" not in html
+    assert "PER-RV0016C" in html
+    assert "PER-RV0016D" in html
+    assert "PER-RV0016E" in html
 
 
 @patch("wms.blueprints.movement.fetch_supply_act_items")
@@ -293,11 +327,11 @@ def test_batch_limit_caps_processing_and_continue_button_finishes_rest(mock_orde
     n1 = _nomenclature(12)
     total = RECEIVE_REVIEW_BATCH_LIMIT + 2
     docs = [
-        _make_doc(f"PER-RVB{i:03d}", f"REQ-RVB{i}", sender, dest, [[(n1, 1)]])[0] for i in range(total)
+        _make_doc(f"PER-RVB{i:03d}", f"2000009{i:03d}", sender, dest, [[(n1, 1)]])[0] for i in range(total)
     ]
 
     def orders_side_effect(client_id, api_key, order_number=None, days_back=None, **kwargs):
-        idx = int(order_number.replace("REQ-RVB", ""))
+        idx = int(order_number[-3:])
         return [_order(order_number, 9000 + idx)]
 
     mock_orders.side_effect = orders_side_effect
@@ -334,9 +368,9 @@ def test_no_selection_shows_warning(db, client_logged_in):
 def test_unselected_documents_are_not_processed(mock_orders, mock_items, db, client_logged_in):
     sender, dest = _warehouses(13)
     n1 = _nomenclature(13)
-    doc_a, _ = _make_doc("PER-RV0013A", "REQ-RV13A", sender, dest, [[(n1, 1)]])
-    doc_b, _ = _make_doc("PER-RV0013B", "REQ-RV13B", sender, dest, [[(n1, 1)]])
-    mock_orders.return_value = [_order("REQ-RV13A", 713)]
+    doc_a, _ = _make_doc("PER-RV0013A", "20000013", sender, dest, [[(n1, 1)]])
+    doc_b, _ = _make_doc("PER-RV0013B", "20000014", sender, dest, [[(n1, 1)]])
+    mock_orders.return_value = [_order("20000013", 713)]
     mock_items.return_value = _act_items({n1.barcode: 1})
 
     resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc_a.id)]})
@@ -365,15 +399,15 @@ def test_time_budget_stops_batch_even_within_count_limit(mock_orders, mock_items
     обработка пачки останавливается независимо от количества выбранных."""
     sender, dest = _warehouses(14)
     n1 = _nomenclature(14)
-    doc1, _ = _make_doc("PER-RV0014A", "REQ-RV14A", sender, dest, [[(n1, 1)]])
-    doc2, _ = _make_doc("PER-RV0014B", "REQ-RV14B", sender, dest, [[(n1, 1)]])
-    doc3, _ = _make_doc("PER-RV0014C", "REQ-RV14C", sender, dest, [[(n1, 1)]])
+    doc1, _ = _make_doc("PER-RV0014A", "20000015", sender, dest, [[(n1, 1)]])
+    doc2, _ = _make_doc("PER-RV0014B", "20000016", sender, dest, [[(n1, 1)]])
+    doc3, _ = _make_doc("PER-RV0014C", "20000017", sender, dest, [[(n1, 1)]])
     doc1.shipped_at = datetime(2024, 1, 1)
     doc2.shipped_at = datetime(2024, 1, 2)
     doc3.shipped_at = datetime(2024, 1, 3)
     db.session.commit()
 
-    mock_orders.return_value = [_order("REQ-RV14A", 714)]
+    mock_orders.return_value = [_order("20000015", 714)]
     mock_items.return_value = _act_items({n1.barcode: 1})
     # Первый вызов time.monotonic() — точка отсчета (start); второй — перед
     # вторым документом, уже далеко за пределами RECEIVE_REVIEW_TIME_BUDGET.
@@ -406,8 +440,8 @@ def test_uses_short_timeout_and_retries_not_ozon_api_defaults(mock_orders, mock_
     ozon_api короткий бюджет, а не ждать дефолтные значения."""
     sender, dest = _warehouses(15)
     n1 = _nomenclature(15)
-    doc, _ = _make_doc("PER-RV0015", "REQ-RV15", sender, dest, [[(n1, 1)]])
-    mock_orders.return_value = [_order("REQ-RV15", 715)]
+    doc, _ = _make_doc("PER-RV0015", "20000018", sender, dest, [[(n1, 1)]])
+    mock_orders.return_value = [_order("20000018", 715)]
     mock_items.return_value = _act_items({n1.barcode: 1})
 
     client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})

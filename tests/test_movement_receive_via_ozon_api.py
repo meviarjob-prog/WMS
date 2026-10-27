@@ -138,6 +138,11 @@ def test_mismatch_blocks_auto_accept(mock_orders, mock_items, db, client_logged_
     assert "показывает расхождение" in html
     assert "отправлено 10" in html
     assert "по Ozon принято 7" in html
+    # Поле "Принято по факту" предзаполнено фактически принятым по Ozon
+    # (7 для n1, по которому расхождение), а не отправленным (10) — чат:
+    # "после проверки кол-во принято по факту вносится автоматически".
+    assert f'name="qty_{n1.id}"\n                   class="form-control form-control-sm" value="7">' in html
+    assert f'name="qty_{n2.id}"\n                   class="form-control form-control-sm" value="5">' in html
     db.session.refresh(doc)
     assert doc.received_at is None
 

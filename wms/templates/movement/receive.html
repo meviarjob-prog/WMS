@@ -57,7 +57,7 @@
           <td>{{ row.expected_qty | round(3) }} {{ row.nomenclature.unit }}</td>
           <td>
             <input type="number" step="0.001" min="0" name="qty_{{ row.nomenclature.id }}"
-                   class="form-control form-control-sm" value="{{ row.expected_qty | round(3) }}">
+                   class="form-control form-control-sm" value="{{ row.received_qty | round(3) }}">
           </td>
         </tr>
       {% endfor %}
