@@ -31,6 +31,8 @@ from ..utils.acceptance_act import (
 from ..utils.excel_io import export_movement_summary_to_excel, export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
+from ..utils.ozon_api import OzonApiError, fetch_supply_act_items, fetch_supply_orders
+from .integration_ozon import get_ozon_credentials
 from ..utils.shipping_label_pdf import build_movement_shipping_labels_pdf
 from ..utils.timezone import to_moscow
 from ..utils.work_log import drop_pick_events, log_pick
@@ -96,7 +98,7 @@ BOOKKEEPING_ENDPOINTS = {
 # разделам) — например, заведующему складом назначения, который принимает
 # чужие перемещения.
 COMPLETION_ENDPOINTS = {"movement.complete", "movement.mark_shipped"}
-RECEIVING_ENDPOINTS = {"movement.receive", "movement.receive_act"}
+RECEIVING_ENDPOINTS = {"movement.receive", "movement.receive_act", "movement.receive_via_ozon_api"}
 # Отметка "Транспорт забрал" прямо со страницы "Ждут транспорта" — в
 # отличие от обычного mark_shipped (редиректит на детальную страницу
 # документа, к которой у роли "логист" нет доступа), возвращает на тот же
@@ -2014,11 +2016,41 @@ def receive(doc_id):
             continue
         expected[extra_id] = 0.0
 
+    received_by_nomenclature = {
+        nomenclature_id: request.form.get(f"qty_{nomenclature_id}", type=float)
+        for nomenclature_id in expected
+    }
+    has_discrepancy, shortage_qty, total_received_qty = _apply_receive(doc, expected, received_by_nomenclature)
+    if shortage_qty:
+        flash(
+            f"Перемещение {doc.number} принято с недовозом {shortage_qty:g} шт. "
+            f"на складе «{doc.to_warehouse.name}»",
+            "warning",
+        )
+    elif has_discrepancy:
+        flash(
+            f"Перемещение {doc.number} принято с расхождением на складе «{doc.to_warehouse.name}»",
+            "warning",
+        )
+    else:
+        flash(f"Перемещение {doc.number} принято на складе МП «{doc.to_warehouse.name}»", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+def _apply_receive(doc, expected, received_by_nomenclature):
+    """Общее ядро приемки — используется и ручной формой (receive(), ввод
+    количества по каждому товару), и автоприемкой по API Ozon (см.
+    receive_via_ozon_api), когда расхождения нет совсем. received_by_nomenclature —
+    {nomenclature_id: количество}; отсутствующий/отрицательный/None элемент
+    — считается как expected_qty (без расхождения), как и раньше при
+    незаполненном поле формы.
+
+    Возвращает (has_discrepancy, shortage_qty, total_received_qty)."""
     has_discrepancy = False
     shortage_qty = 0
     total_received_qty = 0
     for nomenclature_id, expected_qty in expected.items():
-        received_qty = request.form.get(f"qty_{nomenclature_id}", type=float)
+        received_qty = received_by_nomenclature.get(nomenclature_id)
         if received_qty is None or received_qty < 0:
             received_qty = expected_qty
         total_received_qty += received_qty
@@ -2043,30 +2075,152 @@ def receive(doc_id):
             _apply_receipt_stock_difference(doc, nomenclature_id, expected_qty, received_qty)
 
     # Перезаписываем всегда, а не только если было пусто: expected посчитан
-    # заново в начале этой функции, по текущему содержимому короба на
-    # момент приемки. Если короб поправили МЕЖДУ завершением сборки
-    # (complete(), где снимок берется первый раз) и приемкой, старый снимок
-    # с completion иначе навсегда остался бы устаревшим и расходился бы с
-    # расхождением, посчитанным по уже новому содержимому (см. чат: бейдж
-    # "Излишек" при видимом недовозе в скобках).
+    # заново в начале receive(), по текущему содержимому короба на момент
+    # приемки. Если короб поправили МЕЖДУ завершением сборки (complete(),
+    # где снимок берется первый раз) и приемкой, старый снимок с completion
+    # иначе навсегда остался бы устаревшим и расходился бы с расхождением,
+    # посчитанным по уже новому содержимому (см. чат: бейдж "Излишек" при
+    # видимом недовозе в скобках).
     doc.sent_qty_snapshot = sum(expected.values())
     doc.received_qty_snapshot = total_received_qty
     doc.receipt_changed_boxes = True
     doc.received_at = datetime.utcnow()
     db.session.commit()
-    if shortage_qty:
+    return has_discrepancy, shortage_qty, total_received_qty
+
+
+def _nomenclature_for_ozon_sku_info(sku_info):
+    """Товар по данным строки акта Ozon (sku_info — барcode/offer_id/sku
+    из ответа /v1/supply-order/act/product/get). Сначала по штрихкоду
+    (_nomenclature_for_act_barcode — та же логика, что и для файла акта),
+    запасной путь — артикул Ozon через OzonArticleMapping, как и в
+    _nomenclature_for_act_item для файла."""
+    barcode = sku_info.get("barcode") or ""
+    item = _nomenclature_for_act_barcode(barcode) if barcode else None
+    if item is not None:
+        return item
+    offer_id = sku_info.get("offer_id") or ""
+    if not offer_id:
+        return None
+    mappings = OzonArticleMapping.query.filter(OzonArticleMapping.article == offer_id).all()
+    if not mappings:
+        mappings = OzonArticleMapping.query.filter(
+            func.lower(OzonArticleMapping.article) == offer_id.lower()
+        ).all()
+    for mapping in mappings:
+        item = _nomenclature_for_act_barcode(mapping.barcode)
+        if item is not None:
+            return item
+    return None
+
+
+def _fetch_ozon_accepted_totals(doc):
+    """Сводное фактически принятое количество по каждому товару этого
+    перемещения через API Ozon (/v1/supply-order/act/product/get) — БЕЗ
+    разбивки по коробам, которую этот метод не отдает вообще (см. чат —
+    сверено по официальному Swagger-спеку Ozon). Поэтому используется
+    только для автоприемки "все сошлось целиком" (см.
+    receive_via_ozon_api) — решить, какие именно короба не доехали, по
+    этим данным нельзя.
+
+    Возвращает (totals_by_nomenclature_id, ошибка) — при ошибке первое
+    значение None, вызывающая сторона не должна автопринимать."""
+    client_id, api_key = get_ozon_credentials()
+    order_number = (doc.marketplace_request_number or "").strip()
+    if not order_number:
+        return None, "у перемещения не указан номер заявки на маркетплейс"
+    try:
+        orders = fetch_supply_orders(client_id, api_key, order_number=order_number, days_back=None)
+    except OzonApiError as exc:
+        return None, str(exc)
+    if not orders:
+        return None, f"заявка «{order_number}» не найдена в Ozon API"
+
+    totals = {}
+    unmapped = set()
+    for order in orders:
+        for supply in order.get("supplies") or []:
+            supply_id = supply.get("supply_id")
+            if not supply_id:
+                continue
+            try:
+                items, unidentified = fetch_supply_act_items(client_id, api_key, supply_id)
+            except OzonApiError as exc:
+                return None, str(exc)
+            if unidentified:
+                return None, f"в поставке {supply_id} есть неопознанные излишки ({unidentified:g} шт)"
+            for item in items:
+                nom = _nomenclature_for_ozon_sku_info(item)
+                fact_qty = item["fact_quantity"]
+                if nom is None:
+                    if fact_qty:
+                        unmapped.add(item["barcode"] or item["offer_id"] or "?")
+                    continue
+                totals[nom.id] = totals.get(nom.id, 0) + fact_qty
+    if unmapped:
+        return None, "товары без сопоставления в номенклатуре: " + ", ".join(sorted(unmapped)[:10])
+    return totals, None
+
+
+@bp.route("/<int:doc_id>/receive/ozon-api", methods=["POST"])
+def receive_via_ozon_api(doc_id):
+    """Автоприемка по данным Ozon API — без разбора по коробам: если то,
+    что Ozon показывает как фактически принятое, СОВПАДАЕТ ПОЛНОСТЬЮ с
+    тем, что отправили (по каждому товару), подтверждаем приемку как есть
+    — как обычная кнопка "Принято на складе" без расхождений. Если есть
+    хоть какое-то расхождение — не принимаем автоматически: понять, какие
+    именно короба не доехали, по этим данным нельзя (нет разбивки по
+    грузоместам, см. _fetch_ozon_accepted_totals), поэтому решать нужно
+    вручную — обычной формой или актом файлом (см. чат)."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    blocked = _receive_precheck(doc)
+    if blocked is not None:
+        return blocked
+    if doc.to_warehouse.marketplace != "ozon":
+        flash("Автоприемка по API доступна только для перемещений на Ozon", "danger")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+
+    expected = _expected_qty_by_nomenclature(doc)
+    if not expected:
+        flash("В списке нет коробов с товаром", "danger")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+
+    totals, error = _fetch_ozon_accepted_totals(doc)
+    if error:
+        flash(f"Не удалось свериться с Ozon API: {error}. Примите вручную.", "danger")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+
+    mismatches = []
+    for nomenclature_id, expected_qty in expected.items():
+        got_qty = totals.get(nomenclature_id, 0)
+        if got_qty != expected_qty:
+            mismatches.append((nomenclature_id, expected_qty, got_qty))
+    for nomenclature_id in set(totals) - set(expected):
+        if totals[nomenclature_id]:
+            mismatches.append((nomenclature_id, 0, totals[nomenclature_id]))
+
+    if mismatches:
+        names = {
+            n.id: n.name
+            for n in Nomenclature.query.filter(Nomenclature.id.in_([m[0] for m in mismatches])).all()
+        }
+        details = "; ".join(
+            f"{names.get(nid, nid)}: отправлено {exp:g}, по Ozon принято {got:g}"
+            for nid, exp, got in mismatches[:5]
+        )
         flash(
-            f"Перемещение {doc.number} принято с недовозом {shortage_qty:g} шт. "
-            f"на складе «{doc.to_warehouse.name}»",
+            f"Ozon API показывает расхождение ({details}) — автоприемка умеет принимать только "
+            f"если сошлось полностью (разбивки по коробам у этого метода нет, непонятно, какой "
+            f"короб не доехал). Примите вручную (форма ниже) или по акту файлом.",
             "warning",
         )
-    elif has_discrepancy:
-        flash(
-            f"Перемещение {doc.number} принято с расхождением на складе «{doc.to_warehouse.name}»",
-            "warning",
-        )
-    else:
-        flash(f"Перемещение {doc.number} принято на складе МП «{doc.to_warehouse.name}»", "success")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+
+    _, _, total_received_qty = _apply_receive(doc, expected, expected)
+    flash(
+        f"Перемещение {doc.number} принято по данным Ozon API — совпало полностью, {total_received_qty:g} шт.",
+        "success",
+    )
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 

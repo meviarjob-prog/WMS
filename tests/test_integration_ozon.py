@@ -303,6 +303,19 @@ def test_supply_orders_order_number_filter_is_sent(mock_post):
 
 
 @patch("wms.utils.ozon_api.requests.post")
+def test_supply_orders_days_back_none_disables_age_cutoff(mock_post):
+    old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat().replace("+00:00", "Z")
+    mock_post.side_effect = [
+        Mock(status_code=200, json=lambda: _supply_list_response([1], last_id="")),
+        Mock(status_code=200, json=lambda: _supply_get_response([_order(1, "A-1", updated=old)])),
+    ]
+
+    orders = fetch_supply_orders("c", "k", days_back=None, order_number="A-1")
+
+    assert [o["order_number"] for o in orders] == ["A-1"]
+
+
+@patch("wms.utils.ozon_api.requests.post")
 def test_postings_pagination_follows_cursor_while_has_next(mock_post):
     mock_post.side_effect = [
         Mock(status_code=200, json=lambda: {"postings": [{"posting_number": "P-1"}], "has_next": True, "cursor": "c1"}),

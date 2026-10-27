@@ -29,6 +29,21 @@
   </form>
 </div>
 
+{% if doc.to_warehouse.marketplace == 'ozon' %}
+<div class="card p-3 mb-3 border-secondary">
+  <h5>Автоприёмка по Ozon API</h5>
+  <p class="text-muted small mb-2">
+    Проверяет через API Ozon, сколько фактически принято по каждому товару во всей поставке —
+    без разбивки по коробам (этого Ozon через API не отдаёт). Если совпало полностью с отправленным,
+    перемещение сразу примется как есть; если есть расхождение — ничего не изменится, нужно будет
+    принять вручную или актом файлом (выше).
+  </p>
+  <form method="post" action="{{ url_for('movement.receive_via_ozon_api', doc_id=doc.id) }}">
+    <button type="submit" class="btn btn-outline-secondary">🔌 Свериться и принять по API</button>
+  </form>
+</div>
+{% endif %}
+
 <div class="text-muted small mb-2">Или введите принятое количество вручную по товарам:</div>
 <form method="post" action="{{ url_for('movement.receive', doc_id=doc.id) }}">
   <div class="card p-3">

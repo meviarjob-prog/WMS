@@ -162,11 +162,13 @@ def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None):
         запрашиваем (остальные еще старее, список отсортирован);
       - order_number — точечный поиск одной заявки (order_number_search),
         например по MovementDocument.marketplace_request_number, вместо
-        выгрузки всех заявок за период.
+        выгрузки всех заявок за период; days_back=None вместе с ним
+        отключает отсечку по возрасту совсем — точечный поиск не должен
+        молча терять старую, но все еще нужную заявку.
     Возвращает список "orders" как есть из ответа /v3/supply-order/get
     (см. спецификацию — поля order_id/order_number/state/supplies[]/...).
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back) if days_back is not None else None
     result = []
     last_id = ""
     while True:
@@ -189,13 +191,14 @@ def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None):
         for i in range(0, len(ids), 50):  # get принимает до 50 id за раз
             details = ozon_request(client_id, api_key, "/v3/supply-order/get", {"order_ids": ids[i : i + 50]})
             for order in details.get("orders", []):
-                updated = order.get("state_updated_date") or order.get("created_date") or ""
-                try:
-                    if updated and datetime.fromisoformat(updated.replace("Z", "+00:00")) < cutoff:
-                        reached_old = True
-                        continue
-                except ValueError:
-                    pass
+                if cutoff is not None:
+                    updated = order.get("state_updated_date") or order.get("created_date") or ""
+                    try:
+                        if updated and datetime.fromisoformat(updated.replace("Z", "+00:00")) < cutoff:
+                            reached_old = True
+                            continue
+                    except ValueError:
+                        pass
                 result.append(order)
 
         last_id = data.get("last_id") or ""
@@ -224,3 +227,48 @@ def fetch_postings(client_id, api_key, days_back=30):
             break
         body["cursor"] = cursor
     return result
+
+
+# Тип акта (см. ответ /v1/supply-order/act/product/get, items[].sku_info —
+# товар, ACCEPTANCE — акт приемки годного, остальные относятся к браку/
+# расхождениям; состав поставки по грузоместам (коробам) этот метод не
+# возвращает вообще — только суммарно по товару за всю поставку, без
+# привязки к тому, в каком именно коробе товар физически лежал.
+SUPPLY_ACT_TYPES = {
+    "UNSPECIFIED": "Не определён",
+    "ACCEPTANCE": "Акт приёмки",
+    "DEFECT": "Акт о браке",
+    "SURPLUS": "Акт об излишках",
+    "SHORTCOMING": "Акт о недостаче",
+}
+
+
+def fetch_supply_act_items(client_id, api_key, supply_id):
+    """Строки актов поставки (/v1/supply-order/act/product/get) в плоском
+    виде — по каждому товару declared/approved/fact_quantity и тип акта,
+    вне зависимости от короба (API не возвращает эту привязку). Возвращает
+    (items, unidentified_quantity) — вторая величина ненулевая, если в
+    поставке есть неопознанные излишки (Ozon принял что-то, что не смог
+    сопоставить ни с одной позицией нашего заказа) — тогда сумма по
+    товарам неполная, сверка по ней ненадёжна."""
+    data = ozon_request(client_id, api_key, "/v1/supply-order/act/product/get", {"supply_id": int(supply_id)})
+    items = []
+    unidentified = 0
+    for act in data.get("supply_acts") or []:
+        unidentified += act.get("unidentified_quantity") or 0
+        act_type = act.get("type") or "UNSPECIFIED"
+        for it in act.get("items") or []:
+            sku_info = it.get("sku_info") or {}
+            items.append(
+                {
+                    "type": act_type,
+                    "barcode": sku_info.get("barcode") or "",
+                    "offer_id": sku_info.get("offer_id") or "",
+                    "sku": sku_info.get("sku"),
+                    "name": sku_info.get("name") or "",
+                    "declared_quantity": it.get("declared_quantity") or 0,
+                    "approved_quantity": it.get("approved_quantity") or 0,
+                    "fact_quantity": it.get("fact_quantity") or 0,
+                }
+            )
+    return items, unidentified
