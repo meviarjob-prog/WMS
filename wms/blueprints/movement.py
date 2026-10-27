@@ -2331,40 +2331,54 @@ def _annotate_possible_mixups(manual, names):
             )
 
 
-@bp.route("/receive-review", methods=["GET"])
-def receive_review():
-    """Админская страница массовой проверки неприятых перемещений на Ozon
-    (см. чат: "нужна кнопка для роли админ для проверки всех непринятых
-    перемешений")."""
-    if not current_user.is_admin:
-        flash("Массовая проверка приемки доступна только администратору", "danger")
-        return redirect(url_for("movement.list_documents"))
-    return render_template("movement/receive_review.html", docs=_pending_ozon_receive_documents())
-
-
 # Сколько документов проверять за один вызов (см. чат: 504 от реверс-прокси
 # при проверке сразу всех неприятых документов — на каждый нужно 2-4 живых
 # запроса к Ozon API, и при большом количестве накопившихся документов
-# суммарное время легко превышает таймаут прокси). Остальные ожидающие
+# суммарное время легко превышает таймаут прокси). Остальные отмеченные
 # документы проверяются следующим нажатием кнопки "Продолжить проверку".
 RECEIVE_REVIEW_BATCH_LIMIT = 8
 
 
+@bp.route("/receive-review", methods=["GET"])
+def receive_review():
+    """Админская страница массовой проверки неприятых перемещений на Ozon
+    (см. чат: "нужна кнопка для роли админ для проверки всех непринятых
+    перемешений", позже — "надо сделать так чтобы выбирать перемещения
+    для проверки": список с чекбоксами, проверяются только отмеченные)."""
+    if not current_user.is_admin:
+        flash("Массовая проверка приемки доступна только администратору", "danger")
+        return redirect(url_for("movement.list_documents"))
+    return render_template(
+        "movement/receive_review.html",
+        docs=_pending_ozon_receive_documents(),
+        batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
+    )
+
+
 @bp.route("/receive-review/run", methods=["POST"])
 def receive_review_run():
-    """Выполняет массовую проверку (не более RECEIVE_REVIEW_BATCH_LIMIT
-    документов за вызов): что сошлось полностью по данным Ozon API —
-    принимает как есть; где недостача ровно на один короб — вернет этот
-    короб и примет остальное; все прочее (излишки, неоднозначная
-    недостача, ошибки API) — в список на ручную проверку, с подсказкой при
-    похожем расхождении в другом перемещении (см. _annotate_possible_mixups)."""
+    """Выполняет проверку отмеченных на странице /receive-review
+    документов (doc_ids в форме), не более RECEIVE_REVIEW_BATCH_LIMIT за
+    вызов: что сошлось полностью по данным Ozon API — принимает как есть;
+    где недостача ровно на один короб — вернет этот короб и примет
+    остальное; все прочее (излишки, неоднозначная недостача, ошибки API)
+    — в список на ручную проверку, с подсказкой при похожем расхождении в
+    другом перемещении (см. _annotate_possible_mixups)."""
     if not current_user.is_admin:
         flash("Массовая проверка приемки доступна только администратору", "danger")
         return redirect(url_for("movement.list_documents"))
 
-    pending = _pending_ozon_receive_documents()
-    batch = pending[:RECEIVE_REVIEW_BATCH_LIMIT]
-    remaining = len(pending) - len(batch)
+    try:
+        selected_ids = {int(v) for v in request.form.getlist("doc_ids")}
+    except ValueError:
+        selected_ids = set()
+    if not selected_ids:
+        flash("Выберите хотя бы одно перемещение для проверки", "warning")
+        return redirect(url_for("movement.receive_review"))
+
+    selected = [doc for doc in _pending_ozon_receive_documents() if doc.id in selected_ids]
+    batch = selected[:RECEIVE_REVIEW_BATCH_LIMIT]
+    remaining_docs = selected[RECEIVE_REVIEW_BATCH_LIMIT:]
 
     auto_accepted = []
     box_returned = []
@@ -2400,7 +2414,8 @@ def receive_review_run():
         box_returned=box_returned,
         manual=manual,
         names=names,
-        remaining=remaining,
+        remaining=len(remaining_docs),
+        remaining_ids=[doc.id for doc in remaining_docs],
         batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
     )
 

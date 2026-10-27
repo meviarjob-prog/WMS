@@ -112,7 +112,7 @@ def test_full_match_auto_accepted(mock_orders, mock_items, db, client_logged_in)
     resp = client_logged_in.get("/movement/receive-review")
     assert "PER-RV0001" in resp.get_data(as_text=True)
 
-    resp = client_logged_in.post("/movement/receive-review/run")
+    resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
     html = resp.get_data(as_text=True)
     assert "PER-RV0001" in html
     assert "Принято полностью" in html
@@ -132,7 +132,7 @@ def test_single_missing_box_returned_and_rest_accepted(mock_orders, mock_items, 
     # Принято только 10 (как в первом коробе) — второй короб (4 шт) не доехал.
     mock_items.return_value = _act_items({n1.barcode: 10})
 
-    resp = client_logged_in.post("/movement/receive-review/run")
+    resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
     html = resp.get_data(as_text=True)
     assert "Короб возвращен" in html
     assert boxes[1].box_number in html
@@ -159,7 +159,7 @@ def test_ambiguous_shortage_goes_to_manual(mock_orders, mock_items, db, client_l
     mock_orders.return_value = [_order("REQ-RV3", 703)]
     mock_items.return_value = _act_items({n1.barcode: 7})
 
-    resp = client_logged_in.post("/movement/receive-review/run")
+    resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
     html = resp.get_data(as_text=True)
     assert "Требуется ручная проверка" in html
     assert "PER-RV0003" in html
@@ -182,7 +182,7 @@ def test_surplus_blocks_box_return_heuristic(mock_orders, mock_items, db, client
     mock_orders.return_value = [_order("REQ-RV4", 704)]
     mock_items.return_value = _act_items({n1.barcode: 11})  # 10 + 1 неожиданного излишка
 
-    resp = client_logged_in.post("/movement/receive-review/run")
+    resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
     html = resp.get_data(as_text=True)
     assert "Требуется ручная проверка" in html
     assert "PER-RV0004" in html
@@ -220,7 +220,9 @@ def test_cross_movement_mixup_hint(mock_orders, mock_items, db, client_logged_in
     mock_orders.side_effect = orders_side_effect
     mock_items.side_effect = items_side_effect
 
-    resp = client_logged_in.post("/movement/receive-review/run")
+    resp = client_logged_in.post(
+        "/movement/receive-review/run", data={"doc_ids": [str(doc_a.id), str(doc_b.id)]}
+    )
     html = resp.get_data(as_text=True)
     assert "PER-RV0005" in html and "PER-RV0006" in html
     assert "возможно, короб по ошибке попал не в ту поставку" in html
@@ -238,7 +240,7 @@ def test_ozon_api_error_goes_to_manual(mock_orders, db, client_logged_in):
     doc, _ = _make_doc("PER-RV0007", "REQ-RV7", sender, dest, [[(n1, 10)]])
     mock_orders.side_effect = OzonApiError("Ozon API вернул ошибку 500: boom")
 
-    resp = client_logged_in.post("/movement/receive-review/run")
+    resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
     html = resp.get_data(as_text=True)
     assert "Требуется ручная проверка" in html
     assert "PER-RV0007" in html
@@ -297,18 +299,52 @@ def test_batch_limit_caps_processing_and_continue_button_finishes_rest(mock_orde
     mock_orders.side_effect = orders_side_effect
     mock_items.return_value = _act_items({n1.barcode: 1})
 
-    resp = client_logged_in.post("/movement/receive-review/run")
+    doc_ids = [str(d.id) for d in docs]
+    resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": doc_ids})
     html = resp.get_data(as_text=True)
     assert "Продолжить проверку" in html
-    assert "Еще не проверено: 2" in html
+    assert "еще не проверено: 2" in html
 
     received = sum(1 for d in docs if MovementDocument.query.get(d.id).received_at is not None)
     assert received == RECEIVE_REVIEW_BATCH_LIMIT
 
-    resp2 = client_logged_in.post("/movement/receive-review/run")
+    # Повторная отправка той же (исходной) выбранной группы — уже принятые
+    # документы отфильтровываются как неожидающие, обрабатываются только
+    # оставшиеся 2 (как и по скрытым полям кнопки "Продолжить проверку").
+    resp2 = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": doc_ids})
     html2 = resp2.get_data(as_text=True)
     assert "Продолжить проверку" not in html2
 
     for d in docs:
         db.session.refresh(d)
         assert d.received_at is not None
+
+
+def test_no_selection_shows_warning(db, client_logged_in):
+    resp = client_logged_in.post("/movement/receive-review/run", follow_redirects=True)
+    assert "Выберите хотя бы одно перемещение" in resp.get_data(as_text=True)
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_unselected_documents_are_not_processed(mock_orders, mock_items, db, client_logged_in):
+    sender, dest = _warehouses(13)
+    n1 = _nomenclature(13)
+    doc_a, _ = _make_doc("PER-RV0013A", "REQ-RV13A", sender, dest, [[(n1, 1)]])
+    doc_b, _ = _make_doc("PER-RV0013B", "REQ-RV13B", sender, dest, [[(n1, 1)]])
+    mock_orders.return_value = [_order("REQ-RV13A", 713)]
+    mock_items.return_value = _act_items({n1.barcode: 1})
+
+    resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc_a.id)]})
+    html = resp.get_data(as_text=True)
+    assert "PER-RV0013A" in html
+    assert "PER-RV0013B" not in html
+    mock_orders.assert_called_once()
+
+    db.session.refresh(doc_a)
+    db.session.refresh(doc_b)
+    assert doc_a.received_at is not None
+    assert doc_b.received_at is None
+
+    resp = client_logged_in.get("/movement/receive-review")
+    assert "PER-RV0013B" in resp.get_data(as_text=True)
