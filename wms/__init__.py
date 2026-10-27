@@ -616,6 +616,7 @@ def create_app(config_class=Config):
     from .blueprints.shipment_plan import bp as shipment_plan_bp
     from .blueprints.production_orders import bp as production_orders_bp
     from .blueprints.integration_1c import bp as integration_1c_bp
+    from .blueprints.integration_ozon import bp as integration_ozon_bp
     from .blueprints.onboarding import bp as onboarding_bp
     from .blueprints.marketplace_export import bp as marketplace_export_bp
     from .blueprints.management import bp as management_bp
@@ -637,6 +638,7 @@ def create_app(config_class=Config):
     app.register_blueprint(shipment_plan_bp, url_prefix="/shipment-plan")
     app.register_blueprint(production_orders_bp, url_prefix="/production-orders")
     app.register_blueprint(integration_1c_bp, url_prefix="/integrations/1c")
+    app.register_blueprint(integration_ozon_bp, url_prefix="/integrations/ozon")
     app.register_blueprint(onboarding_bp, url_prefix="/onboarding")
     app.register_blueprint(marketplace_export_bp, url_prefix="/marketplace-export")
     app.register_blueprint(management_bp, url_prefix="/management")

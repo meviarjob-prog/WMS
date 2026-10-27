@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Обмен с Ozon{% endblock %}
+{% block content %}
+<h3 class="mb-4">Обмен с Ozon</h3>
+
+<div class="row g-4">
+  <div class="col-md-6">
+    <div class="card p-3">
+      <h5>Ключ Ozon Seller API</h5>
+      <p class="text-muted small">
+        Создается в кабинете продавца: Настройки → Seller API → генерация
+        ключа. Для задач только на чтение (загрузка приемки и т.п.)
+        достаточно роли «Admin read-only» — ключ не сможет ничего изменить
+        на стороне Ozon, даже если утечет.
+      </p>
+      <form method="post">
+        <div class="mb-2">
+          <label class="form-label">Client-Id</label>
+          <input type="text" name="client_id" class="form-control" value="{{ client_id or '' }}" required autocomplete="off">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Api-Key</label>
+          <div class="input-group">
+            <input type="password" name="api_key" id="ozonApiKey" class="form-control" value="{{ api_key or '' }}" required autocomplete="off">
+            <button type="button" class="btn btn-outline-secondary" onclick="const f=document.getElementById('ozonApiKey'); f.type = f.type === 'password' ? 'text' : 'password';">👁</button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+      </form>
+      {% if not client_id or not api_key %}
+        <p class="text-danger small mt-2 mb-0">Ключ еще не настроен — загрузка приемки через API работать не будет.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
