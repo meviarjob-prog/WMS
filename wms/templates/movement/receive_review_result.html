@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Результат проверки приемки{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('movement.receive_review') }}">&larr; Массовая проверка приемки</a></p>
+<h3 class="mb-3">Результат массовой проверки приемки</h3>
+
+<div class="card p-3 mb-3 border-success">
+  <h5>✅ Принято полностью — совпало с Ozon ({{ auto_accepted | length }})</h5>
+  {% if auto_accepted %}
+  <ul class="mb-0">
+    {% for doc in auto_accepted %}
+      <li><a href="{{ url_for('movement.detail', doc_id=doc.id) }}">{{ doc.number }}</a> — {{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}<div class="text-muted">Нет</div>{% endif %}
+</div>
+
+<div class="card p-3 mb-3 border-warning">
+  <h5>📦 Короб возвращен на склад-отправитель, остальное принято ({{ box_returned | length }})</h5>
+  {% if box_returned %}
+  <ul class="mb-0">
+    {% for doc, box_number in box_returned %}
+      <li><a href="{{ url_for('movement.detail', doc_id=doc.id) }}">{{ doc.number }}</a> — короб {{ box_number }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}<div class="text-muted">Нет</div>{% endif %}
+</div>
+
+<div class="card p-3 mb-3 border-danger">
+  <h5>⚠ Требуется ручная проверка ({{ manual | length }})</h5>
+  {% if manual %}
+    {% for entry in manual %}
+      <div class="border rounded p-2 mb-2">
+        <div><a href="{{ url_for('movement.detail', doc_id=entry.doc.id) }}">{{ entry.doc.number }}</a> — {{ entry.doc.from_warehouse.name }} → {{ entry.doc.to_warehouse.name }}</div>
+        {% if entry.reason %}
+          <div class="text-muted small">{{ entry.reason }}</div>
+        {% endif %}
+        {% if entry.mismatches %}
+          <ul class="small mb-1">
+            {% for nid, expected_qty, got_qty in entry.mismatches %}
+              <li>{{ names.get(nid, nid) }}: отправлено {{ expected_qty | round(3) }}, по Ozon принято {{ got_qty | round(3) }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        {% if entry.hints %}
+          <ul class="small mb-0">
+            {% for hint in entry.hints %}
+              <li class="text-primary">💡 {{ hint }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% else %}<div class="text-muted">Нет</div>{% endif %}
+</div>
+{% endblock %}

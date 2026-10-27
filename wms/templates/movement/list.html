@@ -6,6 +6,9 @@
   <h3 class="mb-0">Перемещение товара</h3>
   <div class="d-flex flex-wrap gap-2">
     <a class="btn btn-outline-primary" href="{{ url_for('movement.box_transfer') }}">↔ Из короба в короб</a>
+    {% if current_user.is_admin %}
+    <a class="btn btn-outline-warning" href="{{ url_for('movement.receive_review') }}">🔎 Проверить приемку Ozon</a>
+    {% endif %}
     <form method="get" action="{{ url_for('movement.export_summary') }}"
           class="d-none d-md-flex align-items-center gap-1"
           title="Одна строка на документ (кол-во коробов и кол-во товара) + отдельная страница с отгрузками по дням">

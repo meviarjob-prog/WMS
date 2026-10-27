@@ -2162,6 +2162,23 @@ def _fetch_ozon_accepted_totals(doc):
     return totals, None
 
 
+def _compute_ozon_mismatches(expected, totals):
+    """Сравнивает отправленное (expected) с фактически принятым по Ozon API
+    (totals) по каждому товару — список (nomenclature_id, expected_qty,
+    got_qty) только для несовпавших позиций. Используется и одиночной
+    автоприемкой (receive_via_ozon_api), и массовой проверкой
+    (receive_review_run)."""
+    mismatches = []
+    for nomenclature_id, expected_qty in expected.items():
+        got_qty = totals.get(nomenclature_id, 0)
+        if got_qty != expected_qty:
+            mismatches.append((nomenclature_id, expected_qty, got_qty))
+    for nomenclature_id in set(totals) - set(expected):
+        if totals[nomenclature_id]:
+            mismatches.append((nomenclature_id, 0, totals[nomenclature_id]))
+    return mismatches
+
+
 @bp.route("/<int:doc_id>/receive/ozon-api", methods=["POST"])
 def receive_via_ozon_api(doc_id):
     """Автоприемка по данным Ozon API — без разбора по коробам: если то,
@@ -2190,14 +2207,7 @@ def receive_via_ozon_api(doc_id):
         flash(f"Не удалось свериться с Ozon API: {error}. Примите вручную.", "danger")
         return redirect(url_for("movement.receive", doc_id=doc.id))
 
-    mismatches = []
-    for nomenclature_id, expected_qty in expected.items():
-        got_qty = totals.get(nomenclature_id, 0)
-        if got_qty != expected_qty:
-            mismatches.append((nomenclature_id, expected_qty, got_qty))
-    for nomenclature_id in set(totals) - set(expected):
-        if totals[nomenclature_id]:
-            mismatches.append((nomenclature_id, 0, totals[nomenclature_id]))
+    mismatches = _compute_ozon_mismatches(expected, totals)
 
     if mismatches:
         names = {
@@ -2222,6 +2232,162 @@ def receive_via_ozon_api(doc_id):
         "success",
     )
     return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+def _pending_ozon_receive_documents():
+    """Завершенные перемещения на Ozon, еще не принятые на складе, с
+    заполненным номером заявки — кандидаты для массовой проверки (см.
+    receive_review/receive_review_run)."""
+    return (
+        MovementDocument.query.join(Warehouse, MovementDocument.to_warehouse_id == Warehouse.id)
+        .filter(
+            MovementDocument.status == "completed",
+            MovementDocument.received_at.is_(None),
+            Warehouse.marketplace == "ozon",
+            MovementDocument.marketplace_request_number.isnot(None),
+            MovementDocument.marketplace_request_number != "",
+        )
+        .order_by(MovementDocument.shipped_at.asc())
+        .all()
+    )
+
+
+def _find_single_missing_box(doc, mismatches):
+    """Проверяет, объясняется ли расхождение ровно ОДНИМ недоехавшим
+    коробом (см. чат: "проверить все ли короба, если короб отсутствует —
+    вернуть его на склад"). API Ozon не отдает разбивку по коробам
+    (_fetch_ozon_accepted_totals), поэтому это лишь предположение по сумме:
+    если нет ни одного излишка (только недостача) и ровно один короб
+    документа по составу СОВПАДАЕТ С НЕДОСТАЧЕЙ ТОЧНО — считаем, что не
+    доехал именно он. Если есть излишек, или недостача не сходится ровно с
+    одним коробом (несколько кандидатов или вообще ни одного) — считать
+    однозначно нельзя, нужна ручная проверка (возвращает None)."""
+    required = {}
+    for nomenclature_id, expected_qty, got_qty in mismatches:
+        if got_qty > expected_qty:
+            return None
+        shortage = expected_qty - got_qty
+        if shortage:
+            required[nomenclature_id] = shortage
+    if not required:
+        return None
+    matches = []
+    for line in doc.lines.order_by(MovementLine.id.asc()).all():
+        box_contents = {}
+        for item in line.box.items:
+            box_contents[item.nomenclature_id] = box_contents.get(item.nomenclature_id, 0) + item.qty
+        if box_contents == required:
+            matches.append(line)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _return_single_box_and_accept_rest(doc, line):
+    """Возвращает один короб на склад-отправитель как недоехавший (тот же
+    прием, что и у возврата коробов, не найденных в акте — см.
+    _receive_from_act) и принимает остальное как есть: после удаления
+    строки оставшееся содержимое документа по построению (см.
+    _find_single_missing_box) уже равно тому, что показал Ozon API,
+    поэтому расхождение не записывается."""
+    box_number = line.box.box_number
+    _revert_line_effects(doc, line)
+    MovementCargoPlace.query.filter_by(document_id=doc.id, box_id=line.box_id).delete()
+    db.session.delete(line)
+    db.session.flush()
+    expected = _expected_qty_by_nomenclature(doc)
+    _apply_receive(doc, expected, expected)
+    doc.receipt_returned_boxes = box_number
+    db.session.commit()
+    return box_number
+
+
+def _annotate_possible_mixups(manual, names):
+    """Подсказка для ручной проверки (см. чат: "возможно, в таком же
+    кол-ве товар всплыл или не хватило в другом перемещении — ошибка при
+    отправке"): если в ДРУГОМ перемещении из этой же проверки по тому же
+    товару нашлось расхождение ровно противоположное и той же величины —
+    похоже, короб по ошибке попал не в ту поставку при отправке. Ничего не
+    меняет — только добавляет текстовую подсказку entry["hints"], решение
+    все равно за человеком."""
+    deltas = []
+    for idx, entry in enumerate(manual):
+        for nomenclature_id, expected_qty, got_qty in entry["mismatches"]:
+            delta = got_qty - expected_qty
+            if delta:
+                deltas.append((idx, nomenclature_id, delta))
+    for idx, nomenclature_id, delta in deltas:
+        for other_idx, other_nid, other_delta in deltas:
+            if other_idx == idx or other_nid != nomenclature_id or other_delta != -delta:
+                continue
+            other_doc = manual[other_idx]["doc"]
+            name = names.get(nomenclature_id, nomenclature_id)
+            kind = "Недостача" if delta < 0 else "Излишек"
+            other_kind = "излишком" if delta < 0 else "недостачей"
+            manual[idx].setdefault("hints", []).append(
+                f"{kind} «{name}» {abs(delta):g} шт. совпадает по величине с {other_kind} в "
+                f"перемещении {other_doc.number} — возможно, короб по ошибке попал не в ту "
+                f"поставку при отправке."
+            )
+
+
+@bp.route("/receive-review", methods=["GET"])
+def receive_review():
+    """Админская страница массовой проверки неприятых перемещений на Ozon
+    (см. чат: "нужна кнопка для роли админ для проверки всех непринятых
+    перемешений")."""
+    if not current_user.is_admin:
+        flash("Массовая проверка приемки доступна только администратору", "danger")
+        return redirect(url_for("movement.list_documents"))
+    return render_template("movement/receive_review.html", docs=_pending_ozon_receive_documents())
+
+
+@bp.route("/receive-review/run", methods=["POST"])
+def receive_review_run():
+    """Выполняет массовую проверку: что сошлось полностью по данным Ozon
+    API — принимает как есть; где недостача ровно на один короб — вернет
+    этот короб и примет остальное; все прочее (излишки, неоднозначная
+    недостача, ошибки API) — в список на ручную проверку, с подсказкой при
+    похожем расхождении в другом перемещении (см. _annotate_possible_mixups)."""
+    if not current_user.is_admin:
+        flash("Массовая проверка приемки доступна только администратору", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    auto_accepted = []
+    box_returned = []
+    manual = []
+    for doc in _pending_ozon_receive_documents():
+        expected = _expected_qty_by_nomenclature(doc)
+        if not expected:
+            manual.append({"doc": doc, "reason": "в перемещении нет коробов с товаром", "mismatches": []})
+            continue
+        totals, error = _fetch_ozon_accepted_totals(doc)
+        if error:
+            manual.append({"doc": doc, "reason": error, "mismatches": []})
+            continue
+        mismatches = _compute_ozon_mismatches(expected, totals)
+        if not mismatches:
+            _apply_receive(doc, expected, expected)
+            auto_accepted.append(doc)
+            continue
+        missing_line = _find_single_missing_box(doc, mismatches)
+        if missing_line is not None:
+            box_number = _return_single_box_and_accept_rest(doc, missing_line)
+            box_returned.append((doc, box_number))
+            continue
+        manual.append({"doc": doc, "reason": None, "mismatches": mismatches})
+
+    nomenclature_ids = {nid for entry in manual for nid, _, _ in entry["mismatches"]}
+    names = {n.id: n.name for n in Nomenclature.query.filter(Nomenclature.id.in_(nomenclature_ids)).all()}
+    _annotate_possible_mixups(manual, names)
+
+    return render_template(
+        "movement/receive_review_result.html",
+        auto_accepted=auto_accepted,
+        box_returned=box_returned,
+        manual=manual,
+        names=names,
+    )
 
 
 @bp.route("/<int:doc_id>/toggle-accounting", methods=["POST"])

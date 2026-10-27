@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Массовая проверка приемки{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('movement.list_documents') }}">&larr; Перемещения</a></p>
+<h3 class="mb-3">Массовая проверка приемки по Ozon API</h3>
+
+<div class="alert alert-warning">
+  Проверит через API Ozon все завершенные, но еще не принятые перемещения на Ozon (с указанным
+  номером заявки): что сошлось полностью — примет как есть; где недостача ровно на один короб —
+  вернет этот короб на склад-отправитель и примет остальное; все прочие расхождения останутся
+  для ручной проверки (с подсказкой, если похожий излишек или недостача нашелся в другом
+  перемещении из этой же проверки — возможно, короб попал не в ту поставку при отправке).
+</div>
+
+{% if docs %}
+<div class="card p-3 mb-3">
+  <div class="mb-2">Перемещений для проверки: {{ docs | length }}</div>
+  <ul class="small text-muted mb-3">
+    {% for doc in docs %}
+      <li>{{ doc.number }} — {{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}, заявка {{ doc.marketplace_request_number }}</li>
+    {% endfor %}
+  </ul>
+  <form method="post" action="{{ url_for('movement.receive_review_run') }}">
+    <button type="submit" class="btn btn-primary">🔎 Выполнить проверку</button>
+  </form>
+</div>
+{% else %}
+<div class="alert alert-secondary">Нет перемещений, ожидающих приемки на Ozon.</div>
+{% endif %}
+{% endblock %}
