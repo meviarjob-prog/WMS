@@ -23,6 +23,7 @@ from wms.models import (
     User,
     Warehouse,
 )
+from wms.blueprints.movement import RECEIVE_REVIEW_BATCH_LIMIT
 from wms.utils.ozon_api import OzonApiError
 
 
@@ -272,3 +273,42 @@ def test_pending_list_excludes_wb_and_already_received_and_missing_request_numbe
     assert "PER-RV0009" not in html
     assert "PER-RV0010" not in html
     assert "PER-RV0011" not in html
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_batch_limit_caps_processing_and_continue_button_finishes_rest(mock_orders, mock_items, db, client_logged_in):
+    """При большом числе накопившихся документов проверка всех сразу
+    упиралась в таймаут реверс-прокси (живые запросы к Ozon API на
+    каждый документ) — теперь за один вызов проверяется не более
+    RECEIVE_REVIEW_BATCH_LIMIT, а остальные ждут повторного нажатия
+    кнопки "Продолжить проверку"."""
+    sender, dest = _warehouses(12)
+    n1 = _nomenclature(12)
+    total = RECEIVE_REVIEW_BATCH_LIMIT + 2
+    docs = [
+        _make_doc(f"PER-RVB{i:03d}", f"REQ-RVB{i}", sender, dest, [[(n1, 1)]])[0] for i in range(total)
+    ]
+
+    def orders_side_effect(client_id, api_key, order_number=None, days_back=None):
+        idx = int(order_number.replace("REQ-RVB", ""))
+        return [_order(order_number, 9000 + idx)]
+
+    mock_orders.side_effect = orders_side_effect
+    mock_items.return_value = _act_items({n1.barcode: 1})
+
+    resp = client_logged_in.post("/movement/receive-review/run")
+    html = resp.get_data(as_text=True)
+    assert "Продолжить проверку" in html
+    assert "Еще не проверено: 2" in html
+
+    received = sum(1 for d in docs if MovementDocument.query.get(d.id).received_at is not None)
+    assert received == RECEIVE_REVIEW_BATCH_LIMIT
+
+    resp2 = client_logged_in.post("/movement/receive-review/run")
+    html2 = resp2.get_data(as_text=True)
+    assert "Продолжить проверку" not in html2
+
+    for d in docs:
+        db.session.refresh(d)
+        assert d.received_at is not None

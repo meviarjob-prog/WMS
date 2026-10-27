@@ -2342,21 +2342,34 @@ def receive_review():
     return render_template("movement/receive_review.html", docs=_pending_ozon_receive_documents())
 
 
+# Сколько документов проверять за один вызов (см. чат: 504 от реверс-прокси
+# при проверке сразу всех неприятых документов — на каждый нужно 2-4 живых
+# запроса к Ozon API, и при большом количестве накопившихся документов
+# суммарное время легко превышает таймаут прокси). Остальные ожидающие
+# документы проверяются следующим нажатием кнопки "Продолжить проверку".
+RECEIVE_REVIEW_BATCH_LIMIT = 8
+
+
 @bp.route("/receive-review/run", methods=["POST"])
 def receive_review_run():
-    """Выполняет массовую проверку: что сошлось полностью по данным Ozon
-    API — принимает как есть; где недостача ровно на один короб — вернет
-    этот короб и примет остальное; все прочее (излишки, неоднозначная
+    """Выполняет массовую проверку (не более RECEIVE_REVIEW_BATCH_LIMIT
+    документов за вызов): что сошлось полностью по данным Ozon API —
+    принимает как есть; где недостача ровно на один короб — вернет этот
+    короб и примет остальное; все прочее (излишки, неоднозначная
     недостача, ошибки API) — в список на ручную проверку, с подсказкой при
     похожем расхождении в другом перемещении (см. _annotate_possible_mixups)."""
     if not current_user.is_admin:
         flash("Массовая проверка приемки доступна только администратору", "danger")
         return redirect(url_for("movement.list_documents"))
 
+    pending = _pending_ozon_receive_documents()
+    batch = pending[:RECEIVE_REVIEW_BATCH_LIMIT]
+    remaining = len(pending) - len(batch)
+
     auto_accepted = []
     box_returned = []
     manual = []
-    for doc in _pending_ozon_receive_documents():
+    for doc in batch:
         expected = _expected_qty_by_nomenclature(doc)
         if not expected:
             manual.append({"doc": doc, "reason": "в перемещении нет коробов с товаром", "mismatches": []})
@@ -2387,6 +2400,8 @@ def receive_review_run():
         box_returned=box_returned,
         manual=manual,
         names=names,
+        remaining=remaining,
+        batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
     )
 
 

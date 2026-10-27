@@ -53,4 +53,13 @@
     {% endfor %}
   {% else %}<div class="text-muted">Нет</div>{% endif %}
 </div>
+
+{% if remaining %}
+<div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2">
+  <div>За один раз проверяется не более {{ batch_limit }} документов (чтобы не упереться в таймаут). Еще не проверено: {{ remaining }}.</div>
+  <form method="post" action="{{ url_for('movement.receive_review_run') }}" class="mb-0">
+    <button type="submit" class="btn btn-primary btn-sm">Продолжить проверку</button>
+  </form>
+</div>
+{% endif %}
 {% endblock %}
