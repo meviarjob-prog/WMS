@@ -2262,19 +2262,30 @@ def receive_via_ozon_api(doc_id):
     return redirect(url_for("movement.detail", doc_id=doc.id))
 
 
+# Сколько дней после даты слота приемки выжидаем перед проверкой через
+# Ozon API (чат: "также в исключения добавим текущий день минус 2 дня на
+# приемку") — Ozon обрабатывает приемку поставки не мгновенно в день
+# слота, и сверка раньше срока видела бы ложную недостачу (товар еще
+# физически не разобран и не внесен в систему Ozon).
+RECEIVE_REVIEW_SLOT_GRACE_DAYS = 2
+
+
 def _pending_ozon_receive_documents():
     """Завершенные перемещения на Ozon, еще не принятые на складе, —
     кандидаты для массовой проверки (см. receive_review/receive_review_run).
     Исключены (чат: "исключить... даты слотов не наступивших и также
-    перемещения без числовых номеров заявки"):
+    перемещения без числовых номеров заявки", позже — "текущий день минус
+    2 дня на приемку"):
       - без номера заявки или с номером не из одних цифр (например "fbs" —
         попадает в это поле не как настоящий номер поставки Ozon и ведет
         только к ошибке/лишнему запросу к API, см. чат про такие записи);
-      - с датой слота приемки (delivery_slot_date), которая еще не
-        наступила — поставка физически еще не может быть принята Ozon, и
-        такие даты заполняются вручную заранее, поэтому НЕ являются
-        признаком ошибки (см. отличие от записей без номера заявки выше)."""
-    today = date.today()
+      - с датой слота приемки (delivery_slot_date) позже, чем
+        RECEIVE_REVIEW_SLOT_GRACE_DAYS дней назад — включая и еще не
+        наступившие даты, и совсем недавние, которые Ozon может еще не
+        успеть обработать; такие даты заполняются вручную заранее, поэтому
+        сами по себе НЕ являются признаком ошибки (см. отличие от записей
+        без номера заявки выше)."""
+    cutoff = date.today() - timedelta(days=RECEIVE_REVIEW_SLOT_GRACE_DAYS)
     candidates = (
         MovementDocument.query.join(Warehouse, MovementDocument.to_warehouse_id == Warehouse.id)
         .filter(
@@ -2291,7 +2302,7 @@ def _pending_ozon_receive_documents():
         doc
         for doc in candidates
         if doc.marketplace_request_number.strip().isdigit()
-        and (doc.delivery_slot_date is None or doc.delivery_slot_date <= today)
+        and (doc.delivery_slot_date is None or doc.delivery_slot_date <= cutoff)
     ]
 
 
@@ -2408,6 +2419,7 @@ def receive_review():
         "movement/receive_review.html",
         docs=_pending_ozon_receive_documents(),
         batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
+        slot_grace_days=RECEIVE_REVIEW_SLOT_GRACE_DAYS,
     )
 
 

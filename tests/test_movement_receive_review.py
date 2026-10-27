@@ -27,6 +27,7 @@ from wms.blueprints.movement import (
     RECEIVE_REVIEW_BATCH_LIMIT,
     RECEIVE_REVIEW_CALL_MAX_RETRIES,
     RECEIVE_REVIEW_CALL_TIMEOUT,
+    RECEIVE_REVIEW_SLOT_GRACE_DAYS,
 )
 from wms.utils.ozon_api import OzonApiError
 
@@ -281,13 +282,15 @@ def test_pending_list_excludes_wb_and_already_received_and_missing_request_numbe
     assert "PER-RV0011" not in html
 
 
-def test_pending_list_excludes_non_numeric_request_number_and_future_slot(db, client_logged_in):
+def test_pending_list_excludes_non_numeric_request_number_and_recent_slot(db, client_logged_in):
     """Чат: "исключить из проверки перемещения с датами слотов не
-    наступивших и также перемещения без числовых номеров заявки" —
-    нечисловой номер (например "fbs" — попадает в это поле не как
-    настоящий номер поставки Ozon, который всегда числовой) ведет только
-    к бесполезному обращению к Ozon API; дата слота в будущем означает,
-    что поставка физически еще не может быть принята."""
+    наступивших и также перемещения без числовых номеров заявки", позже
+    — "текущий день минус 2 дня на приемку". Нечисловой номер (например
+    "fbs" — попадает в это поле не как настоящий номер поставки Ozon,
+    который всегда числовой) ведет только к бесполезному обращению к
+    Ozon API; дата слота в будущем или совсем недавняя (меньше
+    RECEIVE_REVIEW_SLOT_GRACE_DAYS дней назад) означает, что Ozon еще не
+    успел обработать приемку поставки."""
     sender, dest = _warehouses(16)
     n1 = _nomenclature(16)
     today = date.today()
@@ -297,11 +300,14 @@ def test_pending_list_excludes_non_numeric_request_number_and_future_slot(db, cl
     future_slot_doc, _ = _make_doc("PER-RV0016B", "20000020", sender, dest, [[(n1, 1)]])
     future_slot_doc.delivery_slot_date = today + timedelta(days=1)
 
-    past_slot_doc, _ = _make_doc("PER-RV0016C", "20000021", sender, dest, [[(n1, 1)]])
-    past_slot_doc.delivery_slot_date = today - timedelta(days=1)
+    recent_slot_doc, _ = _make_doc("PER-RV0016C", "20000021", sender, dest, [[(n1, 1)]])
+    recent_slot_doc.delivery_slot_date = today - timedelta(days=RECEIVE_REVIEW_SLOT_GRACE_DAYS - 1)
 
     today_slot_doc, _ = _make_doc("PER-RV0016D", "20000022", sender, dest, [[(n1, 1)]])
     today_slot_doc.delivery_slot_date = today
+
+    at_cutoff_doc, _ = _make_doc("PER-RV0016F", "20000024", sender, dest, [[(n1, 1)]])
+    at_cutoff_doc.delivery_slot_date = today - timedelta(days=RECEIVE_REVIEW_SLOT_GRACE_DAYS)
 
     no_slot_doc, _ = _make_doc("PER-RV0016E", "20000023", sender, dest, [[(n1, 1)]])
     db.session.commit()
@@ -310,9 +316,10 @@ def test_pending_list_excludes_non_numeric_request_number_and_future_slot(db, cl
     html = resp.get_data(as_text=True)
     assert "PER-RV0016A" not in html
     assert "PER-RV0016B" not in html
-    assert "PER-RV0016C" in html
-    assert "PER-RV0016D" in html
+    assert "PER-RV0016C" not in html
+    assert "PER-RV0016D" not in html
     assert "PER-RV0016E" in html
+    assert "PER-RV0016F" in html
 
 
 @patch("wms.blueprints.movement.fetch_supply_act_items")
