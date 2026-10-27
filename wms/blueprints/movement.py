@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import date, datetime, timedelta
 
 from flask import Blueprint, Response, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
@@ -2114,7 +2115,7 @@ def _nomenclature_for_ozon_sku_info(sku_info):
     return None
 
 
-def _fetch_ozon_accepted_totals(doc):
+def _fetch_ozon_accepted_totals(doc, timeout=None, max_retries=None):
     """Сводное фактически принятое количество по каждому товару этого
     перемещения через API Ozon (/v1/supply-order/act/product/get) — БЕЗ
     разбивки по коробам, которую этот метод не отдает вообще (см. чат —
@@ -2123,6 +2124,11 @@ def _fetch_ozon_accepted_totals(doc):
     receive_via_ozon_api) — решить, какие именно короба не доехали, по
     этим данным нельзя.
 
+    timeout/max_retries пробрасываются в вызовы Ozon API как есть — см.
+    RECEIVE_REVIEW_CALL_TIMEOUT в receive_review_run: интерактивный вызов
+    не должен зависать на полных повторах (до 5 попыток по 60с — свыше
+    5 минут на один проблемный запрос, см. чат про 504 от реверс-прокси).
+
     Возвращает (totals_by_nomenclature_id, ошибка) — при ошибке первое
     значение None, вызывающая сторона не должна автопринимать."""
     client_id, api_key = get_ozon_credentials()
@@ -2130,7 +2136,10 @@ def _fetch_ozon_accepted_totals(doc):
     if not order_number:
         return None, "у перемещения не указан номер заявки на маркетплейс"
     try:
-        orders = fetch_supply_orders(client_id, api_key, order_number=order_number, days_back=None)
+        orders = fetch_supply_orders(
+            client_id, api_key, order_number=order_number, days_back=None,
+            timeout=timeout, max_retries=max_retries,
+        )
     except OzonApiError as exc:
         return None, str(exc)
     if not orders:
@@ -2144,7 +2153,9 @@ def _fetch_ozon_accepted_totals(doc):
             if not supply_id:
                 continue
             try:
-                items, unidentified = fetch_supply_act_items(client_id, api_key, supply_id)
+                items, unidentified = fetch_supply_act_items(
+                    client_id, api_key, supply_id, timeout=timeout, max_retries=max_retries
+                )
             except OzonApiError as exc:
                 return None, str(exc)
             if unidentified:
@@ -2338,6 +2349,19 @@ def _annotate_possible_mixups(manual, names):
 # документы проверяются следующим нажатием кнопки "Продолжить проверку".
 RECEIVE_REVIEW_BATCH_LIMIT = 8
 
+# Бюджет на весь вызов и на одну попытку запроса к Ozon API (см. чат: 504
+# повторялся даже при выборе всего 8 документов — обычные ozon_api.REQUEST_TIMEOUT=60с
+# и MAX_RETRIES=5 дают больше 5 минут на ОДИН зависший/ошибающийся вызов, и
+# батч тут не спасает. Здесь — жестче: максимум 2 попытки по 10с на вызов,
+# и как только суммарное время по всем уже обработанным документам
+# превышает RECEIVE_REVIEW_TIME_BUDGET, обработка следующих документов из
+# пачки останавливается (они уходят в "остальные ждут проверки" вместе с
+# теми, что не поместились в RECEIVE_REVIEW_BATCH_LIMIT) — так единственный
+# проблемный документ не утягивает за собой весь запрос.
+RECEIVE_REVIEW_TIME_BUDGET = 25.0
+RECEIVE_REVIEW_CALL_TIMEOUT = 10
+RECEIVE_REVIEW_CALL_MAX_RETRIES = 2
+
 
 @bp.route("/receive-review", methods=["GET"])
 def receive_review():
@@ -2378,17 +2402,27 @@ def receive_review_run():
 
     selected = [doc for doc in _pending_ozon_receive_documents() if doc.id in selected_ids]
     batch = selected[:RECEIVE_REVIEW_BATCH_LIMIT]
-    remaining_docs = selected[RECEIVE_REVIEW_BATCH_LIMIT:]
+    not_yet_selected_tail = selected[RECEIVE_REVIEW_BATCH_LIMIT:]
 
+    start = time.monotonic()
     auto_accepted = []
     box_returned = []
     manual = []
+    processed = 0
     for doc in batch:
+        # Бюджет времени не применяется к первому документу — иначе при
+        # уже истекшем бюджете (не должно происходить, но на всякий
+        # случай) пачка могла бы не обработать вообще ничего.
+        if processed and time.monotonic() - start > RECEIVE_REVIEW_TIME_BUDGET:
+            break
+        processed += 1
         expected = _expected_qty_by_nomenclature(doc)
         if not expected:
             manual.append({"doc": doc, "reason": "в перемещении нет коробов с товаром", "mismatches": []})
             continue
-        totals, error = _fetch_ozon_accepted_totals(doc)
+        totals, error = _fetch_ozon_accepted_totals(
+            doc, timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES
+        )
         if error:
             manual.append({"doc": doc, "reason": error, "mismatches": []})
             continue
@@ -2403,6 +2437,8 @@ def receive_review_run():
             box_returned.append((doc, box_number))
             continue
         manual.append({"doc": doc, "reason": None, "mismatches": mismatches})
+
+    remaining_docs = batch[processed:] + not_yet_selected_tail
 
     nomenclature_ids = {nid for entry in manual for nid, _, _ in entry["mismatches"]}
     names = {n.id: n.name for n in Nomenclature.query.filter(Nomenclature.id.in_(nomenclature_ids)).all()}

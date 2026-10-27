@@ -23,7 +23,11 @@ from wms.models import (
     User,
     Warehouse,
 )
-from wms.blueprints.movement import RECEIVE_REVIEW_BATCH_LIMIT
+from wms.blueprints.movement import (
+    RECEIVE_REVIEW_BATCH_LIMIT,
+    RECEIVE_REVIEW_CALL_MAX_RETRIES,
+    RECEIVE_REVIEW_CALL_TIMEOUT,
+)
 from wms.utils.ozon_api import OzonApiError
 
 
@@ -203,14 +207,14 @@ def test_cross_movement_mixup_hint(mock_orders, mock_items, db, client_logged_in
     doc_a, _ = _make_doc("PER-RV0005", "REQ-RV5A", sender, dest, [[(n1, 10)]])
     doc_b, _ = _make_doc("PER-RV0006", "REQ-RV5B", sender, dest, [[(n1, 5)]])
 
-    def orders_side_effect(client_id, api_key, order_number=None, days_back=None):
+    def orders_side_effect(client_id, api_key, order_number=None, days_back=None, **kwargs):
         if order_number == "REQ-RV5A":
             return [_order("REQ-RV5A", 705)]
         if order_number == "REQ-RV5B":
             return [_order("REQ-RV5B", 706)]
         return []
 
-    def items_side_effect(client_id, api_key, supply_id):
+    def items_side_effect(client_id, api_key, supply_id, **kwargs):
         if supply_id == 705:
             return _act_items({n1.barcode: 7})  # недостача 3
         if supply_id == 706:
@@ -292,7 +296,7 @@ def test_batch_limit_caps_processing_and_continue_button_finishes_rest(mock_orde
         _make_doc(f"PER-RVB{i:03d}", f"REQ-RVB{i}", sender, dest, [[(n1, 1)]])[0] for i in range(total)
     ]
 
-    def orders_side_effect(client_id, api_key, order_number=None, days_back=None):
+    def orders_side_effect(client_id, api_key, order_number=None, days_back=None, **kwargs):
         idx = int(order_number.replace("REQ-RVB", ""))
         return [_order(order_number, 9000 + idx)]
 
@@ -348,3 +352,70 @@ def test_unselected_documents_are_not_processed(mock_orders, mock_items, db, cli
 
     resp = client_logged_in.get("/movement/receive-review")
     assert "PER-RV0013B" in resp.get_data(as_text=True)
+
+
+@patch("wms.blueprints.movement.time.monotonic")
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_time_budget_stops_batch_even_within_count_limit(mock_orders, mock_items, mock_monotonic, db, client_logged_in):
+    """504 повторялся даже при выборе всего 8 документов (меньше
+    RECEIVE_REVIEW_BATCH_LIMIT) — обычные таймаут/ретраи Ozon API дают
+    больше 5 минут на один зависший вызов, и подсчет документов тут не
+    спасает. Проверяем, что при исчерпании RECEIVE_REVIEW_TIME_BUDGET
+    обработка пачки останавливается независимо от количества выбранных."""
+    sender, dest = _warehouses(14)
+    n1 = _nomenclature(14)
+    doc1, _ = _make_doc("PER-RV0014A", "REQ-RV14A", sender, dest, [[(n1, 1)]])
+    doc2, _ = _make_doc("PER-RV0014B", "REQ-RV14B", sender, dest, [[(n1, 1)]])
+    doc3, _ = _make_doc("PER-RV0014C", "REQ-RV14C", sender, dest, [[(n1, 1)]])
+    doc1.shipped_at = datetime(2024, 1, 1)
+    doc2.shipped_at = datetime(2024, 1, 2)
+    doc3.shipped_at = datetime(2024, 1, 3)
+    db.session.commit()
+
+    mock_orders.return_value = [_order("REQ-RV14A", 714)]
+    mock_items.return_value = _act_items({n1.barcode: 1})
+    # Первый вызов time.monotonic() — точка отсчета (start); второй — перед
+    # вторым документом, уже далеко за пределами RECEIVE_REVIEW_TIME_BUDGET.
+    mock_monotonic.side_effect = [0, 1000]
+
+    resp = client_logged_in.post(
+        "/movement/receive-review/run",
+        data={"doc_ids": [str(doc1.id), str(doc2.id), str(doc3.id)]},
+    )
+    html = resp.get_data(as_text=True)
+    assert "PER-RV0014A" in html
+    assert "Продолжить проверку" in html
+    assert "еще не проверено: 2" in html
+    mock_orders.assert_called_once()
+
+    db.session.refresh(doc1)
+    db.session.refresh(doc2)
+    db.session.refresh(doc3)
+    assert doc1.received_at is not None
+    assert doc2.received_at is None
+    assert doc3.received_at is None
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_uses_short_timeout_and_retries_not_ozon_api_defaults(mock_orders, mock_items, db, client_logged_in):
+    """Обычные ozon_api.REQUEST_TIMEOUT=60с и MAX_RETRIES=5 дают больше 5
+    минут на один зависший вызов — именно это держало 504 даже на
+    маленьких пачках. Интерактивная кнопка должна требовать от
+    ozon_api короткий бюджет, а не ждать дефолтные значения."""
+    sender, dest = _warehouses(15)
+    n1 = _nomenclature(15)
+    doc, _ = _make_doc("PER-RV0015", "REQ-RV15", sender, dest, [[(n1, 1)]])
+    mock_orders.return_value = [_order("REQ-RV15", 715)]
+    mock_items.return_value = _act_items({n1.barcode: 1})
+
+    client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
+
+    _, kwargs = mock_orders.call_args
+    assert kwargs["timeout"] == RECEIVE_REVIEW_CALL_TIMEOUT
+    assert kwargs["max_retries"] == RECEIVE_REVIEW_CALL_MAX_RETRIES
+
+    _, kwargs = mock_items.call_args
+    assert kwargs["timeout"] == RECEIVE_REVIEW_CALL_TIMEOUT
+    assert kwargs["max_retries"] == RECEIVE_REVIEW_CALL_MAX_RETRIES
