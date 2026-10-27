@@ -7,6 +7,7 @@ from flask_login import current_user
 
 from ..extensions import db
 from ..models import AppSetting
+from ..utils.ozon_api import OzonApiError, check_key, to_msk
 
 bp = Blueprint("integration_ozon", __name__)
 
@@ -52,3 +53,26 @@ def settings():
 
     client_id, api_key = get_ozon_credentials()
     return render_template("integration_ozon/settings.html", client_id=client_id, api_key=api_key)
+
+
+@bp.route("/check", methods=["POST"])
+def check():
+    """Проверка связи и прав ключа — вызывает /v1/roles (единственный
+    метод, подтвержденный спецификацией для этой цели: возвращает роли
+    ключа и expires_at, дату окончания действия — ключ Ozon живет 3
+    месяца)."""
+    if not current_user.is_admin:
+        flash("Настройки интеграции с Ozon доступны только администратору", "danger")
+        return redirect(url_for("main.index"))
+
+    client_id, api_key = get_ozon_credentials()
+    try:
+        data = check_key(client_id, api_key)
+    except OzonApiError as exc:
+        flash(f"Ozon API: {exc}", "danger")
+        return redirect(url_for("integration_ozon.settings"))
+
+    roles = ", ".join(data.get("roles") or []) or "—"
+    expires = to_msk(data.get("expires_at")) or "—"
+    flash(f"Ключ работает. Роли: {roles}. Действует до: {expires}", "success")
+    return redirect(url_for("integration_ozon.settings"))

@@ -29,6 +29,10 @@
       </form>
       {% if not client_id or not api_key %}
         <p class="text-danger small mt-2 mb-0">Ключ еще не настроен — загрузка приемки через API работать не будет.</p>
+      {% else %}
+        <form method="post" action="{{ url_for('integration_ozon.check') }}" class="mt-2">
+          <button type="submit" class="btn btn-outline-secondary btn-sm">🔌 Проверить ключ</button>
+        </form>
       {% endif %}
     </div>
   </div>
