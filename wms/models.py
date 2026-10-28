@@ -1101,6 +1101,10 @@ class MovementDocument(db.Model):
         """Сколько товара не принято на складе назначения и нужно найти."""
         return sum(discrepancy.shortage_qty() for discrepancy in self.discrepancies)
 
+    def total_excess_qty(self):
+        """Сколько товара принято сверх отправленного (излишек при приемке)."""
+        return sum(discrepancy.excess_qty() for discrepancy in self.discrepancies)
+
     def transit_status_label(self):
         """Статус собранного, но еще не принятого МП документа.
 

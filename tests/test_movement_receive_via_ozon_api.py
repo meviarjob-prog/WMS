@@ -280,6 +280,6 @@ def test_identified_surplus_only_is_accepted_directly(mock_orders, mock_items, d
         0,
     )
     html = client_logged_in.post(f"/movement/{doc.id}/receive/ozon-api", follow_redirects=True).get_data(as_text=True)
-    assert "с излишком" in html
+    assert "излишек 2 шт." in html
     db.session.refresh(doc)
     assert doc.received_at is not None and doc.received_qty_snapshot == 17

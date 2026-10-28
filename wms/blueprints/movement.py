@@ -2104,20 +2104,26 @@ def receive(doc_id):
         for nomenclature_id in expected
     }
     has_discrepancy, shortage_qty, total_received_qty = _apply_receive(doc, expected, received_by_nomenclature)
-    if shortage_qty:
+    if has_discrepancy:
         flash(
-            f"Перемещение {doc.number} принято с недовозом {shortage_qty:g} шт. "
-            f"на складе «{doc.to_warehouse.name}»",
-            "warning",
-        )
-    elif has_discrepancy:
-        flash(
-            f"Перемещение {doc.number} принято с расхождением на складе «{doc.to_warehouse.name}»",
+            f"Перемещение {doc.number} принято на складе «{doc.to_warehouse.name}»: "
+            + _discrepancy_summary(doc),
             "warning",
         )
     else:
         flash(f"Перемещение {doc.number} принято на складе МП «{doc.to_warehouse.name}»", "success")
     return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+def _discrepancy_summary(doc):
+    """«недовоз 5 шт., излишек 3 шт.» по записанным расхождениям документа."""
+    db.session.refresh(doc)
+    parts = []
+    if doc.total_shortage_qty():
+        parts.append(f"недовоз {doc.total_shortage_qty():g} шт.")
+    if doc.total_excess_qty():
+        parts.append(f"излишек {doc.total_excess_qty():g} шт.")
+    return ", ".join(parts) or "без расхождений"
 
 
 def _apply_receive(doc, expected, received_by_nomenclature):
@@ -2305,8 +2311,8 @@ def receive_via_ozon_api(doc_id):
     if mismatches and _is_identified_surplus_only(mismatches):
         _, _, total_received_qty = _accept_with_identified_surplus(doc, expected, totals)
         flash(
-            f"Перемещение {doc.number} принято по данным Ozon API с излишком — {total_received_qty:g} шт., "
-            "излишек добавлен в короб и списан с остатка отправителя.",
+            f"Перемещение {doc.number} принято по данным Ozon API — {total_received_qty:g} шт., "
+            f"{_discrepancy_summary(doc)}; излишек добавлен в короб и списан с остатка отправителя.",
             "success",
         )
         return redirect(url_for("movement.detail", doc_id=doc.id))
@@ -2789,7 +2795,10 @@ def receive_ozon_confirm(doc_id):
         return redirect(return_to)
     totals = {nid: got for nid, _, got in rows}
     _, _, total_received_qty = _accept_with_identified_surplus(doc, expected, totals)
-    flash(f"Перемещение {doc.number} принято по данным Ozon: {total_received_qty:g} шт.", "success")
+    flash(
+        f"Перемещение {doc.number} принято по данным Ozon: {total_received_qty:g} шт. — {_discrepancy_summary(doc)}",
+        "success",
+    )
     return redirect(return_to)
 
 

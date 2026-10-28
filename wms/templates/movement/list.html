@@ -332,7 +332,7 @@
                 <span class="status-chip status-chip-wide status-chip-accepted{{ ' status-chip-reached' if d.received_at else '' }}"
                       title="Принято на МП: {{ (d.received_at|msk).strftime('%d.%m.%Y %H:%M') if d.received_at else 'еще не наступило' }}">Пр</span>
               </span>
-              {% if d.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ d.total_shortage_qty() | round(3) }}</span>{% elif d.discrepancies %}<span class="badge bg-info text-dark">Излишек</span>{% endif %}
+              {% if d.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ d.total_shortage_qty() | qty }}</span>{% endif %}{% if d.total_excess_qty() %}<span class="badge bg-info text-dark">Излишек {{ d.total_excess_qty() | qty }}</span>{% endif %}
             {% endif %}
           </td>
           <td class="text-nowrap">

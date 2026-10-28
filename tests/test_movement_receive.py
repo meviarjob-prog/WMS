@@ -419,3 +419,28 @@ def test_old_receipt_that_reduced_boxes_still_shows_right_numbers(db, client_log
     doc = MovementDocument.query.get(doc.id)
     assert doc.receipt_changed_boxes is None
     assert (doc.total_sent_qty(), doc.total_received_qty()) == (10, 7)
+
+
+def test_excess_shown_like_shortage_with_quantity(db, client_logged_in):
+    """Излишек показывается так же, как недовоз: в сообщении после
+    подтверждения, значком с количеством и таблицей в карточке."""
+    doc, item, _plan_line = _make_completed_document(qty=10)
+
+    resp = client_logged_in.post(
+        f"/movement/{doc.id}/receive", data={f"qty_{item.id}": "13"}, follow_redirects=True
+    )
+    html = resp.get_data(as_text=True)
+    assert "излишек 3 шт." in html
+    assert "Излишек 3</span>" in html
+    assert "Излишек — принято больше, чем отправлено" in html and "+3</td>" in html
+
+    listing = client_logged_in.get("/movement/").get_data(as_text=True)
+    assert "Излишек 3</span>" in listing
+
+
+def test_shortage_message_mentions_quantity(db, client_logged_in):
+    doc, item, _plan_line = _make_completed_document(qty=10)
+    html = client_logged_in.post(
+        f"/movement/{doc.id}/receive", data={f"qty_{item.id}": "6"}, follow_redirects=True
+    ).get_data(as_text=True)
+    assert "недовоз 4 шт." in html and "Недовоз 4</span>" in html
