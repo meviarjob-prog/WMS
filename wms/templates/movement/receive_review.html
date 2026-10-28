@@ -18,8 +18,11 @@
 {% if docs %}
 <div class="card p-3 mb-3">
   <div class="mb-2 d-flex flex-wrap justify-content-between align-items-center gap-2">
-    <div>Перемещений для проверки: {{ docs | length }}</div>
-    <div class="d-flex gap-2">
+    <div>Перемещений для проверки: {{ docs | length }}
+      <div class="small text-danger d-none" id="rvStatesError"></div></div>
+    <div class="d-flex gap-2 flex-wrap">
+      <button type="button" class="btn btn-sm btn-outline-success" id="rvSelectDone" disabled
+              title="Отметить перемещения, приемка которых на Ozon уже закончена (статус «Согласование актов» или «Завершена»)">Выбрать с законченной приёмкой</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.rv-check').forEach(c => c.checked = true)">Выбрать все</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.rv-check').forEach(c => c.checked = false)">Снять выбор</button>
     </div>
@@ -28,16 +31,49 @@
     <ul class="small mb-3 list-unstyled">
       {% for doc in docs %}
         <li class="mb-1">
-          <label class="d-flex align-items-center gap-2">
-            <input type="checkbox" class="rv-check" name="doc_ids" value="{{ doc.id }}">
-            <span>{{ doc.number }} — {{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}, заявка {{ doc.marketplace_request_number }}</span>
-          </label>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <input type="checkbox" class="rv-check form-check-input mt-0" name="doc_ids" value="{{ doc.id }}" id="rvDoc{{ doc.id }}" data-doc-id="{{ doc.id }}">
+            <a href="{{ url_for('movement.detail', doc_id=doc.id) }}" target="_blank" rel="noopener">{{ doc.number }}</a>
+            <label for="rvDoc{{ doc.id }}" class="mb-0">— {{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}, заявка {{ doc.marketplace_request_number }}</label>
+            <span class="badge bg-light text-muted border rv-state" data-doc-id="{{ doc.id }}">статус Ozon…</span>
+          </div>
         </li>
       {% endfor %}
     </ul>
     <button type="submit" class="btn btn-primary">🔎 Выполнить проверку по отмеченным</button>
   </form>
 </div>
+<script>
+  (function () {
+    const DONE = ["REPORTS_CONFIRMATION_AWAITING", "COMPLETED"];
+    let loaded = {};
+    fetch("{{ url_for('movement.receive_review_ozon_states') }}", {credentials: "same-origin"})
+      .then(r => r.json())
+      .then(data => {
+        loaded = data.states || {};
+        document.querySelectorAll(".rv-state").forEach(el => {
+          const info = loaded[el.dataset.docId];
+          if (!info) { el.textContent = "—"; return; }
+          el.textContent = info.label;
+          el.className = "badge rv-state " + info.badge;
+          if (info.state) el.title = info.state;
+        });
+        if (!data.ok && data.error) {
+          const note = document.getElementById("rvStatesError");
+          note.textContent = "Статусы Ozon не загрузились: " + data.error;
+          note.classList.remove("d-none");
+        }
+        document.getElementById("rvSelectDone").disabled = false;
+      })
+      .catch(() => document.querySelectorAll(".rv-state").forEach(el => { el.textContent = "—"; }));
+    document.getElementById("rvSelectDone").addEventListener("click", () => {
+      document.querySelectorAll(".rv-check").forEach(c => {
+        const info = loaded[c.dataset.docId];
+        c.checked = !!(info && DONE.includes(info.state));
+      });
+    });
+  })();
+</script>
 {% else %}
 <div class="alert alert-secondary">Нет перемещений, ожидающих приемки на Ozon.</div>
 {% endif %}

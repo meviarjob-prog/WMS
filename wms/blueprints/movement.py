@@ -36,7 +36,7 @@ from ..utils.acceptance_act import (
 from ..utils.excel_io import export_movement_summary_to_excel, export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
-from ..utils.ozon_api import OzonApiError, fetch_supply_act_items, fetch_supply_orders
+from ..utils.ozon_api import SUPPLY_STATES, OzonApiError, fetch_supply_act_items, fetch_supply_orders
 from .integration_ozon import get_ozon_credentials
 from ..utils.shipping_label_pdf import build_movement_shipping_labels_pdf
 from ..utils.timezone import to_moscow
@@ -2549,6 +2549,81 @@ def receive_review():
         batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
         slot_grace_days=RECEIVE_REVIEW_SLOT_GRACE_DAYS,
     )
+
+
+# Статусы заявок Ozon для списка проверки — кэш на несколько минут, чтобы
+# повторное открытие страницы не гоняло десятки запросов к API.
+OZON_STATES_CACHE_SECONDS = 300
+OZON_STATES_DEADLINE = 40
+_ozon_states_cache = {"at": None, "states": {}, "requested": set()}
+
+# Цвет значка статуса: приемка закончена — зеленый, идет — голубой,
+# спор/отказ/отмена — красный.
+OZON_STATE_BADGE = {
+    "COMPLETED": "bg-success",
+    "REPORTS_CONFIRMATION_AWAITING": "bg-success",
+    "ACCEPTANCE_AT_STORAGE_WAREHOUSE": "bg-info text-dark",
+    "IN_TRANSIT": "bg-warning text-dark",
+    "ACCEPTED_AT_SUPPLY_WAREHOUSE": "bg-warning text-dark",
+    "READY_TO_SUPPLY": "bg-secondary",
+    "DATA_FILLING": "bg-secondary",
+    "REPORT_REJECTED": "bg-danger",
+    "REJECTED_AT_SUPPLY_WAREHOUSE": "bg-danger",
+    "CANCELLED": "bg-danger",
+    "OVERDUE": "bg-danger",
+}
+
+
+@bp.route("/receive-review/ozon-states")
+def receive_review_ozon_states():
+    """Статусы заявок Ozon для перемещений из списка массовой проверки —
+    одной выборкой списка заявок (/v3/supply-order/list + get), а не
+    запросом на каждое перемещение. Отдается JSON, страница подгружает его
+    после открытия, чтобы не ждать API при загрузке."""
+    if not current_user.is_admin:
+        return jsonify(ok=False, error="Только для администратора"), 403
+    docs = _pending_ozon_receive_documents()
+    numbers = {doc.marketplace_request_number.strip() for doc in docs}
+    cache = _ozon_states_cache
+    fresh = (
+        cache["at"] is not None
+        and time.monotonic() - cache["at"] < OZON_STATES_CACHE_SECONDS
+        and numbers <= cache["requested"]
+        and not request.args.get("refresh")
+    )
+    error = None
+    if not fresh and numbers:
+        client_id, api_key = get_ozon_credentials()
+        oldest = min((doc.shipped_at or doc.completed_at or doc.created_at) for doc in docs)
+        days_back = min(max((datetime.utcnow() - oldest).days + 14, 30), 365)
+        try:
+            orders = fetch_supply_orders(
+                client_id, api_key, days_back=days_back,
+                timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES,
+                deadline=time.monotonic() + OZON_STATES_DEADLINE, wanted_numbers=numbers, partial_ok=True,
+            )
+        except OzonApiError as exc:
+            orders = None
+            error = str(exc)
+        if orders is not None:
+            states = {}
+            for order in orders:
+                number = str(order.get("order_number") or "").strip()
+                if number and number not in states:
+                    states[number] = order.get("state") or "UNSPECIFIED"
+            cache["states"] = states
+            cache["requested"] = set(numbers)
+            cache["at"] = time.monotonic()
+    states = cache["states"]
+    result = {}
+    for doc in docs:
+        state = states.get(doc.marketplace_request_number.strip())
+        result[doc.id] = {
+            "state": state,
+            "label": SUPPLY_STATES.get(state, state) if state else ("—" if error else "не найдена"),
+            "badge": OZON_STATE_BADGE.get(state, "bg-secondary") if state else "bg-light text-muted border",
+        }
+    return jsonify(ok=error is None, error=error, states=result)
 
 
 RECEIVE_REVIEW_JOB_KIND = "ozon_receive_review"

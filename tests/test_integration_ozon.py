@@ -373,3 +373,14 @@ def test_request_caps_retry_after_without_deadline(mock_post):
     with pytest.raises(OzonApiError):
         ozon_request("c", "k", "/x", {}, _sleep=waits.append, timeout=10, max_retries=2)
     assert waits == [MAX_RETRY_WAIT, MAX_RETRY_WAIT]
+
+
+@patch("wms.utils.ozon_api.requests.post")
+def test_supply_orders_stops_when_all_wanted_numbers_found(mock_post):
+    mock_post.side_effect = [
+        Mock(status_code=200, json=lambda: _supply_list_response([1, 2], last_id="next")),
+        Mock(status_code=200, json=lambda: _supply_get_response([_order(1, "A-1"), _order(2, "A-2")])),
+    ]
+    orders = fetch_supply_orders("c", "k", wanted_numbers={"A-2"})
+    assert "A-2" in [o["order_number"] for o in orders]
+    assert mock_post.call_count == 2

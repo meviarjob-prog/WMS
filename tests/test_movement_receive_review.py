@@ -708,3 +708,52 @@ def test_stopped_job_thread_does_not_continue(mock_orders, mock_items, app, db, 
     db.session.expire_all()
     assert MovementDocument.query.get(doc_b.id).received_at is None
     assert BackgroundJob.query.get(job.id).status == "failed"
+
+
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_review_page_links_documents_and_loads_ozon_states(mock_orders, db, client_logged_in):
+    from wms.blueprints import movement as movement_bp
+
+    movement_bp._ozon_states_cache.update({"at": None, "states": {}, "requested": set()})
+    sender, dest = _warehouses(71)
+    n1 = _nomenclature(71)
+    doc_a, _ = _make_doc("PER-RV0071", "20000071", sender, dest, [[(n1, 1)]])
+    doc_b, _ = _make_doc("PER-RV0072", "20000072", sender, dest, [[(n1, 1)]])
+
+    html = client_logged_in.get("/movement/receive-review").get_data(as_text=True)
+    assert f'href="/movement/{doc_a.id}"' in html and "статус Ozon…" in html
+
+    order = _order("20000071", 771)
+    order["state"] = "REPORTS_CONFIRMATION_AWAITING"
+    mock_orders.return_value = [order]
+    data = client_logged_in.get("/movement/receive-review/ozon-states").get_json()
+    assert data["ok"] is True
+    assert data["states"][str(doc_a.id)]["label"] == "Согласование актов"
+    assert data["states"][str(doc_b.id)]["label"] == "не найдена"
+    kwargs = mock_orders.call_args.kwargs
+    assert kwargs["wanted_numbers"] == {"20000071", "20000072"} and kwargs["partial_ok"] is True
+
+    # Повторный запрос берется из кэша, без нового похода в API.
+    client_logged_in.get("/movement/receive-review/ozon-states")
+    assert mock_orders.call_count == 1
+
+
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_ozon_states_api_error_is_reported(mock_orders, db, client_logged_in):
+    from wms.blueprints import movement as movement_bp
+
+    movement_bp._ozon_states_cache.update({"at": None, "states": {}, "requested": set()})
+    sender, dest = _warehouses(73)
+    n1 = _nomenclature(73)
+    _make_doc("PER-RV0073", "20000073", sender, dest, [[(n1, 1)]])
+    mock_orders.side_effect = OzonApiError("нет связи")
+    data = client_logged_in.get("/movement/receive-review/ozon-states").get_json()
+    assert data["ok"] is False and "нет связи" in data["error"]
+
+
+def test_detail_shows_marketplace_request_number(db, client_logged_in):
+    sender, dest = _warehouses(74)
+    n1 = _nomenclature(74)
+    doc, _ = _make_doc("PER-RV0074", "2000070791768", sender, dest, [[(n1, 1)]])
+    html = client_logged_in.get(f"/movement/{doc.id}").get_data(as_text=True)
+    assert "Заявка на МП:" in html and "2000070791768" in html

@@ -188,7 +188,7 @@ ORDER_SEARCH_MAX_PAGES = 5
 
 
 def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, timeout=None, max_retries=None,
-                        deadline=None):
+                        deadline=None, wanted_numbers=None, partial_ok=False):
     """Заявки на поставку (FBO) — постраничная выборка /v3/supply-order/list
     + /v3/supply-order/get, как описано в спецификации:
       - сортировка по дате изменения статуса, по убыванию;
@@ -207,8 +207,14 @@ def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, tim
     result = []
     last_id = ""
     pages = 0
+    wanted = {str(n).strip() for n in wanted_numbers} if wanted_numbers else None
+    found = set()
     while True:
         pages += 1
+        if partial_ok and pages > 1 and deadline is not None and deadline - time.monotonic() < 5:
+            # Время почти вышло — отдаем то, что успели собрать (статусы
+            # для списка: лучше часть, чем ничего).
+            break
         if order_number and pages > ORDER_SEARCH_MAX_PAGES:
             # Точное совпадение по номеру так и не нашлось — дальше листать
             # все заявки подряд бессмысленно (и это минуты запросов).
@@ -247,8 +253,14 @@ def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, tim
                     except ValueError:
                         pass
                 result.append(order)
+                if wanted is not None:
+                    number = str(order.get("order_number") or "").strip()
+                    if number in wanted:
+                        found.add(number)
 
         last_id = data.get("last_id") or ""
+        if wanted is not None and found >= wanted:
+            break   # все нужные заявки уже нашлись — дальше не листаем
         if order_number:
             # Поиск по номеру неточный (находит и похожие номера): берем
             # только точное совпадение и, найдя его, дальше не листаем —

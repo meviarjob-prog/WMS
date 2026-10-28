@@ -27,6 +27,21 @@
       {% endif %}
     </h3>
     <div class="text-muted">{{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
+    {% if doc.marketplace_request_number %}
+    <div class="mt-1 d-flex align-items-center gap-2 flex-wrap">
+      <span>Заявка на МП: <b class="user-select-all">{{ doc.marketplace_request_number }}</b></span>
+      {% if current_user.is_admin %}
+      <details class="d-inline-block">
+        <summary class="small text-muted" style="cursor:pointer">изменить</summary>
+        <form method="post" action="{{ url_for('movement.update_marketplace_request_number', doc_id=doc.id) }}" class="d-flex gap-1 align-items-center mt-1">
+          <input type="hidden" name="return_to" value="detail">
+          <input type="text" name="marketplace_request_number" value="{{ doc.marketplace_request_number }}" class="form-control form-control-sm" style="width:170px" required>
+          <button type="submit" class="btn btn-sm btn-outline-secondary">Сохранить</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% endif %}
     {% if current_user.is_admin and doc.status in ('draft', 'collected') %}
     <form method="post" action="{{ url_for('movement.change_sender', doc_id=doc.id) }}" class="d-flex gap-1 align-items-center mt-2">
       <label class="small text-muted text-nowrap" for="senderWarehouse{{ doc.id }}">Склад-отправитель:</label>
