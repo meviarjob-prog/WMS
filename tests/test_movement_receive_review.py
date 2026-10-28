@@ -577,3 +577,65 @@ def test_server_mode_runs_in_background_and_shows_result(mock_orders, mock_items
     assert status == {"status": "done", "done": 1, "total": 1}
     html = client_logged_in.get(resp.headers["Location"]).get_data(as_text=True)
     assert "Требуется ручная проверка (1)" in html and "PER-RV0031" in html and ">-2<" in html
+
+
+def _confirm_form(html, doc_id):
+    import re
+    from html import unescape
+    block = re.search(
+        rf'action="/movement/{doc_id}/receive/ozon-confirm".*?</form>', html, re.S
+    ).group(0)
+    fields = dict(re.findall(r'name="(\w+)" value="([^"]*)"', block))
+    return {k: unescape(v) for k, v in fields.items()}
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_confirm_button_accepts_manual_entry_by_ozon_quantities(mock_orders, mock_items, db, client_logged_in):
+    sender, dest = _warehouses(41)
+    n1 = _nomenclature(41, name="Шапка А")
+    n2 = _nomenclature(42, name="Шапка Б")
+    doc, boxes = _make_doc("PER-RV0041", "20000041", sender, dest, [[(n1, 10), (n2, 5)]])
+    mock_orders.return_value = [_order("20000041", 741)]
+    mock_items.return_value = _act_items({n1.barcode: 7, n2.barcode: 6})   # недостача и излишек
+
+    html = client_logged_in.post(
+        "/movement/receive-review/run", data={"doc_ids": [str(doc.id)]}
+    ).get_data(as_text=True)
+    assert "Требуется ручная проверка (1)" in html and "Подтвердить приемку" in html
+    form = _confirm_form(html, doc.id)
+
+    # Подправленное количество не принимается.
+    import json as _json
+    forged = dict(form, rows=_json.dumps([[n1.id, 10, 10], [n2.id, 5, 6]]))
+    client_logged_in.post(f"/movement/{doc.id}/receive/ozon-confirm", data=forged)
+    db.session.refresh(doc)
+    assert doc.received_at is None
+
+    resp = client_logged_in.post(f"/movement/{doc.id}/receive/ozon-confirm", data=form, follow_redirects=True)
+    assert "принято по данным Ozon: 13 шт" in resp.get_data(as_text=True)
+    db.session.refresh(doc)
+    assert doc.received_at is not None and doc.received_qty_snapshot == 13
+    items = {i.nomenclature_id: i.qty for i in BoxItem.query.filter_by(box_id=boxes[0].id)}
+    assert items == {n1.id: 7, n2.id: 6}
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_confirm_refused_when_box_contents_changed(mock_orders, mock_items, db, client_logged_in):
+    sender, dest = _warehouses(43)
+    n1 = _nomenclature(43)
+    doc, boxes = _make_doc("PER-RV0043", "20000043", sender, dest, [[(n1, 10)]])
+    mock_orders.return_value = [_order("20000043", 743)]
+    mock_items.return_value = _act_items({n1.barcode: 7})
+    html = client_logged_in.post(
+        "/movement/receive-review/run", data={"doc_ids": [str(doc.id)]}
+    ).get_data(as_text=True)
+    form = _confirm_form(html, doc.id)
+
+    BoxItem.query.filter_by(box_id=boxes[0].id).one().qty = 9
+    db.session.commit()
+    resp = client_logged_in.post(f"/movement/{doc.id}/receive/ozon-confirm", data=form, follow_redirects=True)
+    assert "состав коробов изменился" in resp.get_data(as_text=True)
+    db.session.refresh(doc)
+    assert doc.received_at is None

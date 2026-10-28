@@ -44,7 +44,20 @@
   {% if manual %}
     {% for entry in manual %}
       <div class="border rounded p-2 mb-2">
-        <div><a href="{{ url_for('movement.detail', doc_id=entry.doc.id) }}">{{ entry.doc.number }}</a> — {{ entry.doc.from_warehouse.name }} → {{ entry.doc.to_warehouse.name }}</div>
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div><a href="{{ url_for('movement.detail', doc_id=entry.doc.id) }}">{{ entry.doc.number }}</a> — {{ entry.doc.from_warehouse.name }} → {{ entry.doc.to_warehouse.name }}</div>
+          {% if entry.doc.received_at %}
+            <span class="badge bg-success">✅ Принято</span>
+          {% elif entry.sig %}
+            <form method="post" action="{{ url_for('movement.receive_ozon_confirm', doc_id=entry.doc.id) }}" class="mb-0"
+                  onsubmit="return confirm('Принять {{ entry.doc.number }} по данным Ozon из таблицы? Недостача спишется из коробов, излишек добавится в короб.');">
+              <input type="hidden" name="rows" value="{{ entry.rows_json }}">
+              <input type="hidden" name="sig" value="{{ entry.sig }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <button type="submit" class="btn btn-sm btn-success">✔ Подтвердить приемку</button>
+            </form>
+          {% endif %}
+        </div>
         {% if entry.reason %}
           <div class="text-muted small">{{ entry.reason }}</div>
         {% endif %}

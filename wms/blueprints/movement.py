@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import threading
 import time
@@ -2430,7 +2432,8 @@ def _is_identified_surplus_only(mismatches):
 
 
 def _accept_with_identified_surplus(doc, expected, totals):
-    """Приемка с излишком (см. чат: "если товар принят излишком — добавить
+    """Приемка по количествам Ozon (totals). Недостачу _apply_receive
+    списывает из коробов как обычно. Приемка с излишком (см. чат: "если товар принят излишком — добавить
     его, если его можно идентифицировать"). Излишек добавляется в короб
     перемещения (в тот, где этот товар уже есть, иначе в последний) и,
     как и при ручной приемке, списывается с неразмещенного остатка
@@ -2650,6 +2653,53 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
     }
 
 
+def _ozon_rows_signature(doc_id, rows):
+    """Подпись строк сверки (товар, отправлено, принято по Ozon) для кнопки
+    «Подтвердить приемку»: количество нельзя подправить в форме, а принять
+    можно только то, что показано на экране."""
+    normalized = sorted([int(nid), float(exp), float(got)] for nid, exp, got in rows)
+    raw = json.dumps({"doc": int(doc_id), "rows": normalized}, sort_keys=True)
+    key = str(current_app.config.get("SECRET_KEY") or "").encode()
+    return hmac.new(key, raw.encode(), hashlib.sha256).hexdigest()
+
+
+@bp.route("/<int:doc_id>/receive/ozon-confirm", methods=["POST"])
+def receive_ozon_confirm(doc_id):
+    """Кнопка «Подтвердить приемку» в результате массовой проверки: принять
+    перемещение ровно по данным Ozon, показанным в таблице (недостача
+    списывается из коробов, излишек добавляется в короб и списывается с
+    остатка отправителя). Если состав коробов изменился после проверки —
+    не принимаем, нужно проверить заново."""
+    return_to = request.form.get("return_to") or ""
+    if not return_to.startswith("/") or return_to.startswith("//"):
+        return_to = url_for("movement.receive_review")
+    if not current_user.is_admin:
+        flash("Подтвердить приемку по проверке может только администратор", "danger")
+        return redirect(return_to)
+    doc = MovementDocument.query.get_or_404(doc_id)
+    blocked = _receive_precheck(doc)
+    if blocked is not None:
+        return redirect(return_to)
+    try:
+        rows = json.loads(request.form.get("rows") or "[]")
+        rows = [(int(nid), float(exp), float(got)) for nid, exp, got in rows]
+    except (TypeError, ValueError):
+        rows = []
+    sig = request.form.get("sig") or ""
+    if not rows or not hmac.compare_digest(sig, _ozon_rows_signature(doc.id, rows)):
+        flash(f"{doc.number}: данные проверки повреждены — запустите проверку заново", "danger")
+        return redirect(return_to)
+    expected = _expected_qty_by_nomenclature(doc)
+    shown_expected = {nid: exp for nid, exp, _ in rows if exp}
+    if {nid: qty for nid, qty in expected.items() if qty} != shown_expected:
+        flash(f"{doc.number}: состав коробов изменился после проверки — запустите проверку заново", "danger")
+        return redirect(return_to)
+    totals = {nid: got for nid, _, got in rows}
+    _, _, total_received_qty = _accept_with_identified_surplus(doc, expected, totals)
+    flash(f"Перемещение {doc.number} принято по данным Ozon: {total_received_qty:g} шт.", "success")
+    return redirect(return_to)
+
+
 def _render_receive_review_result(result, extra_remaining_ids=(), job=None):
     """Показ результата (_run_receive_review) — свежего или сохраненного."""
     doc_ids = set(result["auto_accepted"]) | {d for d, _ in result["box_returned"]}
@@ -2663,6 +2713,8 @@ def _render_receive_review_result(result, extra_remaining_ids=(), job=None):
             "doc": docs.get(entry["doc_id"]),
             "reason": entry["reason"],
             "hints": entry["hints"],
+            "rows_json": json.dumps(entry["rows"]),
+            "sig": _ozon_rows_signature(entry["doc_id"], entry["rows"]) if entry["rows"] else None,
             "diff_rows": sorted(
                 ((noms[nid], exp, got) for nid, exp, got in entry["rows"] if nid in noms),
                 key=lambda r: r[0].name,
@@ -2680,6 +2732,7 @@ def _render_receive_review_result(result, extra_remaining_ids=(), job=None):
         remaining_ids=remaining_ids,
         batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
         job=job,
+        return_to=url_for("movement.receive_review_job", job_id=job.id) if job else url_for("movement.receive_review"),
     )
 
 
