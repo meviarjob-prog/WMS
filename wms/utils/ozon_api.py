@@ -161,6 +161,11 @@ def check_key(client_id, api_key):
     return ozon_request(client_id, api_key, "/v1/roles", {})
 
 
+# Поиск заявки по номеру: сколько страниц списка просматривать, пока не
+# найдется точное совпадение.
+ORDER_SEARCH_MAX_PAGES = 5
+
+
 def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, timeout=None, max_retries=None):
     """Заявки на поставку (FBO) — постраничная выборка /v3/supply-order/list
     + /v3/supply-order/get, как описано в спецификации:
@@ -179,7 +184,13 @@ def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, tim
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_back) if days_back is not None else None
     result = []
     last_id = ""
+    pages = 0
     while True:
+        pages += 1
+        if order_number and pages > ORDER_SEARCH_MAX_PAGES:
+            # Точное совпадение по номеру так и не нашлось — дальше листать
+            # все заявки подряд бессмысленно (и это минуты запросов).
+            break
         body = {
             "filter": {"states": _SUPPLY_FILTER_STATES},
             "limit": 100,

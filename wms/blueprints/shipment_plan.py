@@ -1230,15 +1230,17 @@ def _city_rows_for_plan(plan, sender_warehouses):
             movement_totals_by_period[period_start] = movement_wms_totals(period_start)
         return movement_totals_by_period[period_start]
 
-    # «В пути» — весь товар, который транспорт забрал с 00:01 даты
-    # конкретного листа. Завершение сборки и заявка МП сами по себе
-    # отгрузкой не считаются.
+    # Выполнение плана — весь товар, который транспорт забрал с 00:01 даты
+    # конкретного листа (принятый и еще едущий). «В пути» — только то, что
+    # еще не принято на складе: после «Принято на складе» уменьшается.
+    # Завершение сборки и заявка МП сами по себе отгрузкой не считаются.
     for line in lines:
         period_start = line.period_start or plan.period_start
         quantities = _totals_for(period_start).get((line.warehouse_id, line.nomenclature_id), {})
         line.current_fulfilled_qty = 0.0
-        line.in_transit_qty = quantities.get("shipped", 0.0)
-        line.fulfilled_with_transit_qty = line.in_transit_qty
+        line.shipped_qty = quantities.get("shipped", 0.0)
+        line.in_transit_qty = quantities.get("in_transit", 0.0)
+        line.fulfilled_with_transit_qty = line.shipped_qty
         # Товар-новинка одной площадки (0w/0o) не должен считаться
         # потребностью ДРУГОЙ площадки (см. чат: "приоритет 0w
         # отгружается на озон").
@@ -1263,14 +1265,17 @@ def _city_rows_for_plan(plan, sender_warehouses):
     # строк актуального плана — иначе городская сумма меньше сводного
     # экспорта перемещений.
     city_totals = _totals_for(plan.period_start)
-    shipped_by_warehouse = {}
+    shipped_by_warehouse, in_transit_by_warehouse = {}, {}
     for (warehouse_id, _nomenclature_id), quantities in city_totals.items():
         shipped_by_warehouse[warehouse_id] = (
             shipped_by_warehouse.get(warehouse_id, 0.0) + quantities.get("shipped", 0.0)
         )
+        in_transit_by_warehouse[warehouse_id] = (
+            in_transit_by_warehouse.get(warehouse_id, 0.0) + quantities.get("in_transit", 0.0)
+        )
     for warehouse_id, row in by_warehouse.items():
-        row["in_transit"] = shipped_by_warehouse.get(warehouse_id, 0.0)
-        row["fulfilled_with_transit"] = row["in_transit"]
+        row["in_transit"] = in_transit_by_warehouse.get(warehouse_id, 0.0)
+        row["fulfilled_with_transit"] = shipped_by_warehouse.get(warehouse_id, 0.0)
 
     sender_totals = movement_sender_totals(plan.period_start)
     deadlines = {
@@ -1378,7 +1383,7 @@ def _dashboard_context():
 
         total_planned = sum(line.planned_qty for line in lines)
         total_in_transit = sum(row["in_transit"] for row in cities)
-        total_fulfilled_with_transit = total_in_transit
+        total_fulfilled_with_transit = sum(row["fulfilled_with_transit"] for row in cities)
         pace = _pace_analysis(plan, total_planned, total_fulfilled_with_transit)
 
         marketplaces_data.append(
@@ -1455,6 +1460,7 @@ def _dashboard_context():
                     "wb": {},
                     "max_remaining": 0,
                     "in_transit_total": 0,
+                    "shipped_total": 0,
                     # Сумма плана и невыполненного остатка по ВСЕМ городам
                     # обоих маркетплейсов для этого штрихкода — в отличие
                     # от max_remaining (только для отсечения выполненных
@@ -1482,6 +1488,7 @@ def _dashboard_context():
             # отправленные короба (см. movement._committed_by_warehouse_and_item).
             product["max_remaining"] = max(product["max_remaining"], line.remaining_qty())
             product["in_transit_total"] += line.in_transit_qty
+            product["shipped_total"] += getattr(line, "shipped_qty", line.in_transit_qty)
             product["total_planned"] += line.planned_qty
             if not product["comment"] and line.buyer_comment:
                 product["comment"] = line.buyer_comment
@@ -1500,7 +1507,7 @@ def _dashboard_context():
     for product in products.values():
         product["total_remaining"] = max(
             product["total_planned"]
-            - product["in_transit_total"]
+            - product["shipped_total"]
             - product["ready_to_ship"]
             - product["unplaced"],
             0,

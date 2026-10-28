@@ -2552,9 +2552,11 @@ def receive_review():
 
 
 RECEIVE_REVIEW_JOB_KIND = "ozon_receive_review"
-# Фоновая проверка, не отметившаяся дольше этого, считается оборвавшейся
-# (перезапуск сервера) — иначе новую нельзя было бы запустить.
-RECEIVE_REVIEW_JOB_STALE_MINUTES = 30
+# Поток проверки отмечается «жив» каждые RECEIVE_REVIEW_HEARTBEAT_SECONDS;
+# без отметки дольше RECEIVE_REVIEW_JOB_STALE_SECONDS (сервер перезапустили,
+# поток погиб) проверка считается оборванной — страница не висит вечно.
+RECEIVE_REVIEW_HEARTBEAT_SECONDS = 10
+RECEIVE_REVIEW_JOB_STALE_SECONDS = 120
 
 
 def _run_receive_review(docs, time_budget=None, on_progress=None):
@@ -2744,16 +2746,42 @@ def _running_review_job():
     )
     if job is None:
         return None
-    if datetime.utcnow() - job.started_at > timedelta(minutes=RECEIVE_REVIEW_JOB_STALE_MINUTES):
+    last_seen = job.heartbeat_at or job.started_at
+    if datetime.utcnow() - last_seen > timedelta(seconds=RECEIVE_REVIEW_JOB_STALE_SECONDS):
         job.status = "failed"
-        job.error = "проверка оборвалась (перезапуск сервера?)"
+        job.error = "проверка оборвалась — скорее всего, сервер перезапускался"
         job.finished_at = datetime.utcnow()
         db.session.commit()
         return None
     return job
 
 
+def _job_heartbeat(app, job_id, stop):
+    """Отдельный поток: пока идет проверка, раз в несколько секунд
+    отмечает задачу живой (сам поток проверки может надолго уйти в запрос
+    к Ozon API)."""
+    with app.app_context():
+        while not stop.wait(RECEIVE_REVIEW_HEARTBEAT_SECONDS):
+            try:
+                BackgroundJob.query.filter_by(id=job_id, status="running").update(
+                    {"heartbeat_at": datetime.utcnow()}
+                )
+                db.session.commit()
+            except Exception:  # noqa: BLE001
+                db.session.rollback()
+        db.session.remove()
+
+
 def _receive_review_background(app, job_id, doc_ids):
+    stop = threading.Event()
+    threading.Thread(target=_job_heartbeat, args=(app, job_id, stop), daemon=True).start()
+    try:
+        _receive_review_background_body(app, job_id, doc_ids)
+    finally:
+        stop.set()
+
+
+def _receive_review_background_body(app, job_id, doc_ids):
     with app.app_context():
         try:
             order = {doc_id: i for i, doc_id in enumerate(doc_ids)}
@@ -2765,9 +2793,13 @@ def _receive_review_background(app, job_id, doc_ids):
             db.session.commit()
 
             def _progress(done):
-                BackgroundJob.query.filter_by(id=job_id).update({"progress_done": done})
+                label = docs[done].number if done < len(docs) else None
+                BackgroundJob.query.filter_by(id=job_id).update(
+                    {"progress_done": done, "current_label": label, "heartbeat_at": datetime.utcnow()}
+                )
                 db.session.commit()
 
+            _progress(0)
             result = _run_receive_review(docs, on_progress=_progress)
             job = BackgroundJob.query.get(job_id)
             job.result = json.dumps(result)
@@ -2826,6 +2858,7 @@ def receive_review_run():
     job = BackgroundJob(
         kind=RECEIVE_REVIEW_JOB_KIND, created_by_id=current_user.id,
         progress_total=len(selected_ids), params=json.dumps(selected_ids),
+        heartbeat_at=datetime.utcnow(),
     )
     db.session.add(job)
     db.session.commit()
@@ -2848,7 +2881,14 @@ def receive_review_job(job_id):
         db.session.refresh(job)
     if job.status == "done":
         return _render_receive_review_result(json.loads(job.result), job=job)
-    return render_template("movement/receive_review_progress.html", job=job)
+    remaining_ids = []
+    if job.status == "failed":
+        try:
+            wanted = set(json.loads(job.params or "[]"))
+        except ValueError:
+            wanted = set()
+        remaining_ids = [d.id for d in _pending_ozon_receive_documents() if d.id in wanted]
+    return render_template("movement/receive_review_progress.html", job=job, remaining_ids=remaining_ids)
 
 
 @bp.route("/receive-review/job/<int:job_id>/status")
@@ -2856,7 +2896,12 @@ def receive_review_job_status(job_id):
     if not current_user.is_admin:
         return jsonify(status="forbidden"), 403
     job = BackgroundJob.query.filter_by(id=job_id, kind=RECEIVE_REVIEW_JOB_KIND).first_or_404()
-    return jsonify(status=job.status, done=job.progress_done, total=job.progress_total)
+    if job.status == "running":
+        _running_review_job()  # помечает оборвавшуюся
+        db.session.refresh(job)
+    return jsonify(
+        status=job.status, done=job.progress_done, total=job.progress_total, current=job.current_label or ""
+    )
 
 
 @bp.route("/<int:doc_id>/toggle-accounting", methods=["POST"])

@@ -574,7 +574,7 @@ def test_server_mode_runs_in_background_and_shows_result(mock_orders, mock_items
     job = BackgroundJob.query.one()
     assert job.status == "done" and job.progress_done == 1
     status = client_logged_in.get(f"/movement/receive-review/job/{job.id}/status").get_json()
-    assert status == {"status": "done", "done": 1, "total": 1}
+    assert status == {"status": "done", "done": 1, "total": 1, "current": ""}
     html = client_logged_in.get(resp.headers["Location"]).get_data(as_text=True)
     assert "Требуется ручная проверка (1)" in html and "PER-RV0031" in html and ">-2<" in html
 
@@ -639,3 +639,26 @@ def test_confirm_refused_when_box_contents_changed(mock_orders, mock_items, db, 
     assert "состав коробов изменился" in resp.get_data(as_text=True)
     db.session.refresh(doc)
     assert doc.received_at is None
+
+
+def test_job_without_heartbeat_is_marked_failed_and_offers_rest(db, client_logged_in):
+    """После перезапуска сервера поток проверки погиб — страница не должна
+    висеть вечно на «Идёт проверка»."""
+    import json as _json
+    from wms.models import BackgroundJob
+
+    sender, dest = _warehouses(51)
+    n1 = _nomenclature(51)
+    doc, _ = _make_doc("PER-RV0051", "20000051", sender, dest, [[(n1, 10)]])
+    old = datetime.utcnow() - timedelta(minutes=5)
+    job = BackgroundJob(
+        kind="ozon_receive_review", status="running", started_at=old, heartbeat_at=old,
+        progress_done=8, progress_total=15, params=_json.dumps([doc.id]),
+    )
+    db.session.add(job)
+    db.session.commit()
+
+    status = client_logged_in.get(f"/movement/receive-review/job/{job.id}/status").get_json()
+    assert status["status"] == "failed"
+    html = client_logged_in.get(f"/movement/receive-review/job/{job.id}").get_data(as_text=True)
+    assert "Проверено 8 из 15" in html and "Проверить оставшиеся (1)" in html

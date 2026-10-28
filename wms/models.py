@@ -1323,6 +1323,10 @@ class BackgroundJob(db.Model):
     finished_at = db.Column(db.DateTime, nullable=True)
     progress_done = db.Column(db.Integer, nullable=False, default=0)
     progress_total = db.Column(db.Integer, nullable=False, default=0)
+    # Отметка «поток жив» — обновляется каждые несколько секунд; если давно
+    # не обновлялась (сервер перезапустили), задача считается оборванной.
+    heartbeat_at = db.Column(db.DateTime, nullable=True)
+    current_label = db.Column(db.String(100), nullable=True)
     params = db.Column(db.Text, nullable=True)
     result = db.Column(db.Text, nullable=True)
     error = db.Column(db.Text, nullable=True)

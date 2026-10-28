@@ -247,7 +247,7 @@ def test_marketplace_header_uses_only_completed_movement_fact(db, client_logged_
 
     city_idx = html.find("<td>Город</td>")
     city_snippet = html[city_idx : city_idx + 1500]
-    assert "Все завершенные перемещения с 00:01 даты листа" in html
+    assert "Все перемещения, которые транспорт забрал с 00:01 даты листа" in html
     assert ">10<" in city_snippet
 
 
@@ -273,9 +273,11 @@ def test_dashboard_keeps_sent_qty_after_marketplace_receives_less(
 
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
-    idx = html.find("в пути")
+    idx = html.find("отгружено <b>")
     # Отправлено 6; недовоз 2 ведется отдельно и не уменьшает отгрузку WMS.
-    assert "<b>6</b>" in html[idx : idx + 200]
+    assert "отгружено <b>6</b>" in html[idx : idx + 200]
+    # После «Принято на складе» в пути уже ничего нет.
+    assert "в пути <b>0</b>" in html[idx : idx + 200]
 
 
 def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, client_logged_in):

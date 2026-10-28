@@ -19,6 +19,7 @@
     {% endif %}
   </td>
   <td>{{ row.planned | round(0) | int }}</td>
+  <td>{% if row.fulfilled_with_transit %}{{ row.fulfilled_with_transit | round(0) | int }}{% else %}—{% endif %}</td>
   <td>{% if row.in_transit %}<span class="text-warning-emphasis">{{ row.in_transit | round(0) | int }}</span>{% else %}—{% endif %}</td>
   <td>{% if row.percent is not none %}{{ row.percent | round(1) }}%{% else %}—{% endif %}</td>
   {% for entry in row.sender_breakdown %}

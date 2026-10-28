@@ -135,6 +135,7 @@
         </p>
         <p class="mb-2">
           План <b>{{ mp.total_planned | round(0) | int }}</b> —
+          отгружено <b>{{ mp.total_fulfilled_with_transit | round(0) | int }}</b>,
           в пути <b>{{ mp.total_in_transit | round(0) | int }}</b>
           ({{ (100 * mp.total_fulfilled_with_transit / mp.total_planned) | round(1) if mp.total_planned else 0 }}%)
           {% if mp.problems_count %}
@@ -179,8 +180,9 @@
             <th>Город</th>
             <th title="Дата, к которой нужно отгрузить план по этому городу — проставляется вручную; факт под датой — нарастающим итогом с начала периода по эту дату включительно">Дата плана</th>
             <th>План</th>
-            <th title="Все завершенные перемещения с 00:01 даты листа">В пути</th>
-            <th title="В пути / план. Кнопка ▸ разворачивает вклад каждого склада-отправителя">% вып.
+            <th title="Все перемещения, которые транспорт забрал с 00:01 даты листа (принятые и еще едущие)">Отгружено</th>
+            <th title="Отгружено, но еще не подтверждено кнопкой «Принято на складе»">В пути</th>
+            <th title="Отгружено / план. Кнопка ▸ разворачивает вклад каждого склада-отправителя">% вып.
               {% if sender_warehouses %}<button type="button" class="senders-toggle" title="Показать/скрыть разбивку по складам">▸</button>{% endif %}
             </th>
             {% for wh in sender_warehouses %}
