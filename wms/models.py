@@ -1326,6 +1326,8 @@ class BackgroundJob(db.Model):
     # Отметка «поток жив» — обновляется каждые несколько секунд; если давно
     # не обновлялась (сервер перезапустили), задача считается оборванной.
     heartbeat_at = db.Column(db.DateTime, nullable=True)
+    # Когда ход проверки последний раз сдвинулся (сторож зависания).
+    progress_at = db.Column(db.DateTime, nullable=True)
     current_label = db.Column(db.String(100), nullable=True)
     params = db.Column(db.Text, nullable=True)
     result = db.Column(db.Text, nullable=True)

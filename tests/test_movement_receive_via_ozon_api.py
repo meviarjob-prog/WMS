@@ -114,7 +114,7 @@ def test_auto_accept_when_fully_matched(mock_orders, mock_items, db, client_logg
     assert doc.received_at is not None
     assert doc.received_qty_snapshot == 15
     assert MovementReceiptDiscrepancy.query.filter_by(document_id=doc.id).count() == 0
-    mock_items.assert_called_once_with(None, None, 555, timeout=None, max_retries=None)
+    mock_items.assert_called_once_with(None, None, 555, timeout=None, max_retries=None, deadline=None)
 
 
 @patch("wms.blueprints.movement.fetch_supply_act_items")

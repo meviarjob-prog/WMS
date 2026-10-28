@@ -106,7 +106,12 @@ def to_msk(value):
         return value
 
 
-def ozon_request(client_id, api_key, path, payload=None, _sleep=time.sleep, timeout=None, max_retries=None):
+# Дольше этого не ждем по Retry-After, что бы Ozon ни прислал.
+MAX_RETRY_WAIT = 30
+
+
+def ozon_request(client_id, api_key, path, payload=None, _sleep=time.sleep, timeout=None, max_retries=None,
+                 deadline=None):
     """POST-запрос к Ozon Seller API с авторизацией и повторами по
     правилам из спецификации (см. модуль docstring). _sleep — точка
     подмены в тестах, чтобы не ждать реально. timeout/max_retries
@@ -128,14 +133,30 @@ def ozon_request(client_id, api_key, path, payload=None, _sleep=time.sleep, time
         "Content-Type": "application/json",
     }
     last_error = None
+
+    def _left():
+        return None if deadline is None else deadline - time.monotonic()
+
+    def _wait(seconds):
+        left = _left()
+        _sleep(min(seconds, MAX_RETRY_WAIT) if left is None else max(min(seconds, MAX_RETRY_WAIT, left), 0))
+
     for attempt in range(max_retries):
+        left = _left()
+        if left is not None and left <= 0:
+            # deadline — общий бюджет на всю операцию (см. movement._run_receive_review):
+            # не начинаем новую попытку, если время вышло.
+            raise OzonApiError(
+                f"{path}: Ozon API не ответил за отведенное время" + (f" ({last_error})" if last_error else "")
+            )
+        attempt_timeout = timeout if left is None else max(min(timeout, left), 1)
         try:
             resp = requests.post(
-                url, headers=headers, json=payload if payload is not None else {}, timeout=timeout
+                url, headers=headers, json=payload if payload is not None else {}, timeout=attempt_timeout
             )
         except requests.RequestException as exc:
             last_error = f"не удалось связаться с Ozon API: {exc}"
-            _sleep(2**attempt)
+            _wait(2**attempt)
             continue
         if resp.status_code == 200:
             try:
@@ -145,8 +166,8 @@ def ozon_request(client_id, api_key, path, payload=None, _sleep=time.sleep, time
         if resp.status_code == 429 or resp.status_code >= 500:
             wait = resp.headers.get("Retry-After")
             wait = int(wait) if wait and wait.isdigit() else 2**attempt
-            last_error = f"{path}: {resp.status_code}, ждали {wait} с"
-            _sleep(wait)
+            last_error = f"{path}: {resp.status_code}, ждали {min(wait, MAX_RETRY_WAIT)} с"
+            _wait(wait)
             continue
         # 4xx, кроме 429 — не повторяем, сразу ошибка.
         raise OzonApiError(f"{path}: ошибка {resp.status_code}: {resp.text[:500]}")
@@ -166,7 +187,8 @@ def check_key(client_id, api_key):
 ORDER_SEARCH_MAX_PAGES = 5
 
 
-def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, timeout=None, max_retries=None):
+def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, timeout=None, max_retries=None,
+                        deadline=None):
     """Заявки на поставку (FBO) — постраничная выборка /v3/supply-order/list
     + /v3/supply-order/get, как описано в спецификации:
       - сортировка по дате изменения статуса, по убыванию;
@@ -201,7 +223,10 @@ def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, tim
             body["filter"]["order_number_search"] = order_number
         if last_id:
             body["last_id"] = last_id
-        data = ozon_request(client_id, api_key, "/v3/supply-order/list", body, timeout=timeout, max_retries=max_retries)
+        data = ozon_request(
+            client_id, api_key, "/v3/supply-order/list", body,
+            timeout=timeout, max_retries=max_retries, deadline=deadline,
+        )
         ids = data.get("order_ids") or []
         if not ids:
             break
@@ -210,7 +235,7 @@ def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, tim
         for i in range(0, len(ids), 50):  # get принимает до 50 id за раз
             details = ozon_request(
                 client_id, api_key, "/v3/supply-order/get", {"order_ids": ids[i : i + 50]},
-                timeout=timeout, max_retries=max_retries,
+                timeout=timeout, max_retries=max_retries, deadline=deadline,
             )
             for order in details.get("orders", []):
                 if cutoff is not None:
@@ -273,7 +298,7 @@ SUPPLY_ACT_TYPES = {
 }
 
 
-def fetch_supply_act_items(client_id, api_key, supply_id, timeout=None, max_retries=None):
+def fetch_supply_act_items(client_id, api_key, supply_id, timeout=None, max_retries=None, deadline=None):
     """Строки актов поставки (/v1/supply-order/act/product/get) в плоском
     виде — по каждому товару declared/approved/fact_quantity и тип акта,
     вне зависимости от короба (API не возвращает эту привязку). Возвращает
@@ -284,7 +309,7 @@ def fetch_supply_act_items(client_id, api_key, supply_id, timeout=None, max_retr
     ozon_request."""
     data = ozon_request(
         client_id, api_key, "/v1/supply-order/act/product/get", {"supply_id": int(supply_id)},
-        timeout=timeout, max_retries=max_retries,
+        timeout=timeout, max_retries=max_retries, deadline=deadline,
     )
     items = []
     unidentified = 0

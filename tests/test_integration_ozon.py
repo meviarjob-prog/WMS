@@ -340,3 +340,36 @@ def test_supply_orders_order_number_keeps_only_exact_match(mock_post):
     orders = fetch_supply_orders("c", "k", days_back=None, order_number="20000123")
     assert [o["order_number"] for o in orders] == ["20000123"]
     assert mock_post.call_count == 2      # дальше не листаем
+
+
+@patch("wms.utils.ozon_api.requests.post")
+def test_request_respects_deadline_and_caps_retry_after(mock_post):
+    """Ozon может прислать огромный Retry-After — ждем не дольше общего
+    лимита операции и не начинаем попытку после него."""
+    import time as _time
+    from wms.utils.ozon_api import OzonApiError, ozon_request
+
+    mock_post.return_value = Mock(status_code=429, headers={"Retry-After": "600"}, text="")
+    waits = []
+
+    def fake_sleep(seconds):
+        waits.append(seconds)
+
+    deadline = _time.monotonic() + 0.05
+    with pytest.raises(OzonApiError):
+        ozon_request("c", "k", "/x", {}, _sleep=lambda s: (fake_sleep(s), _time.sleep(0.03)), timeout=10,
+                     max_retries=5, deadline=deadline)
+    assert all(w <= 0.05 for w in waits)
+    assert mock_post.call_count <= 3
+    assert mock_post.call_args.kwargs["timeout"] <= 10
+
+
+@patch("wms.utils.ozon_api.requests.post")
+def test_request_caps_retry_after_without_deadline(mock_post):
+    from wms.utils.ozon_api import MAX_RETRY_WAIT, OzonApiError, ozon_request
+
+    mock_post.return_value = Mock(status_code=429, headers={"Retry-After": "600"}, text="")
+    waits = []
+    with pytest.raises(OzonApiError):
+        ozon_request("c", "k", "/x", {}, _sleep=waits.append, timeout=10, max_retries=2)
+    assert waits == [MAX_RETRY_WAIT, MAX_RETRY_WAIT]

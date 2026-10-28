@@ -2197,7 +2197,7 @@ def _nomenclature_for_ozon_sku_info(sku_info):
     return None
 
 
-def _fetch_ozon_accepted_totals(doc, timeout=None, max_retries=None):
+def _fetch_ozon_accepted_totals(doc, timeout=None, max_retries=None, deadline=None):
     """Сводное фактически принятое количество по каждому товару этого
     перемещения через API Ozon (/v1/supply-order/act/product/get) — БЕЗ
     разбивки по коробам, которую этот метод не отдает вообще (см. чат —
@@ -2220,7 +2220,7 @@ def _fetch_ozon_accepted_totals(doc, timeout=None, max_retries=None):
     try:
         orders = fetch_supply_orders(
             client_id, api_key, order_number=order_number, days_back=None,
-            timeout=timeout, max_retries=max_retries,
+            timeout=timeout, max_retries=max_retries, deadline=deadline,
         )
     except OzonApiError as exc:
         return None, str(exc)
@@ -2236,7 +2236,7 @@ def _fetch_ozon_accepted_totals(doc, timeout=None, max_retries=None):
                 continue
             try:
                 items, unidentified = fetch_supply_act_items(
-                    client_id, api_key, supply_id, timeout=timeout, max_retries=max_retries
+                    client_id, api_key, supply_id, timeout=timeout, max_retries=max_retries, deadline=deadline,
                 )
             except OzonApiError as exc:
                 return None, str(exc)
@@ -2557,6 +2557,12 @@ RECEIVE_REVIEW_JOB_KIND = "ozon_receive_review"
 # поток погиб) проверка считается оборванной — страница не висит вечно.
 RECEIVE_REVIEW_HEARTBEAT_SECONDS = 10
 RECEIVE_REVIEW_JOB_STALE_SECONDS = 120
+# Сколько максимум ждем Ozon по одному перемещению (все запросы вместе):
+# дальше оно уходит в ручную проверку с причиной «Ozon не ответил вовремя».
+RECEIVE_REVIEW_DOC_DEADLINE = 90
+# Если ход проверки не сдвигается дольше этого (поток жив, но застрял),
+# проверка помечается зависшей.
+RECEIVE_REVIEW_JOB_STALL_SECONDS = 300
 
 
 def _run_receive_review(docs, time_budget=None, on_progress=None):
@@ -2575,13 +2581,18 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
         if time_budget is not None and processed and time.monotonic() - start > time_budget:
             break
         processed += 1
+        doc_started = time.monotonic()
         try:
+            db.session.refresh(doc)
+            if doc.received_at is not None:
+                continue      # уже приняли (вручную или другой проверкой) — не трогаем
             expected = _expected_qty_by_nomenclature(doc)
             if not expected:
                 manual.append({"doc": doc, "reason": "в перемещении нет коробов с товаром", "mismatches": []})
                 continue
             totals, error = _fetch_ozon_accepted_totals(
-                doc, timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES
+                doc, timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES,
+                deadline=time.monotonic() + RECEIVE_REVIEW_DOC_DEADLINE,
             )
             if error:
                 manual.append({"doc": doc, "reason": error, "mismatches": []})
@@ -2612,6 +2623,11 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
             current_app.logger.exception("Проверка приемки Ozon: ошибка на %s", doc.number)
             manual.append({"doc": doc, "reason": f"ошибка при проверке: {exc}", "mismatches": []})
         finally:
+            spent = time.monotonic() - doc_started
+            if spent > 30:
+                current_app.logger.warning(
+                    "Проверка приемки Ozon: %s проверялся %.0f с", doc.number, spent
+                )
             if on_progress is not None:
                 on_progress(processed)
 
@@ -2746,11 +2762,21 @@ def _running_review_job():
     )
     if job is None:
         return None
+    now = datetime.utcnow()
     last_seen = job.heartbeat_at or job.started_at
-    if datetime.utcnow() - last_seen > timedelta(seconds=RECEIVE_REVIEW_JOB_STALE_SECONDS):
+    last_progress = job.progress_at or job.started_at
+    error = None
+    if now - last_seen > timedelta(seconds=RECEIVE_REVIEW_JOB_STALE_SECONDS):
+        error = "проверка оборвалась — скорее всего, сервер перезапускался"
+    elif now - last_progress > timedelta(seconds=RECEIVE_REVIEW_JOB_STALL_SECONDS):
+        error = (
+            f"проверка зависла на перемещении {job.current_label or '?'} — "
+            f"больше {RECEIVE_REVIEW_JOB_STALL_SECONDS // 60} минут без продвижения"
+        )
+    if error:
         job.status = "failed"
-        job.error = "проверка оборвалась — скорее всего, сервер перезапускался"
-        job.finished_at = datetime.utcnow()
+        job.error = error
+        job.finished_at = now
         db.session.commit()
         return None
     return job
@@ -2770,6 +2796,10 @@ def _job_heartbeat(app, job_id, stop):
             except Exception:  # noqa: BLE001
                 db.session.rollback()
         db.session.remove()
+
+
+class _ReviewJobStopped(Exception):
+    """Фоновую проверку пометили оборванной — поток должен остановиться."""
 
 
 def _receive_review_background(app, job_id, doc_ids):
@@ -2793,9 +2823,16 @@ def _receive_review_background_body(app, job_id, doc_ids):
             db.session.commit()
 
             def _progress(done):
+                status = db.session.query(BackgroundJob.status).filter_by(id=job_id).scalar()
+                if status != "running":
+                    # Сторож уже пометил проверку зависшей (и, возможно,
+                    # запущена новая) — дальше не проверяем, чтобы не
+                    # принимать те же перемещения параллельно.
+                    raise _ReviewJobStopped()
                 label = docs[done].number if done < len(docs) else None
+                now = datetime.utcnow()
                 BackgroundJob.query.filter_by(id=job_id).update(
-                    {"progress_done": done, "current_label": label, "heartbeat_at": datetime.utcnow()}
+                    {"progress_done": done, "current_label": label, "heartbeat_at": now, "progress_at": now}
                 )
                 db.session.commit()
 
@@ -2804,6 +2841,10 @@ def _receive_review_background_body(app, job_id, doc_ids):
             job = BackgroundJob.query.get(job_id)
             job.result = json.dumps(result)
             job.status = "done"
+        except _ReviewJobStopped:
+            db.session.rollback()
+            db.session.remove()
+            return
         except Exception as exc:  # noqa: BLE001
             db.session.rollback()
             app.logger.exception("Фоновая проверка приемки Ozon не удалась")

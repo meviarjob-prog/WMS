@@ -416,9 +416,10 @@ def test_time_budget_stops_batch_even_within_count_limit(mock_orders, mock_items
 
     mock_orders.return_value = [_order("20000015", 714)]
     mock_items.return_value = _act_items({n1.barcode: 1})
-    # Первый вызов time.monotonic() — точка отсчета (start); второй — перед
-    # вторым документом, уже далеко за пределами RECEIVE_REVIEW_TIME_BUDGET.
-    mock_monotonic.side_effect = [0, 1000]
+    # Вызовы time.monotonic(): точка отсчета (start); по первому документу —
+    # начало, срок (deadline) и затраченное время; затем — перед вторым
+    # документом, уже далеко за пределами RECEIVE_REVIEW_TIME_BUDGET.
+    mock_monotonic.side_effect = [0, 0, 0, 0, 1000]
 
     resp = client_logged_in.post(
         "/movement/receive-review/run",
@@ -662,3 +663,48 @@ def test_job_without_heartbeat_is_marked_failed_and_offers_rest(db, client_logge
     assert status["status"] == "failed"
     html = client_logged_in.get(f"/movement/receive-review/job/{job.id}").get_data(as_text=True)
     assert "Проверено 8 из 15" in html and "Проверить оставшиеся (1)" in html
+
+
+def test_job_without_progress_is_marked_stalled(db, client_logged_in):
+    """Поток жив (пульс идет), но застрял на одном перемещении — сторож
+    помечает проверку зависшей, страница не висит вечно."""
+    from wms.models import BackgroundJob
+
+    now = datetime.utcnow()
+    job = BackgroundJob(
+        kind="ozon_receive_review", status="running", started_at=now - timedelta(minutes=20),
+        heartbeat_at=now, progress_at=now - timedelta(minutes=10), current_label="PER-000777",
+        progress_done=3, progress_total=15, params="[]",
+    )
+    db.session.add(job)
+    db.session.commit()
+    status = client_logged_in.get(f"/movement/receive-review/job/{job.id}/status").get_json()
+    assert status["status"] == "failed"
+    html = client_logged_in.get(f"/movement/receive-review/job/{job.id}").get_data(as_text=True)
+    assert "зависла на перемещении PER-000777" in html
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_stopped_job_thread_does_not_continue(mock_orders, mock_items, app, db, client_logged_in):
+    """Проверку пометили зависшей — «оттаявший» поток не должен принимать
+    следующие перемещения (их может проверять уже новая проверка)."""
+    import json as _json
+    from wms.blueprints.movement import _receive_review_background_body
+    from wms.models import BackgroundJob
+
+    sender, dest = _warehouses(61)
+    n1 = _nomenclature(61)
+    doc_a, _ = _make_doc("PER-RV0061", "20000061", sender, dest, [[(n1, 10)]])
+    doc_b, _ = _make_doc("PER-RV0062", "20000062", sender, dest, [[(n1, 10)]])
+    mock_orders.side_effect = lambda c, k, order_number=None, **kw: [_order(order_number, int(order_number[-3:]))]
+    mock_items.return_value = _act_items({n1.barcode: 10})
+    job = BackgroundJob(kind="ozon_receive_review", status="failed", params=_json.dumps([doc_a.id, doc_b.id]))
+    db.session.add(job)
+    db.session.commit()
+
+    _receive_review_background_body(app, job.id, [doc_a.id, doc_b.id])
+
+    db.session.expire_all()
+    assert MovementDocument.query.get(doc_b.id).received_at is None
+    assert BackgroundJob.query.get(job.id).status == "failed"
