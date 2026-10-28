@@ -1,0 +1,22 @@
+{# Таблица «товар — отправлено — принято — разница»; строки с расхождением
+   подсвечены. Ожидает diff_rows: [(номенклатура, отправлено, принято)]. #}
+<div class="table-responsive mt-2">
+  <table class="table table-sm table-bordered mb-1 qty-diff-table">
+    <thead>
+      <tr><th>Товар</th><th>Штрихкод</th><th class="text-end">Отправлено</th><th class="text-end">Принято</th><th class="text-end">Разница</th></tr>
+    </thead>
+    <tbody>
+    {% for nom, sent, got in diff_rows %}
+      {% set delta = got - sent %}
+      <tr class="{{ 'table-danger' if delta < 0 else ('table-warning' if delta > 0 else '') }}">
+        <td>{{ nom.name }}</td>
+        <td class="text-muted">{{ nom.barcode }}</td>
+        <td class="text-end">{{ sent | qty }}</td>
+        <td class="text-end">{{ got | qty }}</td>
+        <td class="text-end fw-bold">{% if delta > 0 %}+{{ delta | qty }}{% elif delta < 0 %}{{ delta | qty }}{% else %}<span class="text-muted fw-normal">0</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="small text-muted">Красным — недостача, жёлтым — излишек.</div>
+</div>

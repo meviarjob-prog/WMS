@@ -26,6 +26,19 @@
   {% else %}<div class="text-muted">Нет</div>{% endif %}
 </div>
 
+<div class="card p-3 mb-3 border-info">
+  <h5>➕ Принято с излишком — излишек добавлен в короб ({{ surplus_accepted | length }})</h5>
+  {% if surplus_accepted %}
+    {% for entry in surplus_accepted %}
+      <div class="border rounded p-2 mb-2">
+        <div><a href="{{ url_for('movement.detail', doc_id=entry.doc.id) }}">{{ entry.doc.number }}</a> — {{ entry.doc.from_warehouse.name }} → {{ entry.doc.to_warehouse.name }}</div>
+        {% set diff_rows = entry.diff_rows %}
+        {% include "movement/_qty_diff_table.html" %}
+      </div>
+    {% endfor %}
+  {% else %}<div class="text-muted">Нет</div>{% endif %}
+</div>
+
 <div class="card p-3 mb-3 border-danger">
   <h5>⚠ Требуется ручная проверка ({{ manual | length }})</h5>
   {% if manual %}
@@ -35,12 +48,9 @@
         {% if entry.reason %}
           <div class="text-muted small">{{ entry.reason }}</div>
         {% endif %}
-        {% if entry.mismatches %}
-          <ul class="small mb-1">
-            {% for nid, expected_qty, got_qty in entry.mismatches %}
-              <li>{{ names.get(nid, nid) }}: отправлено {{ expected_qty | round(3) }}, по Ozon принято {{ got_qty | round(3) }}</li>
-            {% endfor %}
-          </ul>
+        {% if entry.diff_rows %}
+          {% set diff_rows = entry.diff_rows %}
+          {% include "movement/_qty_diff_table.html" %}
         {% endif %}
         {% if entry.hints %}
           <ul class="small mb-0">

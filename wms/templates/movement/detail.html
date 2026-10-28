@@ -16,7 +16,7 @@
         <span class="status-chip status-chip-wide status-chip-onassembly status-chip-reached"
               title="На сборке: {{ (doc.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Сб</span>
         <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if doc.status in ('collected', 'completed') else '' }}"
-              title="Собрано{{ ': автоматически при 30 коробах' if doc.status == 'collected' else '' }}">Со</span>
+              title="Собрано{{ ': набран лимит коробов' if doc.status == 'collected' else '' }}">Со</span>
         <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at and doc.marketplace_request_number else '' }}"
               title="Создана заявка: {{ (doc.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if doc.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
         <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.shipped_at else '' }}"

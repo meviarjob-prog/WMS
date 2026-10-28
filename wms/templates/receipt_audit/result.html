@@ -42,7 +42,13 @@
             {% if r.missing_boxes %}Вернуть на склад-отправитель коробов: <b>{{ r.missing_boxes | length }}</b> ({{ r.missing_boxes | join(', ') }}).<br>{% endif %}
             {% if r.short_rows %}Поправить количество в коробах ({{ r.short_rows | length }}):
               {% for box, name, sent, got in r.short_rows[:6] %}{{ box }}: {{ name }} {{ sent | round(0) | int }} → {{ got | round(0) | int }}{% if not loop.last %}; {% endif %}{% endfor %}{% if r.short_rows | length > 6 %} и др.{% endif %}<br>{% endif %}
+            {% if r.surplus_rows %}Принять излишек и добавить в короб ({{ r.surplus_rows | length }}):
+              {% for box, name, sent, got in r.surplus_rows[:6] %}{{ box }}: {{ name }} {{ sent | round(0) | int }} → {{ got | round(0) | int }}{% if not loop.last %}; {% endif %}{% endfor %}{% if r.surplus_rows | length > 6 %} и др.{% endif %}<br>{% endif %}
             Принято {{ r.rec.matched_qty | round(0) | int }} из {{ r.rec.sent_qty | round(0) | int }} шт.
+          {% endif %}
+          {% set diff_rows = r.item_rows | default([]) %}
+          {% if r.status != 'match' and diff_rows %}
+            {% include "movement/_qty_diff_table.html" %}
           {% endif %}
           {% for reason in r.reasons %}<div class="text-danger">⚠ {{ reason }}</div>{% endfor %}
         </td>

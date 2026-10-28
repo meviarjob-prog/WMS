@@ -97,12 +97,12 @@ def test_admin_cannot_change_sender_while_boxes_are_on_another_warehouse(
     assert MovementDocument.query.get(doc.id).from_warehouse_id == old.id
 
 
-def test_thirtieth_ozon_box_closes_document_and_next_box_starts_new(db, client_logged_in):
+def test_twentieth_box_completes_document_and_next_box_starts_new(db, client_logged_in):
     sender = Warehouse(code="S30", name="Основной")
     target = Warehouse(code="O30", name="Краснодар", marketplace="ozon")
     db.session.add_all([sender, target])
     db.session.commit()
-    boxes = [Box(box_number=f"OZ-{i:03}", warehouse_id=sender.id) for i in range(31)]
+    boxes = [Box(box_number=f"OZ-{i:03}", warehouse_id=sender.id) for i in range(21)]
     db.session.add_all(boxes)
     db.session.commit()
 
@@ -111,10 +111,40 @@ def test_thirtieth_ozon_box_closes_document_and_next_box_starts_new(db, client_l
 
     docs = MovementDocument.query.order_by(MovementDocument.id).all()
     assert len(docs) == 2
-    assert docs[0].status == "collected"
-    assert docs[0].lines.count() == 30
+    assert docs[0].status == "completed"
+    assert docs[0].lines.count() == 20
+    assert all(line.box.warehouse_id == target.id for line in docs[0].lines)
     assert docs[1].status == "draft"
+    assert docs[1].to_warehouse_id == target.id
     assert docs[1].lines.count() == 1
+
+
+def test_twentieth_box_in_document_page_opens_new_document_same_city(db, client_logged_in):
+    sender = Warehouse(code="S20", name="Основной")
+    target = Warehouse(code="W20", name="Невинномысск", marketplace="wb")
+    db.session.add_all([sender, target])
+    db.session.commit()
+    boxes = [Box(box_number=f"WB-{i:03}", warehouse_id=sender.id) for i in range(21)]
+    db.session.add_all(boxes)
+    doc = MovementDocument(number="MV-20", from_warehouse_id=sender.id, to_warehouse_id=target.id)
+    db.session.add(doc)
+    db.session.commit()
+
+    response = None
+    for box in boxes[:20]:
+        response = client_logged_in.post(f"/movement/{doc.id}/boxes/add", data={"box_number": box.box_number})
+
+    db.session.expire_all()
+    first = MovementDocument.query.get(doc.id)
+    assert first.status == "completed"
+    assert first.lines.count() == 20
+    second = MovementDocument.query.filter(MovementDocument.id != doc.id).one()
+    assert second.status == "draft"
+    assert second.to_warehouse_id == target.id
+    assert response.headers["Location"].endswith(f"/movement/{second.id}")
+
+    client_logged_in.post(f"/movement/{second.id}/boxes/add", data={"box_number": boxes[20].box_number})
+    assert second.lines.count() == 1
 
 
 def test_split_moves_selected_boxes_to_new_document(db, client_logged_in):

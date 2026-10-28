@@ -16,6 +16,8 @@ Ozon и сверяем их с отчётами «Отчёт по поставк
 
 Данные берутся из файлов: API Ozon в программе не подключен (см. чат)."""
 
+import hashlib
+import hmac
 import json
 import math
 import re
@@ -243,9 +245,6 @@ def analyze(doc, rec, inferred=False):
             reasons.append("В отчёте есть ГМ, которых нет в этом перемещении: " + ", ".join(map(str, rec["unknown_keys"][:5])))
         if rec["unidentified"]:
             reasons.append("В отчёте есть неопознанные позиции")
-        if surplus:
-            reasons.append("Принято больше отправленного: " + "; ".join(
-                f"{box}: {name} {sent:g} → {got:g}" for box, name, sent, got in surplus[:4]))
         if not _request_ready(doc):
             reasons.append("Не внесён номер заявки на МП или не стоит отметка «Заявка создана» — провести нельзя")
         if inferred:
@@ -255,9 +254,12 @@ def analyze(doc, rec, inferred=False):
                     "Грузоместа сопоставлены по составу, а среди коробов есть одинаковые — нельзя определить, "
                     "какой именно не доехал (" + ", ".join(conflicts[:4]) + "). Выгрузите «Состав ГМ» или проверьте вручную"
                 )
+    # Излишек по опознанному товару (строки rec["boxes"] — только товары,
+    # найденные в номенклатуре) принимаем: добавляем в короб и списываем с
+    # остатка отправителя. Неопознанные позиции — по-прежнему вручную.
     if reasons:
         status = "manual"
-    elif not rec["missing"] and not short:
+    elif not rec["missing"] and not short and not surplus:
         status = "match"
     else:
         status = "auto_fix"
@@ -266,7 +268,24 @@ def analyze(doc, rec, inferred=False):
         "deficit": deficit, "excess": excess, "names": names,
         "missing_boxes": [m["box_number"] for m in rec["missing"]],
         "short_rows": short, "surplus_rows": surplus,
+        "item_rows": _item_rows(rec),
     }
+
+
+def _item_rows(rec):
+    """Сводка по товарам для таблицы: [(товар, отправлено, принято)];
+    недоехавшие короба — принято 0."""
+    totals = {}
+    for missing in rec["missing"]:
+        for item in missing["line"].box.items:
+            row = totals.setdefault(item.nomenclature_id, [item.nomenclature, 0, 0])
+            row[1] += item.qty
+    for box in rec["boxes"]:
+        for row in box["rows"]:
+            entry = totals.setdefault(row["nomenclature"].id, [row["nomenclature"], 0, 0])
+            entry[1] += row["expected"]
+            entry[2] += row["accepted"]
+    return sorted((tuple(v) for v in totals.values()), key=lambda r: r[0].name)
 
 
 def _recent_excess():
@@ -383,10 +402,15 @@ def check():
     order = {"manual": 0, "auto_fix": 1, "match": 2}
     results.sort(key=lambda r: (order[r["status"]], r["doc"].id))
 
-    plan = [
-        {"doc_id": r["doc"].id, "payload": r["rec"]["payload"]}
-        for r in results if r["status"] in ("match", "auto_fix")
-    ]
+    plan = []
+    for r in results:
+        if r["status"] not in ("match", "auto_fix"):
+            continue
+        payload = r["rec"]["payload"]
+        item = {"doc_id": r["doc"].id, "payload": payload}
+        if r["surplus_rows"]:
+            item["sig"] = _plan_signature(r["doc"], payload)
+        plan.append(item)
     counts = {s: sum(1 for r in results if r["status"] == s) for s in order}
     return render_template(
         "receipt_audit/result.html", results=results, orphans=orphans, no_data=no_data,
@@ -421,7 +445,7 @@ def apply():
         if not _request_ready(doc):
             skipped.append(f"{doc.number} (нет заявки на МП)")
             continue
-        verdict = _verify_payload(doc, payload)
+        verdict = _verify_payload(doc, payload, item.get("sig"))
         if verdict:
             skipped.append(f"{doc.number} ({verdict})")
             continue
@@ -451,13 +475,28 @@ def apply():
     return redirect(url_for("receipt_audit.index"))
 
 
-def _verify_payload(doc, payload):
+def _canonical(value):
+    return json.dumps(json.loads(json.dumps(value)), sort_keys=True, ensure_ascii=False)
+
+
+def _plan_signature(doc, payload):
+    """Подпись пункта плана с излишком: связывает принятое количество с
+    составом коробов на момент проверки. Если состав изменился или
+    количество подправлено в форме — подпись не сойдется."""
+    raw = _canonical({"doc": doc.id, "payload": payload, "contents": _doc_contents(doc)})
+    key = str(current_app.config.get("SECRET_KEY") or "").encode()
+    return hmac.new(key, raw.encode(), hashlib.sha256).hexdigest()
+
+
+def _verify_payload(doc, payload, sig=None):
     """Страховка перед записью: состав коробов мог измениться после проверки
     или данные подменены — принимаем только то, что не превышает
-    отправленное и ссылается на существующие товары. Возвращает причину отказа."""
+    отправленное и ссылается на существующие товары. Излишек — только с
+    подписью, выданной при проверке (_plan_signature). Возвращает причину отказа."""
     contents = dict(_doc_contents(doc))
     if not payload:
         return "нет принятых коробов"
+    signed = isinstance(sig, str) and hmac.compare_digest(sig, _plan_signature(doc, payload))
     nids = set()
     for number, items in payload.items():
         if number not in contents or not isinstance(items, dict):
@@ -467,7 +506,9 @@ def _verify_payload(doc, payload):
                 nid_int, qty_f = int(nid), float(qty)
             except (TypeError, ValueError):
                 return "некорректные данные"
-            if not math.isfinite(qty_f) or qty_f < 0 or qty_f > contents[number].get(nid_int, 0) + 1e-6:
+            if not math.isfinite(qty_f) or qty_f < 0:
+                return "некорректные данные"
+            if qty_f > contents[number].get(nid_int, 0) + 1e-6 and not signed:
                 return "после проверки состав коробов изменился или принято больше отправленного"
             nids.add(nid_int)
     if nids and Nomenclature.query.filter(Nomenclature.id.in_(nids)).count() != len(nids):

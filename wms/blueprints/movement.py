@@ -41,6 +41,9 @@ from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
 MOVEMENTS_PAGE_SIZE = 200
+# Сборка перемещения завершается автоматически, как только в нем набралось
+# столько коробов; следующий короб уходит в новое перемещение на тот же склад.
+MOVEMENT_AUTO_COMPLETE_BOXES = 20
 
 
 def _fulfillment_owns(doc):
@@ -988,22 +991,7 @@ def route_box_add():
     # находили бы только СВОИ черновики (owned_query ограничивает чужие) и
     # получали бы разные документы вместо одного общего (см. также
     # new_document, где этот же поиск сделан без owned_query).
-    doc = (
-        MovementDocument.query.filter_by(
-            from_warehouse_id=box.warehouse_id, to_warehouse_id=to_warehouse_id, status="draft"
-        )
-        .order_by(MovementDocument.created_at.desc())
-        .first()
-    )
-    if not doc:
-        doc = MovementDocument(
-            number=next_number("movement"),
-            from_warehouse_id=box.warehouse_id,
-            to_warehouse_id=to_warehouse_id,
-            created_by_id=current_user.id,
-        )
-        db.session.add(doc)
-        db.session.flush()
+    doc = _open_draft_for_route(box.warehouse_id, to_warehouse_id, current_user.id)
 
     if doc.lines.filter_by(box_id=box.id).first():
         flash(f"Короб {box.box_number} уже в списке перемещения {doc.number}", "warning")
@@ -1015,8 +1003,7 @@ def route_box_add():
         return redirect(url_for("movement.list_documents"))
 
     _create_movement_line(doc, box)
-    if to_warehouse.marketplace == "ozon" and doc.lines.count() >= 30:
-        doc.status = "collected"
+    auto_completed = _auto_complete_if_full(doc)
     try:
         db.session.commit()
     except IntegrityError:
@@ -1035,7 +1022,11 @@ def route_box_add():
     flash(
         f"Короб {box.box_number} добавлен в перемещение {doc.number} на «{to_warehouse.name}». "
         f"Содержимое: {contents}"
-        + (" Перемещение достигло лимита 30 коробов и отмечено как собранное." if doc.status == "collected" else ""),
+        + (
+            f" В перемещении {MOVEMENT_AUTO_COMPLETE_BOXES} коробов — сборка завершена автоматически, "
+            "следующий короб на этот склад попадет в новое перемещение."
+            if auto_completed else ""
+        ),
         "success",
     )
     return redirect(url_for("movement.list_documents"))
@@ -1263,9 +1254,11 @@ def flag_movement_dirty_for_box(box_id):
 @bp.route("/<int:doc_id>/boxes/add", methods=["POST"])
 def add_box(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)
+    redirected_from = None
     if doc.status == "collected":
-        flash("В Ozon-перемещении уже 30 коробов. Следующий короб добавляйте в новый документ.", "warning")
-        return redirect(url_for("movement.detail", doc_id=doc.id))
+        # Документ уже собран полностью — короб уходит в черновик на тот же склад.
+        redirected_from = doc.number
+        doc = _open_draft_for_route(doc.from_warehouse_id, doc.to_warehouse_id, current_user.id)
     editing_after_completion = doc.status not in ("draft", "collected")
     if editing_after_completion and not current_user.is_admin:
         flash("Документ уже завершен — изменить может только администратор", "danger")
@@ -1296,8 +1289,7 @@ def add_box(doc_id):
 
     _create_movement_line(doc, box)
 
-    if doc.to_warehouse.marketplace == "ozon" and doc.lines.count() >= 30:
-        doc.status = "collected"
+    auto_completed = False if editing_after_completion else _auto_complete_if_full(doc)
 
     if doc.synced_to_1c_at is not None:
         # Документ уже выгружен в 1С — новый короб в нем 1С еще не видела,
@@ -1327,9 +1319,20 @@ def add_box(doc_id):
         db.session.rollback()
         flash(f"Короб {box.box_number} уже в этом списке — его только что добавил кто-то другой", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
-    if doc.status == "collected":
+    if auto_completed:
+        next_doc = _open_draft_for_route(doc.from_warehouse_id, doc.to_warehouse_id, current_user.id)
+        db.session.commit()
         flash(
-            f"Короб {box.box_number} добавлен. В перемещении 30 коробов — оно отмечено как собранное.",
+            f"Короб {box.box_number} добавлен. В перемещении {doc.number} {MOVEMENT_AUTO_COMPLETE_BOXES} коробов — "
+            f"сборка завершена автоматически. Продолжайте сканировать в новое перемещение {next_doc.number} "
+            f"на «{doc.to_warehouse.name}».",
+            "success",
+        )
+        return redirect(url_for("movement.detail", doc_id=next_doc.id))
+    elif redirected_from:
+        flash(
+            f"Перемещение {redirected_from} уже собрано — короб {box.box_number} добавлен "
+            f"в перемещение {doc.number} на тот же склад",
             "success",
         )
     elif box.items.count() == 0:
@@ -1484,17 +1487,9 @@ def delete_document(doc_id):
     return redirect(url_for("movement.list_documents"))
 
 
-@bp.route("/<int:doc_id>/complete", methods=["POST"])
-def complete(doc_id):
-    doc = MovementDocument.query.get_or_404(doc_id)
-    if doc.status not in ("draft", "collected"):
-        flash("Документ уже завершен", "danger")
-        return redirect(url_for("movement.detail", doc_id=doc.id))
-
-    if doc.lines.count() == 0:
-        flash("В списке нет коробов", "danger")
-        return redirect(url_for("movement.detail", doc_id=doc.id))
-
+def _complete_document(doc):
+    """Завершение сборки: короба переезжают на склад назначения. Без commit —
+    вызывающий сам фиксирует транзакцию."""
     for line in doc.lines:
         box = line.box
         box.warehouse_id = doc.to_warehouse_id
@@ -1508,6 +1503,50 @@ def complete(doc_id):
     doc.sent_qty_snapshot = doc.total_item_qty()
     doc.status = "completed"
     doc.completed_at = datetime.utcnow()
+
+
+def _auto_complete_if_full(doc):
+    """Завершает сборку черновика, набравшего MOVEMENT_AUTO_COMPLETE_BOXES
+    коробов. Возвращает True, если документ завершен."""
+    if doc.status in ("draft", "collected") and doc.lines.count() >= MOVEMENT_AUTO_COMPLETE_BOXES:
+        _complete_document(doc)
+        return True
+    return False
+
+
+def _open_draft_for_route(from_warehouse_id, to_warehouse_id, created_by_id):
+    """Черновик на маршрут: существующий (кем бы ни был начат) или новый."""
+    doc = (
+        MovementDocument.query.filter_by(
+            from_warehouse_id=from_warehouse_id, to_warehouse_id=to_warehouse_id, status="draft"
+        )
+        .order_by(MovementDocument.created_at.desc())
+        .first()
+    )
+    if doc is None:
+        doc = MovementDocument(
+            number=next_number("movement"),
+            from_warehouse_id=from_warehouse_id,
+            to_warehouse_id=to_warehouse_id,
+            created_by_id=created_by_id,
+        )
+        db.session.add(doc)
+        db.session.flush()
+    return doc
+
+
+@bp.route("/<int:doc_id>/complete", methods=["POST"])
+def complete(doc_id):
+    doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.status not in ("draft", "collected"):
+        flash("Документ уже завершен", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if doc.lines.count() == 0:
+        flash("В списке нет коробов", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    _complete_document(doc)
     db.session.commit()
     flash(f"Перемещение {doc.number} завершено — {doc.lines.count()} короб(ов)", "success")
     return redirect(url_for("movement.detail", doc_id=doc.id))
@@ -2360,6 +2399,62 @@ def _return_single_box_and_accept_rest(doc, line):
     return box_number
 
 
+def _is_identified_surplus_only(mismatches):
+    """Расхождение только излишком (по каждому товару принято не меньше
+    отправленного). Товары тут всегда опознаны: неопознанные позиции и
+    товары без сопоставления _fetch_ozon_accepted_totals отдает ошибкой."""
+    return bool(mismatches) and all(got_qty >= expected_qty for _, expected_qty, got_qty in mismatches)
+
+
+def _accept_with_identified_surplus(doc, expected, totals):
+    """Приемка с излишком (см. чат: "если товар принят излишком — добавить
+    его, если его можно идентифицировать"). Излишек добавляется в короб
+    перемещения (в тот, где этот товар уже есть, иначе в последний) и,
+    как и при ручной приемке, списывается с неразмещенного остатка
+    отправителя; расхождение записывается. receipt_from_act — чтобы
+    «Вернуть в работу» снял добавленное из коробов обратно."""
+    lines = doc.lines.order_by(MovementLine.id.asc()).all()
+    full_expected = dict(expected)
+    for nomenclature_id, got_qty in totals.items():
+        expected_qty = full_expected.setdefault(nomenclature_id, 0)
+        excess = got_qty - expected_qty
+        if excess <= 0 or not lines:
+            continue
+        target = None
+        for line in reversed(lines):
+            target = BoxItem.query.filter_by(box_id=line.box_id, nomenclature_id=nomenclature_id).first()
+            if target is not None:
+                break
+        if target is not None:
+            target.qty += excess
+        else:
+            db.session.add(BoxItem(box_id=lines[-1].box_id, nomenclature_id=nomenclature_id, qty=excess))
+    received = {nid: totals.get(nid, 0) for nid in full_expected}
+    doc.receipt_from_act = True
+    if doc.synced_to_1c_at is not None:
+        doc.composition_changed_at = datetime.utcnow()
+    return _apply_receive(doc, full_expected, received)
+
+
+def _recent_shortages(days=60):
+    """{id товара: [(номер перемещения, недостача)]} по уже принятым за
+    последние дни перемещениям — вдруг излишек здесь это недостача там."""
+    since = datetime.utcnow() - timedelta(days=days)
+    found = {}
+    rows = (
+        db.session.query(MovementDocument.number, MovementReceiptDiscrepancy)
+        .join(MovementReceiptDiscrepancy, MovementReceiptDiscrepancy.document_id == MovementDocument.id)
+        .filter(MovementDocument.received_at >= since)
+        .all()
+    )
+    for number, discrepancy in rows:
+        if discrepancy.received_qty < discrepancy.expected_qty:
+            found.setdefault(discrepancy.nomenclature_id, []).append(
+                (number, discrepancy.expected_qty - discrepancy.received_qty)
+            )
+    return found
+
+
 def _annotate_possible_mixups(manual, names):
     """Подсказка для ручной проверки (см. чат: "возможно, в таком же
     кол-ве товар всплыл или не хватило в другом перемещении — ошибка при
@@ -2436,7 +2531,9 @@ def receive_review_run():
     документов (doc_ids в форме), не более RECEIVE_REVIEW_BATCH_LIMIT за
     вызов: что сошлось полностью по данным Ozon API — принимает как есть;
     где недостача ровно на один короб — вернет этот короб и примет
-    остальное; все прочее (излишки, неоднозначная недостача, ошибки API)
+    остальное; где только излишек опознанного товара — добавит его в короб
+    и примет (если такой же недостачи нет в другом перемещении); все
+    прочее (недостача вместе с излишком, неоднозначная недостача, ошибки API)
     — в список на ручную проверку, с подсказкой при похожем расхождении в
     другом перемещении (см. _annotate_possible_mixups)."""
     if not current_user.is_admin:
@@ -2459,6 +2556,8 @@ def receive_review_run():
     auto_accepted = []
     box_returned = []
     manual = []
+    surplus_candidates = []
+    surplus_accepted = []
     processed = 0
     for doc in batch:
         # Бюджет времени не применяется к первому документу — иначе при
@@ -2482,23 +2581,62 @@ def receive_review_run():
             _apply_receive(doc, expected, expected)
             auto_accepted.append(doc)
             continue
+        all_rows = [
+            (nid, expected.get(nid, 0), totals.get(nid, 0)) for nid in set(expected) | set(totals)
+        ]
+        if _is_identified_surplus_only(mismatches):
+            # Решаем после всей пачки: если такой же недостачей отозвалось
+            # другое перемещение — это не излишек, а ошибка при отправке.
+            surplus_candidates.append(
+                {"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows,
+                 "expected": expected, "totals": totals}
+            )
+            continue
         missing_line = _find_single_missing_box(doc, mismatches)
         if missing_line is not None:
             box_number = _return_single_box_and_accept_rest(doc, missing_line)
             box_returned.append((doc, box_number))
             continue
-        manual.append({"doc": doc, "reason": None, "mismatches": mismatches})
+        manual.append({"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows})
 
     remaining_docs = batch[processed:] + not_yet_selected_tail
 
-    nomenclature_ids = {nid for entry in manual for nid, _, _ in entry["mismatches"]}
-    names = {n.id: n.name for n in Nomenclature.query.filter(Nomenclature.id.in_(nomenclature_ids)).all()}
-    _annotate_possible_mixups(manual, names)
+    nomenclature_ids = {
+        nid for entry in manual + surplus_candidates for nid, _, _ in entry.get("rows", entry["mismatches"])
+    }
+    noms = {n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(nomenclature_ids)).all()}
+    names = {nid: n.name for nid, n in noms.items()}
+
+    combined = manual + surplus_candidates
+    _annotate_possible_mixups(combined, names)
+    recent_shortages = _recent_shortages() if surplus_candidates else {}
+    for entry in surplus_candidates:
+        for nid, expected_qty, got_qty in entry["mismatches"]:
+            excess = got_qty - expected_qty
+            for number, shortage in recent_shortages.get(nid, []):
+                if abs(shortage - excess) < 1e-6 and number != entry["doc"].number:
+                    entry.setdefault("hints", []).append(
+                        f"Излишек «{names.get(nid, nid)}» {excess:g} шт. совпадает с недостачей в уже "
+                        f"принятом перемещении {number} — возможно, товар уехал не в ту поставку."
+                    )
+        if entry.get("hints"):
+            entry["reason"] = "Излишек похож на ошибку при отправке — проверьте вручную"
+            manual.append(entry)
+            continue
+        _accept_with_identified_surplus(entry["doc"], entry["expected"], entry["totals"])
+        surplus_accepted.append(entry)
+
+    for entry in manual + surplus_accepted:
+        entry["diff_rows"] = sorted(
+            ((noms[nid], exp, got) for nid, exp, got in entry.get("rows", []) if nid in noms),
+            key=lambda r: r[0].name,
+        )
 
     return render_template(
         "movement/receive_review_result.html",
         auto_accepted=auto_accepted,
         box_returned=box_returned,
+        surplus_accepted=surplus_accepted,
         manual=manual,
         names=names,
         remaining=len(remaining_docs),

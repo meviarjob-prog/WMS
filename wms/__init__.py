@@ -590,6 +590,8 @@ def create_app(config_class=Config):
     # как есть, чтобы время в списках документов совпадало с реальным
     # часовым поясом склада.
     app.jinja_env.filters["msk"] = to_moscow
+    # Количество без лишнего «.0»: 12.0 -> 12, 1.5 -> 1.5.
+    app.jinja_env.filters["qty"] = lambda v: f"{float(v or 0):g}"
 
     if app.config.get("BEHIND_PROXY"):
         # За nginx: доверяем X-Forwarded-For/-Proto/-Host от ровно одного

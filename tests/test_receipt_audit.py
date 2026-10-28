@@ -129,13 +129,28 @@ def test_shortage_with_missing_box_returns_it_and_trims_other(db, client_logged_
     assert doc.lines.count() == 2
 
 
-def test_surplus_goes_to_manual_and_is_not_applied(db, client_logged_in):
+def test_identified_surplus_is_applied_and_added_to_box(db, client_logged_in):
     sender, ozon, (hat, sweater) = _setup_world()
     doc, boxes = _make_doc("AU-3", sender, ozon, [{hat: 10}])
     html = _check(client_logged_in, [(_report([(boxes[0][1], hat, 10, 12)]), "x.xlsx")]).get_data(as_text=True)
-    assert "Ручная проверка: 1" in html and "Принято больше отправленного" in html
-    assert 'name="plan"' not in html     # применять нечего
+    assert "Исправим автоматически: 1" in html and "Принять излишек и добавить в короб" in html
+    assert "table-warning" in html and "+2" in html
+
+    client_logged_in.post("/movement-audit/apply", data={"plan": json.dumps(_plan(html))})
+    doc = MovementDocument.query.get(doc.id)
+    assert doc.received_at is not None
+    assert BoxItem.query.filter_by(box_id=boxes[0][0].id).first().qty == 12
+
+
+def test_surplus_cannot_be_raised_by_editing_plan(db, client_logged_in):
+    sender, ozon, (hat, sweater) = _setup_world()
+    doc, boxes = _make_doc("AU-3B", sender, ozon, [{hat: 10}])
+    html = _check(client_logged_in, [(_report([(boxes[0][1], hat, 10, 12)]), "x.xlsx")]).get_data(as_text=True)
+    plan = _plan(html)
+    plan[0]["payload"][boxes[0][0].box_number][str(hat.id)] = 50
+    client_logged_in.post("/movement-audit/apply", data={"plan": json.dumps(plan)})
     assert MovementDocument.query.get(doc.id).received_at is None
+    assert BoxItem.query.filter_by(box_id=boxes[0][0].id).first().qty == 10
 
 
 def test_shortage_here_and_same_item_surplus_elsewhere_is_manual_for_both(db, client_logged_in):

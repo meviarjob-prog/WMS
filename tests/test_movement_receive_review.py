@@ -168,8 +168,8 @@ def test_ambiguous_shortage_goes_to_manual(mock_orders, mock_items, db, client_l
     html = resp.get_data(as_text=True)
     assert "Требуется ручная проверка" in html
     assert "PER-RV0003" in html
-    assert "отправлено 10" in html
-    assert "по Ozon принято 7" in html
+    assert '<td class="text-end">10</td>' in html
+    assert '<td class="text-end">7</td>' in html
 
     db.session.refresh(doc)
     assert doc.received_at is None
@@ -460,3 +460,83 @@ def test_uses_short_timeout_and_retries_not_ozon_api_defaults(mock_orders, mock_
     _, kwargs = mock_items.call_args
     assert kwargs["timeout"] == RECEIVE_REVIEW_CALL_TIMEOUT
     assert kwargs["max_retries"] == RECEIVE_REVIEW_CALL_MAX_RETRIES
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_identified_surplus_is_accepted_and_added_to_box(mock_orders, mock_items, db, client_logged_in):
+    from wms.models import MovementReceiptDiscrepancy, UnplacedStock
+
+    sender, dest = _warehouses(21)
+    n1 = _nomenclature(21, name="Шапка")
+    n2 = _nomenclature(22, name="Шарф")
+    db.session.add_all([
+        UnplacedStock(warehouse_id=sender.id, nomenclature_id=n1.id, qty=10),
+        UnplacedStock(warehouse_id=sender.id, nomenclature_id=n2.id, qty=10),
+    ])
+    db.session.commit()
+    doc, boxes = _make_doc("PER-RV0021", "20000021", sender, dest, [[(n1, 10)], [(n1, 4)]])
+    mock_orders.return_value = [_order("20000021", 721)]
+    # Шапок на 2 больше, плюс 3 шарфа, которых в перемещении не было вовсе.
+    mock_items.return_value = _act_items({n1.barcode: 16, n2.barcode: 3})
+
+    resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
+    html = resp.get_data(as_text=True)
+    assert "Принято с излишком — излишек добавлен в короб (1)" in html
+    assert "Требуется ручная проверка (0)" in html
+    assert "table-warning" in html and "+2" in html and "+3" in html
+
+    db.session.refresh(doc)
+    assert doc.received_at is not None and doc.receipt_from_act
+    assert doc.received_qty_snapshot == 19 and doc.sent_qty_snapshot == 14
+    # Излишек шапок — в короб, где они уже есть (последний), шарфы — в последний короб.
+    assert BoxItem.query.filter_by(box_id=boxes[1].id, nomenclature_id=n1.id).one().qty == 6
+    assert BoxItem.query.filter_by(box_id=boxes[1].id, nomenclature_id=n2.id).one().qty == 3
+    assert BoxItem.query.filter_by(box_id=boxes[0].id, nomenclature_id=n1.id).one().qty == 10
+    # Излишек взялся с остатка отправителя.
+    assert UnplacedStock.query.filter_by(warehouse_id=sender.id, nomenclature_id=n1.id).one().qty == 8
+    assert UnplacedStock.query.filter_by(warehouse_id=sender.id, nomenclature_id=n2.id).one().qty == 7
+    found = {(d.nomenclature_id, d.expected_qty, d.received_qty) for d in MovementReceiptDiscrepancy.query.filter_by(document_id=doc.id)}
+    assert found == {(n1.id, 14, 16), (n2.id, 0, 3)}
+
+    # «Вернуть в работу» снимает добавленное обратно.
+    client_logged_in.post(f"/movement/{doc.id}/unreceive")
+    db.session.expire_all()
+    assert BoxItem.query.filter_by(box_id=boxes[1].id, nomenclature_id=n1.id).one().qty == 4
+    assert BoxItem.query.filter_by(box_id=boxes[1].id, nomenclature_id=n2.id).first() is None
+    assert UnplacedStock.query.filter_by(warehouse_id=sender.id, nomenclature_id=n1.id).one().qty == 10
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_unidentified_surplus_goes_to_manual(mock_orders, mock_items, db, client_logged_in):
+    sender, dest = _warehouses(23)
+    n1 = _nomenclature(23)
+    doc, _ = _make_doc("PER-RV0023", "20000023", sender, dest, [[(n1, 10)]])
+    mock_orders.return_value = [_order("20000023", 723)]
+    mock_items.return_value = _act_items({n1.barcode: 10, "4600000099999": 2})
+
+    html = client_logged_in.post(
+        "/movement/receive-review/run", data={"doc_ids": [str(doc.id)]}
+    ).get_data(as_text=True)
+    assert "Требуется ручная проверка (1)" in html
+    db.session.refresh(doc)
+    assert doc.received_at is None
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_manual_check_shows_quantities_in_columns_and_highlights_diff(mock_orders, mock_items, db, client_logged_in):
+    sender, dest = _warehouses(24)
+    n1 = _nomenclature(24, name="Носки")
+    n2 = _nomenclature(25, name="Варежки")
+    doc, _ = _make_doc("PER-RV0024", "20000024", sender, dest, [[(n1, 10), (n2, 5)]])
+    mock_orders.return_value = [_order("20000024", 724)]
+    mock_items.return_value = _act_items({n1.barcode: 7, n2.barcode: 5})
+
+    html = client_logged_in.post(
+        "/movement/receive-review/run", data={"doc_ids": [str(doc.id)]}
+    ).get_data(as_text=True)
+    assert "<th class=\"text-end\">Отправлено</th>" in html and "<th class=\"text-end\">Принято</th>" in html
+    assert "table-danger" in html and ">-3<" in html
+    assert "Варежки" in html     # совпавшие позиции тоже видны, без подсветки
