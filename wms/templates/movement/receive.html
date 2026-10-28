@@ -68,12 +68,18 @@
       {% endfor %}
       {% for row in extra_rows or [] %}
         <tr class="table-warning">
-          <td>{{ row.nomenclature.name }} <span class="text-muted">({{ row.nomenclature.sku }})</span><div class="small text-muted">не отправляли — Ozon принял сверх поставки</div></td>
+          <td>{{ row.nomenclature.name }} <span class="text-muted">({{ row.nomenclature.sku }})</span>
+            <span class="badge bg-warning text-dark">не было в заявке</span>
+            <div class="small text-muted">не отправляли — Ozon принял сверх поставки; запишется излишком</div>
+            <input type="hidden" name="extra_nomenclature_id" value="{{ row.nomenclature.id }}"></td>
           <td class="text-nowrap">{{ row.nomenclature.barcode }}</td>
           <td>0 {{ row.nomenclature.unit }}</td>
           <td class="text-end">{{ row.ozon_qty | qty }}</td>
           <td class="text-end fw-bold">+{{ row.ozon_qty | qty }}</td>
-          <td class="text-muted small">—</td>
+          <td>
+            <input type="number" step="0.001" min="0" name="qty_{{ row.nomenclature.id }}"
+                   class="form-control form-control-sm" value="{{ row.ozon_qty | qty }}">
+          </td>
         </tr>
       {% endfor %}
       </tbody>

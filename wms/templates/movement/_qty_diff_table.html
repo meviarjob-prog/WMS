@@ -9,7 +9,7 @@
     {% for nom, sent, got in diff_rows %}
       {% set delta = got - sent %}
       <tr class="{{ 'table-danger' if delta < 0 else ('table-warning' if delta > 0 else '') }}">
-        <td>{{ nom.name }}</td>
+        <td>{{ nom.name }}{% if not sent and got %} <span class="badge bg-warning text-dark">не было в заявке</span>{% endif %}</td>
         <td class="text-muted">{{ nom.barcode }}</td>
         <td class="text-end">{{ sent | qty }}</td>
         <td class="text-end">{{ got | qty }}</td>

@@ -191,7 +191,7 @@
       {% if d.excess_qty() %}
       <tr>
         <td>{{ d.nomenclature.barcode or '—' }}</td>
-        <td>{{ d.nomenclature.name }}</td>
+        <td>{{ d.nomenclature.name }}{% if not d.expected_qty %} <span class="badge bg-warning text-dark">не было в заявке</span>{% endif %}</td>
         <td>{{ d.expected_qty | qty }}</td>
         <td>{{ d.received_qty | qty }}</td>
         <td class="text-info-emphasis fw-bold">+{{ d.excess_qty() | qty }}</td>

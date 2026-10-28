@@ -283,3 +283,43 @@ def test_identified_surplus_only_is_accepted_directly(mock_orders, mock_items, d
     assert "излишек 2 шт." in html
     db.session.refresh(doc)
     assert doc.received_at is not None and doc.received_qty_snapshot == 17
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_item_not_in_request_is_recorded_as_surplus(mock_orders, mock_items, db, client_logged_in):
+    """Товар, которого не было в заявке, но Ozon его принял: в форме — строка
+    с количеством по Ozon; при подтверждении записывается излишком и виден в
+    карточке перемещения с пометкой «не было в заявке»."""
+    from wms.models import MovementReceiptDiscrepancy, Nomenclature
+
+    doc, sender, dest, n1, n2, box = _setup()
+    stranger = Nomenclature(sku="OA-9", barcode="3000000000097", name="Варежки", unit="шт")
+    db.session.add(stranger)
+    db.session.commit()
+    mock_orders.return_value = [_order("REQ-1")]
+    mock_items.return_value = (
+        [
+            {"type": "ACCEPTANCE", "barcode": n1.barcode, "offer_id": "", "sku": 1, "name": "",
+             "declared_quantity": 10, "approved_quantity": 8, "fact_quantity": 8},
+            {"type": "ACCEPTANCE", "barcode": n2.barcode, "offer_id": "", "sku": 1, "name": "",
+             "declared_quantity": 5, "approved_quantity": 5, "fact_quantity": 5},
+            {"type": "ACCEPTANCE", "barcode": stranger.barcode, "offer_id": "", "sku": 1, "name": "",
+             "declared_quantity": 0, "approved_quantity": 2, "fact_quantity": 2},
+        ],
+        0,
+    )
+    html = client_logged_in.post(f"/movement/{doc.id}/receive/ozon-api", follow_redirects=True).get_data(as_text=True)
+    assert "не было в заявке" in html
+    assert f'name="extra_nomenclature_id" value="{stranger.id}"' in html
+    assert f'name="qty_{stranger.id}"' in html
+
+    client_logged_in.post(f"/movement/{doc.id}/receive", data={
+        f"qty_{n1.id}": "8", f"qty_{n2.id}": "5",
+        "extra_nomenclature_id": str(stranger.id), f"qty_{stranger.id}": "2",
+    })
+    found = MovementReceiptDiscrepancy.query.filter_by(document_id=doc.id, nomenclature_id=stranger.id).one()
+    assert (found.expected_qty, found.received_qty) == (0, 2)
+    detail = client_logged_in.get(f"/movement/{doc.id}").get_data(as_text=True)
+    assert "Излишек — принято больше, чем отправлено" in detail and "Варежки" in detail
+    assert "не было в заявке" in detail
