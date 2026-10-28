@@ -205,7 +205,7 @@ User=$APP_USER
 Group=$APP_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$ENV_FILE
-ExecStart=$APP_DIR/.venv/bin/gunicorn --workers 2 --bind 127.0.0.1:8000 --timeout 60 wsgi:app
+ExecStart=$APP_DIR/.venv/bin/gunicorn --workers 2 --bind 127.0.0.1:8000 --timeout 120 wsgi:app
 Restart=always
 RestartSec=3
 
@@ -229,6 +229,13 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        # Дефолтный nginx proxy_read_timeout — 60с, столько же (раньше) было
+        # у gunicorn --timeout — страницы с живыми запросами к внешним API
+        # (массовая проверка приемки Ozon, см. чат про 504) могли вплотную
+        # подходить к этой границе. Держим запас над таймаутом gunicorn выше.
+        proxy_connect_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
     }
 }
 EOF
