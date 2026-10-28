@@ -35,6 +35,10 @@ ARTICLE_KEY_PREFIX = "\x00art:"
 # её принял, но мы не можем сказать, что это. Считаем отдельно, в состав
 # коробов не вносим.
 UNIDENTIFIED_KEY = "\x00unidentified"
+# «Заявлено» (Ozon, отчёт по ГМ): сколько мы заявили по грузоместу — нужно,
+# чтобы сопоставить ГМ с нашим коробом по составу, если сопоставление при
+# выгрузке не запоминалось.
+_DECLARED_HEADERS = ("заявлено (шт.)", "заявлено")
 _QTY_HEADERS = (
     "кол-во", "количество", "кол во", "принято", "принято на склад (шт.)", "принято на склад", "qty",
 )
@@ -159,12 +163,13 @@ def _iter_sheet_rows_openpyxl(data, wanted):
         yield ws.iter_rows(values_only=True)
 
 
-def _parse_rows(rows, wanted, prefer_article=False):
+def _parse_rows(rows, wanted, prefer_article=False, collect_declared=False):
     """rows — итератор строк одного листа. None, если шапки нет."""
-    box_col = bc_col = qty_col = art_col = None
+    box_col = bc_col = qty_col = art_col = decl_col = None
     header_found = False
     header_row = 0
     boxes = OrderedDict()
+    declared = OrderedDict()
     total = 0
     for i, row in enumerate(rows):
         if not header_found:
@@ -179,7 +184,9 @@ def _parse_rows(rows, wanted, prefer_article=False):
                 header_row = i
                 if prefer_article:
                     art_col = _find_column(headers, _ARTICLE_HEADERS)
-                wanted.update(c for c in (box_col, bc_col, qty_col, art_col) if c is not None)
+                if collect_declared:
+                    decl_col = _find_column(headers, _DECLARED_HEADERS)
+                wanted.update(c for c in (box_col, bc_col, qty_col, art_col, decl_col) if c is not None)
             continue
         if len(row) <= max(box_col, bc_col):
             continue
@@ -197,6 +204,19 @@ def _parse_rows(rows, wanted, prefer_article=False):
             if qty_col is None or qty_col >= len(row) or row[qty_col] in (None, ""):
                 continue
             barcode = UNIDENTIFIED_KEY
+        key = f"{ARTICLE_KEY_PREFIX}{article}\x1f{barcode}" if article else barcode
+        if barcode == UNIDENTIFIED_KEY:
+            key = UNIDENTIFIED_KEY
+        # «Заявлено» собираем до того, как отбросим строки с нулевым принятым:
+        # позиция, которую не приняли, по-прежнему часть заявленного состава ГМ.
+        if decl_col is not None and decl_col < len(row) and row[decl_col] not in (None, ""):
+            try:
+                declared_qty = float(row[decl_col])
+            except (TypeError, ValueError):
+                declared_qty = 0
+            if declared_qty > 0:
+                d_items = declared.setdefault(box, {})
+                d_items[key] = d_items.get(key, 0) + declared_qty
         qty = 1.0
         if qty_col is not None and qty_col < len(row) and row[qty_col] not in (None, ""):
             try:
@@ -205,9 +225,6 @@ def _parse_rows(rows, wanted, prefer_article=False):
                 continue
         if qty <= 0:
             continue
-        key = f"{ARTICLE_KEY_PREFIX}{article}\x1f{barcode}" if article else barcode
-        if barcode == UNIDENTIFIED_KEY:
-            key = UNIDENTIFIED_KEY
         items = boxes.setdefault(box, {})
         items[key] = items.get(key, 0) + qty
         total += qty
@@ -215,7 +232,7 @@ def _parse_rows(rows, wanted, prefer_article=False):
         return None
     if not boxes:
         raise ActParseError("В акте не найдено ни одной строки с коробом и баркодом")
-    return boxes, total
+    return boxes, total, declared
 
 
 def unwrap_archive(data):
@@ -239,8 +256,9 @@ def unwrap_archive(data):
     return zf.read(xlsx[0])
 
 
-def parse_act(data, prefer_article=False):
-    """Возвращает (boxes, total_qty): boxes = OrderedDict {ключ: {баркод: qty}}.
+def parse_act(data, prefer_article=False, with_declared=False):
+    """Возвращает (boxes, total_qty): boxes = OrderedDict {ключ: {баркод: qty}};
+    с with_declared=True — ещё и declared {ключ: {позиция: заявлено}}.
 
     Шапка ищется среди первых 40 строк (в акте WB она двухстрочная — над
     ней группа «Фактически принято»): нужна строка, где есть и колонка
@@ -261,9 +279,9 @@ def parse_act(data, prefer_article=False):
             wanted = set()
             for rows in reader(data, wanted):
                 wanted.clear()
-                result = _parse_rows(rows, wanted, prefer_article)
+                result = _parse_rows(rows, wanted, prefer_article, with_declared)
                 if result is not None:
-                    return result
+                    return result if with_declared else result[:2]
             break  # файл прочитан, но шапки нет ни на одном листе
         except ActParseError:
             raise

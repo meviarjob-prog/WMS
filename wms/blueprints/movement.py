@@ -1758,12 +1758,15 @@ def _nomenclature_for_act_item(key):
     return _nomenclature_for_act_barcode(barcode), article
 
 
-def _reconcile_with_act(doc, act_boxes):
+def _reconcile_with_act(doc, act_boxes, key_to_box=None):
     """Сверка акта приёмки с составом коробов перемещения. Ничего не
     записывает. Ключ короба в акте: у WB — наш номер короба, у Ozon —
     штрихкод грузоместа (сопоставление запомнено при выгрузке состава ГМ,
     см. MovementCargoPlace). Возвращает словарь для шаблона и payload
-    {номер_короба: {id_товара: принятое_кол-во}} для подтверждения."""
+    {номер_короба: {id_товара: принятое_кол-во}} для подтверждения.
+    key_to_box — готовое сопоставление ГМ → номер короба (если задано, вместо
+    запомненного в БД; так проверка непринятых подставляет сопоставление,
+    выведенное по составу)."""
     is_ozon = doc.to_warehouse.marketplace == "ozon"
     result = {
         "boxes": [], "missing": [], "unknown_keys": [], "unknown_barcodes": [],
@@ -1771,8 +1774,8 @@ def _reconcile_with_act(doc, act_boxes):
         "unidentified": [], "ignored_qty": 0, "matched_qty": 0, "unidentified_qty": 0,
         "sent_qty": sum(_expected_qty_by_nomenclature(doc).values()),
     }
-    key_to_box = {}
-    if is_ozon:
+    if is_ozon and key_to_box is None:
+        key_to_box = {}
         places = MovementCargoPlace.query.filter_by(document_id=doc.id).all()
         if not places:
             result["error"] = (
@@ -1781,6 +1784,7 @@ def _reconcile_with_act(doc, act_boxes):
             )
             return result
         key_to_box = {p.cargo_barcode: p.box_number for p in places}
+    key_to_box = key_to_box or {}
 
     act_by_box = {}
     barcode_cache = {}

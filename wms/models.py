@@ -1080,6 +1080,9 @@ class MovementDocument(db.Model):
             return self.received_qty_snapshot
         return self.total_item_qty() + sum(d.excess_qty() for d in self.discrepancies)
 
+    def cargo_places_saved(self):
+        return MovementCargoPlace.query.filter_by(document_id=self.id).count() > 0
+
     def total_sent_qty(self):
         """Сколько отправлено. До приемки — живое содержимое короба (его
         можно поправить, например если заметили ошибку упаковки раньше, чем

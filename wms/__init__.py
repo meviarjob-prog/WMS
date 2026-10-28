@@ -611,6 +611,7 @@ def create_app(config_class=Config):
     from .blueprints.boxes import bp as boxes_bp
     from .blueprints.labels import bp as labels_bp
     from .blueprints.reports import bp as reports_bp
+    from .blueprints.receipt_audit import bp as receipt_audit_bp
     from .blueprints.production import bp as production_bp
     from .blueprints.api import bp as api_bp
     from .blueprints.shipment_plan import bp as shipment_plan_bp
@@ -634,6 +635,7 @@ def create_app(config_class=Config):
     app.register_blueprint(labels_bp, url_prefix="/labels")
     app.register_blueprint(reports_bp, url_prefix="/reports")
     app.register_blueprint(production_bp, url_prefix="/production")
+    app.register_blueprint(receipt_audit_bp, url_prefix="/movement-audit")
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(shipment_plan_bp, url_prefix="/shipment-plan")
     app.register_blueprint(production_orders_bp, url_prefix="/production-orders")
