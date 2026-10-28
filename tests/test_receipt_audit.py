@@ -211,7 +211,7 @@ def test_only_admin_can_open(db, client):
 
 
 def test_list_shows_button_for_admin(db, client_logged_in):
-    assert "Проверка непринятых" in client_logged_in.get("/movement/").get_data(as_text=True)
+    assert "Проверка по отчётам (файлы)" in client_logged_in.get("/movement/").get_data(as_text=True)
 
 
 def _plan_html(client, files):
