@@ -1006,8 +1006,8 @@ def _pending_sorting_by_nomenclature(warehouse_ids):
     не поступивший товар. Для строк из накладной учитываем только позиции с
     отметкой ``confirmed``; добавленные кладовщиком вручную строки уже сами
     являются фактом приемки. На разбраковке вычитаем выделенный брак.
-    Упакованные в короб строки уже видны через BoxItem и второй раз не
-    считаются."""
+    Упакованные в короб строки уже видны через BoxItem, а завершенные по
+    отдельности — через UnplacedStock, и второй раз не считаются."""
     if not warehouse_ids:
         return {}
     rows = (
@@ -1021,7 +1021,19 @@ def _pending_sorting_by_nomenclature(warehouse_ids):
             ReceivingDocument.status.in_(("recounting", "sorting")),
             ReceivingDocument.invoice_file_name.isnot(None),
             ReceivingLine.box_id.is_(None),
-            or_(ReceivingLine.expected_qty.is_(None), ReceivingLine.confirmed.is_(True)),
+            # Строка, завершенная по отдельности («Готово» на разбраковке),
+            # уже зачислена в UnplacedStock — второй раз не считаем, хотя
+            # документ целиком еще на разбраковке.
+            ReceivingLine.line_completed_at.is_(None),
+            # На пересчете — только подтвержденное (заявленное поставщиком
+            # еще не пересчитано). На разбраковке пересчет уже закончен и
+            # количество окончательное — строка, которую на пересчете не
+            # правили (совпала с накладной), тоже фактически принята.
+            or_(
+                ReceivingDocument.status == "sorting",
+                ReceivingLine.expected_qty.is_(None),
+                ReceivingLine.confirmed.is_(True),
+            ),
         )
         .group_by(ReceivingLine.nomenclature_id)
         .all()
