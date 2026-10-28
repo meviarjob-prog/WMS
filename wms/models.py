@@ -1308,6 +1308,26 @@ class WorkEvent(db.Model):
     user = db.relationship("User")
 
 
+class BackgroundJob(db.Model):
+    """Долгая операция, выполняемая в фоне (например, массовая проверка
+    приемки через Ozon API): запрос кнопки возвращается сразу, а страница
+    следит за ходом — иначе веб-сервер обрывал запрос с 504."""
+
+    __tablename__ = "background_jobs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(30), nullable=False, index=True)
+    status = db.Column(db.String(10), nullable=False, default="running")  # running | done | failed
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    progress_done = db.Column(db.Integer, nullable=False, default=0)
+    progress_total = db.Column(db.Integer, nullable=False, default=0)
+    params = db.Column(db.Text, nullable=True)
+    result = db.Column(db.Text, nullable=True)
+    error = db.Column(db.Text, nullable=True)
+
+
 class WorkPlan(db.Model):
     """План выработки сотрудника на день. plan_date пустая — план по
     умолчанию (на любой день), заполненная — на конкретную дату (перекрывает

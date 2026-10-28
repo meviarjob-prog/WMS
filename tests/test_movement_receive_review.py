@@ -540,3 +540,40 @@ def test_manual_check_shows_quantities_in_columns_and_highlights_diff(mock_order
     assert "<th class=\"text-end\">Отправлено</th>" in html and "<th class=\"text-end\">Принято</th>" in html
     assert "table-danger" in html and ">-3<" in html
     assert "Варежки" in html     # совпавшие позиции тоже видны, без подсветки
+
+
+@patch("wms.blueprints.movement.threading.Thread")
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_server_mode_runs_in_background_and_shows_result(mock_orders, mock_items, mock_thread, app, db, client_logged_in):
+    """На сервере проверка идет в фоне (иначе 504): кнопка сразу отдает
+    страницу хода проверки, результат открывается по готовности."""
+    from wms.models import BackgroundJob
+
+    sender, dest = _warehouses(31)
+    n1 = _nomenclature(31)
+    doc, _ = _make_doc("PER-RV0031", "20000031", sender, dest, [[(n1, 10)]])
+    mock_orders.return_value = [_order("20000031", 731)]
+    mock_items.return_value = _act_items({n1.barcode: 8})
+
+    app.config["RECEIVE_REVIEW_INLINE"] = False
+    try:
+        resp = client_logged_in.post("/movement/receive-review/run", data={"doc_ids": [str(doc.id)]})
+    finally:
+        app.config.pop("RECEIVE_REVIEW_INLINE")
+    assert resp.status_code == 302 and "/receive-review/job/" in resp.headers["Location"]
+    job = BackgroundJob.query.one()
+    assert job.status == "running"
+    assert "Идёт проверка" in client_logged_in.get(resp.headers["Location"]).get_data(as_text=True)
+
+    # Выполняем то, что сделал бы поток.
+    target = mock_thread.call_args.kwargs["target"]
+    target(*mock_thread.call_args.kwargs["args"])
+
+    db.session.expire_all()
+    job = BackgroundJob.query.one()
+    assert job.status == "done" and job.progress_done == 1
+    status = client_logged_in.get(f"/movement/receive-review/job/{job.id}/status").get_json()
+    assert status == {"status": "done", "done": 1, "total": 1}
+    html = client_logged_in.get(resp.headers["Location"]).get_data(as_text=True)
+    assert "Требуется ручная проверка (1)" in html and "PER-RV0031" in html and ">-2<" in html

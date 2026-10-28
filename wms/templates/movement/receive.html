@@ -48,17 +48,32 @@
 <form method="post" action="{{ url_for('movement.receive', doc_id=doc.id) }}">
   <div class="card p-3">
     <table class="table table-sm align-middle" id="receiveTable">
-      <thead><tr><th>Товар</th><th>Штрихкод</th><th>Отправлено</th><th style="width:160px">Принято по факту</th></tr></thead>
+      <thead><tr><th>Товар</th><th>Штрихкод</th><th>Отправлено</th>{% if show_ozon %}<th class="text-end">По данным Ozon</th><th class="text-end">Разница</th>{% endif %}<th style="width:160px">Принято по факту</th></tr></thead>
       <tbody>
       {% for row in rows %}
-        <tr>
+        {% set delta = (row.ozon_qty - row.expected_qty) if show_ozon else 0 %}
+        <tr class="{{ 'table-danger' if delta < 0 else ('table-warning' if delta > 0 else '') }}">
           <td>{{ row.nomenclature.name }} <span class="text-muted">({{ row.nomenclature.sku }})</span></td>
           <td class="text-nowrap">{{ row.nomenclature.barcode }}{% if row.nomenclature.barcode2 %}<br><span class="text-muted small">{{ row.nomenclature.barcode2 }}</span>{% endif %}</td>
-          <td>{{ row.expected_qty | round(3) }} {{ row.nomenclature.unit }}</td>
+          <td>{{ row.expected_qty | qty }} {{ row.nomenclature.unit }}</td>
+          {% if show_ozon %}
+          <td class="text-end">{{ row.ozon_qty | qty }}</td>
+          <td class="text-end fw-bold">{% if delta > 0 %}+{{ delta | qty }}{% elif delta < 0 %}{{ delta | qty }}{% else %}<span class="text-muted fw-normal">0</span>{% endif %}</td>
+          {% endif %}
           <td>
             <input type="number" step="0.001" min="0" name="qty_{{ row.nomenclature.id }}"
-                   class="form-control form-control-sm" value="{{ row.received_qty | round(3) }}">
+                   class="form-control form-control-sm" value="{{ row.received_qty | qty }}">
           </td>
+        </tr>
+      {% endfor %}
+      {% for row in extra_rows or [] %}
+        <tr class="table-warning">
+          <td>{{ row.nomenclature.name }} <span class="text-muted">({{ row.nomenclature.sku }})</span><div class="small text-muted">не отправляли — Ozon принял сверх поставки</div></td>
+          <td class="text-nowrap">{{ row.nomenclature.barcode }}</td>
+          <td>0 {{ row.nomenclature.unit }}</td>
+          <td class="text-end">{{ row.ozon_qty | qty }}</td>
+          <td class="text-end fw-bold">+{{ row.ozon_qty | qty }}</td>
+          <td class="text-muted small">—</td>
         </tr>
       {% endfor %}
       </tbody>

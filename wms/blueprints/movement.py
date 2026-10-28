@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from datetime import date, datetime, timedelta
 
@@ -10,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from ..extensions import db
 from ..models import (
     AppSetting,
+    BackgroundJob,
     Box,
     BoxItem,
     Cell,
@@ -1984,7 +1986,7 @@ def receive_act(doc_id):
     )
 
 
-def _render_receive_form(doc, expected, received_by_nomenclature=None):
+def _render_receive_form(doc, expected, received_by_nomenclature=None, ozon_totals=None):
     """Строит строки и рендерит форму ручной приемки (movement/receive.html).
     "Отправлено" — всегда expected; значение по умолчанию в поле "Принято
     по факту" — из received_by_nomenclature, если передано (например,
@@ -1993,8 +1995,9 @@ def _render_receive_form(doc, expected, received_by_nomenclature=None):
     чтобы не перебивать совпавшие позиции руками), иначе как раньше равно
     expected (обычная приемка без расхождений)."""
     received_by_nomenclature = received_by_nomenclature or {}
+    extra_ids = set(ozon_totals or {}) - set(expected)
     nomenclature_by_id = {
-        n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(expected.keys())).all()
+        n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(set(expected) | extra_ids)).all()
     }
     rows = sorted(
         (
@@ -2002,13 +2005,31 @@ def _render_receive_form(doc, expected, received_by_nomenclature=None):
                 "nomenclature": nomenclature_by_id[nid],
                 "expected_qty": qty,
                 "received_qty": received_by_nomenclature.get(nid, qty),
+                "ozon_qty": None if ozon_totals is None else ozon_totals.get(nid, 0),
             }
             for nid, qty in expected.items()
             if nid in nomenclature_by_id
         ),
+        # Расхождения по Ozon — наверх, чтобы не искать их в длинном списке.
+        key=lambda r: (
+            r["ozon_qty"] is None or r["ozon_qty"] == r["expected_qty"],
+            r["nomenclature"].name,
+        ),
+    )
+    # Товар, который Ozon принял, а мы не отправляли — показываем для
+    # сведения (в форме его не принять: в коробах его нет).
+    extra_rows = sorted(
+        (
+            {"nomenclature": nomenclature_by_id[nid], "ozon_qty": ozon_totals[nid]}
+            for nid in extra_ids
+            if nid in nomenclature_by_id and ozon_totals[nid]
+        ),
         key=lambda r: r["nomenclature"].name,
     )
-    return render_template("movement/receive.html", doc=doc, rows=rows)
+    return render_template(
+        "movement/receive.html", doc=doc, rows=rows, extra_rows=extra_rows,
+        show_ozon=ozon_totals is not None,
+    )
 
 
 @bp.route("/<int:doc_id>/receive", methods=["GET", "POST"])
@@ -2279,23 +2300,25 @@ def receive_via_ozon_api(doc_id):
 
     mismatches = _compute_ozon_mismatches(expected, totals)
 
-    if mismatches:
-        names = {
-            n.id: n.name
-            for n in Nomenclature.query.filter(Nomenclature.id.in_([m[0] for m in mismatches])).all()
-        }
-        details = "; ".join(
-            f"{names.get(nid, nid)}: отправлено {exp:g}, по Ozon принято {got:g}"
-            for nid, exp, got in mismatches[:5]
-        )
+    if mismatches and _is_identified_surplus_only(mismatches):
+        _, _, total_received_qty = _accept_with_identified_surplus(doc, expected, totals)
         flash(
-            f"Ozon API показывает расхождение ({details}) — автоприемка умеет принимать только "
-            f"если сошлось полностью (разбивки по коробам у этого метода нет, непонятно, какой "
-            f"короб не доехал). Поля «Принято по факту» ниже уже проставлены по данным Ozon — "
-            f"проверьте и подтвердите приемку, или поправьте вручную.",
+            f"Перемещение {doc.number} принято по данным Ozon API с излишком — {total_received_qty:g} шт., "
+            "излишек добавлен в короб и списан с остатка отправителя.",
+            "success",
+        )
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if mismatches:
+        flash(
+            f"Ozon API показывает расхождение по {len(mismatches)} товар(ам) — они выделены в таблице ниже. "
+            "Автоматически принять нельзя: разбивки по коробам у Ozon API нет, непонятно, какой короб не "
+            "доехал. «Принято по факту» уже проставлено по данным Ozon — проверьте и подтвердите, "
+            "или поправьте вручную.",
             "warning",
         )
-        return _render_receive_form(doc, expected, totals)
+        received = {nid: totals.get(nid, 0) for nid in expected}
+        return _render_receive_form(doc, expected, received, ozon_totals=totals)
 
     _, _, total_received_qty = _apply_receive(doc, expected, expected)
     flash(
@@ -2525,90 +2548,74 @@ def receive_review():
     )
 
 
-@bp.route("/receive-review/run", methods=["POST"])
-def receive_review_run():
-    """Выполняет проверку отмеченных на странице /receive-review
-    документов (doc_ids в форме), не более RECEIVE_REVIEW_BATCH_LIMIT за
-    вызов: что сошлось полностью по данным Ozon API — принимает как есть;
-    где недостача ровно на один короб — вернет этот короб и примет
-    остальное; где только излишек опознанного товара — добавит его в короб
-    и примет (если такой же недостачи нет в другом перемещении); все
-    прочее (недостача вместе с излишком, неоднозначная недостача, ошибки API)
-    — в список на ручную проверку, с подсказкой при похожем расхождении в
-    другом перемещении (см. _annotate_possible_mixups)."""
-    if not current_user.is_admin:
-        flash("Массовая проверка приемки доступна только администратору", "danger")
-        return redirect(url_for("movement.list_documents"))
+RECEIVE_REVIEW_JOB_KIND = "ozon_receive_review"
+# Фоновая проверка, не отметившаяся дольше этого, считается оборвавшейся
+# (перезапуск сервера) — иначе новую нельзя было бы запустить.
+RECEIVE_REVIEW_JOB_STALE_MINUTES = 30
 
-    try:
-        selected_ids = {int(v) for v in request.form.getlist("doc_ids")}
-    except ValueError:
-        selected_ids = set()
-    if not selected_ids:
-        flash("Выберите хотя бы одно перемещение для проверки", "warning")
-        return redirect(url_for("movement.receive_review"))
 
-    selected = [doc for doc in _pending_ozon_receive_documents() if doc.id in selected_ids]
-    batch = selected[:RECEIVE_REVIEW_BATCH_LIMIT]
-    not_yet_selected_tail = selected[RECEIVE_REVIEW_BATCH_LIMIT:]
-
+def _run_receive_review(docs, time_budget=None, on_progress=None):
+    """Ядро массовой проверки (см. receive_review_run). Возвращает
+    сериализуемый результат — его можно и сразу показать, и сохранить для
+    фоновой проверки:
+      auto_accepted: [doc_id], box_returned: [[doc_id, короб]],
+      surplus_accepted / manual: [{doc_id, reason, rows: [[nid, отпр., принято]], hints}],
+      remaining_ids: [doc_id] — не успели проверить (бюджет времени)."""
     start = time.monotonic()
-    auto_accepted = []
-    box_returned = []
-    manual = []
-    surplus_candidates = []
-    surplus_accepted = []
+    auto_accepted, box_returned, manual, surplus_candidates, surplus_accepted = [], [], [], [], []
     processed = 0
-    for doc in batch:
+    for doc in docs:
         # Бюджет времени не применяется к первому документу — иначе при
-        # уже истекшем бюджете (не должно происходить, но на всякий
-        # случай) пачка могла бы не обработать вообще ничего.
-        if processed and time.monotonic() - start > RECEIVE_REVIEW_TIME_BUDGET:
+        # уже истекшем бюджете пачка могла бы не обработать вообще ничего.
+        if time_budget is not None and processed and time.monotonic() - start > time_budget:
             break
         processed += 1
-        expected = _expected_qty_by_nomenclature(doc)
-        if not expected:
-            manual.append({"doc": doc, "reason": "в перемещении нет коробов с товаром", "mismatches": []})
-            continue
-        totals, error = _fetch_ozon_accepted_totals(
-            doc, timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES
-        )
-        if error:
-            manual.append({"doc": doc, "reason": error, "mismatches": []})
-            continue
-        mismatches = _compute_ozon_mismatches(expected, totals)
-        if not mismatches:
-            _apply_receive(doc, expected, expected)
-            auto_accepted.append(doc)
-            continue
-        all_rows = [
-            (nid, expected.get(nid, 0), totals.get(nid, 0)) for nid in set(expected) | set(totals)
-        ]
-        if _is_identified_surplus_only(mismatches):
-            # Решаем после всей пачки: если такой же недостачей отозвалось
-            # другое перемещение — это не излишек, а ошибка при отправке.
-            surplus_candidates.append(
-                {"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows,
-                 "expected": expected, "totals": totals}
+        try:
+            expected = _expected_qty_by_nomenclature(doc)
+            if not expected:
+                manual.append({"doc": doc, "reason": "в перемещении нет коробов с товаром", "mismatches": []})
+                continue
+            totals, error = _fetch_ozon_accepted_totals(
+                doc, timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES
             )
-            continue
-        missing_line = _find_single_missing_box(doc, mismatches)
-        if missing_line is not None:
-            box_number = _return_single_box_and_accept_rest(doc, missing_line)
-            box_returned.append((doc, box_number))
-            continue
-        manual.append({"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows})
+            if error:
+                manual.append({"doc": doc, "reason": error, "mismatches": []})
+                continue
+            mismatches = _compute_ozon_mismatches(expected, totals)
+            if not mismatches:
+                _apply_receive(doc, expected, expected)
+                auto_accepted.append(doc.id)
+                continue
+            all_rows = [
+                (nid, expected.get(nid, 0), totals.get(nid, 0)) for nid in set(expected) | set(totals)
+            ]
+            if _is_identified_surplus_only(mismatches):
+                # Решаем после всей пачки: если такой же недостачей отозвалось
+                # другое перемещение — это не излишек, а ошибка при отправке.
+                surplus_candidates.append(
+                    {"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows,
+                     "expected": expected, "totals": totals}
+                )
+                continue
+            missing_line = _find_single_missing_box(doc, mismatches)
+            if missing_line is not None:
+                box_returned.append([doc.id, _return_single_box_and_accept_rest(doc, missing_line)])
+                continue
+            manual.append({"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows})
+        except Exception as exc:  # noqa: BLE001 — один сбойный документ не должен рушить остальные
+            db.session.rollback()
+            current_app.logger.exception("Проверка приемки Ozon: ошибка на %s", doc.number)
+            manual.append({"doc": doc, "reason": f"ошибка при проверке: {exc}", "mismatches": []})
+        finally:
+            if on_progress is not None:
+                on_progress(processed)
 
-    remaining_docs = batch[processed:] + not_yet_selected_tail
-
-    nomenclature_ids = {
-        nid for entry in manual + surplus_candidates for nid, _, _ in entry.get("rows", entry["mismatches"])
+    names = {
+        n.id: n.name for n in Nomenclature.query.filter(
+            Nomenclature.id.in_({nid for e in manual + surplus_candidates for nid, _, _ in e.get("rows", [])})
+        ).all()
     }
-    noms = {n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(nomenclature_ids)).all()}
-    names = {nid: n.name for nid, n in noms.items()}
-
-    combined = manual + surplus_candidates
-    _annotate_possible_mixups(combined, names)
+    _annotate_possible_mixups(manual + surplus_candidates, names)
     recent_shortages = _recent_shortages() if surplus_candidates else {}
     for entry in surplus_candidates:
         for nid, expected_qty, got_qty in entry["mismatches"]:
@@ -2626,23 +2633,177 @@ def receive_review_run():
         _accept_with_identified_surplus(entry["doc"], entry["expected"], entry["totals"])
         surplus_accepted.append(entry)
 
-    for entry in manual + surplus_accepted:
-        entry["diff_rows"] = sorted(
-            ((noms[nid], exp, got) for nid, exp, got in entry.get("rows", []) if nid in noms),
-            key=lambda r: r[0].name,
-        )
+    def _serialize(entry):
+        return {
+            "doc_id": entry["doc"].id,
+            "reason": entry.get("reason"),
+            "rows": [list(r) for r in entry.get("rows", [])],
+            "hints": entry.get("hints", []),
+        }
 
+    return {
+        "auto_accepted": auto_accepted,
+        "box_returned": box_returned,
+        "surplus_accepted": [_serialize(e) for e in surplus_accepted],
+        "manual": [_serialize(e) for e in manual],
+        "remaining_ids": [doc.id for doc in docs[processed:]],
+    }
+
+
+def _render_receive_review_result(result, extra_remaining_ids=(), job=None):
+    """Показ результата (_run_receive_review) — свежего или сохраненного."""
+    doc_ids = set(result["auto_accepted"]) | {d for d, _ in result["box_returned"]}
+    doc_ids |= {e["doc_id"] for e in result["surplus_accepted"] + result["manual"]}
+    docs = {d.id: d for d in MovementDocument.query.filter(MovementDocument.id.in_(doc_ids or [0])).all()}
+    nids = {r[0] for e in result["surplus_accepted"] + result["manual"] for r in e["rows"]}
+    noms = {n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(nids or [0])).all()}
+
+    def _hydrate(entry):
+        return {
+            "doc": docs.get(entry["doc_id"]),
+            "reason": entry["reason"],
+            "hints": entry["hints"],
+            "diff_rows": sorted(
+                ((noms[nid], exp, got) for nid, exp, got in entry["rows"] if nid in noms),
+                key=lambda r: r[0].name,
+            ),
+        }
+
+    remaining_ids = list(result["remaining_ids"]) + list(extra_remaining_ids)
     return render_template(
         "movement/receive_review_result.html",
-        auto_accepted=auto_accepted,
-        box_returned=box_returned,
-        surplus_accepted=surplus_accepted,
-        manual=manual,
-        names=names,
-        remaining=len(remaining_docs),
-        remaining_ids=[doc.id for doc in remaining_docs],
+        auto_accepted=[docs[i] for i in result["auto_accepted"] if i in docs],
+        box_returned=[(docs[i], box) for i, box in result["box_returned"] if i in docs],
+        surplus_accepted=[e for e in map(_hydrate, result["surplus_accepted"]) if e["doc"]],
+        manual=[e for e in map(_hydrate, result["manual"]) if e["doc"]],
+        remaining=len(remaining_ids),
+        remaining_ids=remaining_ids,
         batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
+        job=job,
     )
+
+
+def _running_review_job():
+    job = (
+        BackgroundJob.query.filter_by(kind=RECEIVE_REVIEW_JOB_KIND, status="running")
+        .order_by(BackgroundJob.id.desc())
+        .first()
+    )
+    if job is None:
+        return None
+    if datetime.utcnow() - job.started_at > timedelta(minutes=RECEIVE_REVIEW_JOB_STALE_MINUTES):
+        job.status = "failed"
+        job.error = "проверка оборвалась (перезапуск сервера?)"
+        job.finished_at = datetime.utcnow()
+        db.session.commit()
+        return None
+    return job
+
+
+def _receive_review_background(app, job_id, doc_ids):
+    with app.app_context():
+        try:
+            order = {doc_id: i for i, doc_id in enumerate(doc_ids)}
+            docs = sorted(
+                (d for d in _pending_ozon_receive_documents() if d.id in order), key=lambda d: order[d.id]
+            )
+            job = BackgroundJob.query.get(job_id)
+            job.progress_total = len(docs)
+            db.session.commit()
+
+            def _progress(done):
+                BackgroundJob.query.filter_by(id=job_id).update({"progress_done": done})
+                db.session.commit()
+
+            result = _run_receive_review(docs, on_progress=_progress)
+            job = BackgroundJob.query.get(job_id)
+            job.result = json.dumps(result)
+            job.status = "done"
+        except Exception as exc:  # noqa: BLE001
+            db.session.rollback()
+            app.logger.exception("Фоновая проверка приемки Ozon не удалась")
+            job = BackgroundJob.query.get(job_id)
+            job.status = "failed"
+            job.error = str(exc)[:2000]
+        job.finished_at = datetime.utcnow()
+        db.session.commit()
+        db.session.remove()
+
+
+@bp.route("/receive-review/run", methods=["POST"])
+def receive_review_run():
+    """Выполняет проверку отмеченных на странице /receive-review
+    документов (doc_ids в форме): что сошлось полностью по данным Ozon API
+    — принимает как есть; где недостача ровно на один короб — вернет этот
+    короб и примет остальное; где только излишек опознанного товара —
+    добавит его в короб и примет (если такой же недостачи нет в другом
+    перемещении); все прочее (недостача вместе с излишком, неоднозначная
+    недостача, ошибки API) — в список на ручную проверку, с подсказкой при
+    похожем расхождении в другом перемещении (см. _annotate_possible_mixups).
+
+    На сервере проверка идет в фоне (страница /receive-review/job/<id>
+    показывает ход и затем результат) — живые запросы к Ozon API по
+    нескольким документам не укладывались в таймаут веб-сервера (504).
+    В тестах (RECEIVE_REVIEW_INLINE) — сразу, пачками по
+    RECEIVE_REVIEW_BATCH_LIMIT с бюджетом времени, как раньше."""
+    if not current_user.is_admin:
+        flash("Массовая проверка приемки доступна только администратору", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    try:
+        selected_ids = [int(v) for v in request.form.getlist("doc_ids")]
+    except ValueError:
+        selected_ids = []
+    if not selected_ids:
+        flash("Выберите хотя бы одно перемещение для проверки", "warning")
+        return redirect(url_for("movement.receive_review"))
+
+    if current_app.config.get("RECEIVE_REVIEW_INLINE", current_app.config.get("TESTING")):
+        selected = [doc for doc in _pending_ozon_receive_documents() if doc.id in set(selected_ids)]
+        batch = selected[:RECEIVE_REVIEW_BATCH_LIMIT]
+        result = _run_receive_review(batch, time_budget=RECEIVE_REVIEW_TIME_BUDGET)
+        return _render_receive_review_result(
+            result, extra_remaining_ids=[doc.id for doc in selected[RECEIVE_REVIEW_BATCH_LIMIT:]]
+        )
+
+    running = _running_review_job()
+    if running is not None:
+        flash("Проверка уже идет — дождитесь ее окончания", "warning")
+        return redirect(url_for("movement.receive_review_job", job_id=running.id))
+    job = BackgroundJob(
+        kind=RECEIVE_REVIEW_JOB_KIND, created_by_id=current_user.id,
+        progress_total=len(selected_ids), params=json.dumps(selected_ids),
+    )
+    db.session.add(job)
+    db.session.commit()
+    threading.Thread(
+        target=_receive_review_background,
+        args=(current_app._get_current_object(), job.id, selected_ids),
+        daemon=True,
+    ).start()
+    return redirect(url_for("movement.receive_review_job", job_id=job.id))
+
+
+@bp.route("/receive-review/job/<int:job_id>")
+def receive_review_job(job_id):
+    if not current_user.is_admin:
+        flash("Массовая проверка приемки доступна только администратору", "danger")
+        return redirect(url_for("movement.list_documents"))
+    job = BackgroundJob.query.filter_by(id=job_id, kind=RECEIVE_REVIEW_JOB_KIND).first_or_404()
+    if job.status == "running":
+        _running_review_job()  # помечает оборвавшуюся
+        db.session.refresh(job)
+    if job.status == "done":
+        return _render_receive_review_result(json.loads(job.result), job=job)
+    return render_template("movement/receive_review_progress.html", job=job)
+
+
+@bp.route("/receive-review/job/<int:job_id>/status")
+def receive_review_job_status(job_id):
+    if not current_user.is_admin:
+        return jsonify(status="forbidden"), 403
+    job = BackgroundJob.query.filter_by(id=job_id, kind=RECEIVE_REVIEW_JOB_KIND).first_or_404()
+    return jsonify(status=job.status, done=job.progress_done, total=job.progress_total)
 
 
 @bp.route("/<int:doc_id>/toggle-accounting", methods=["POST"])

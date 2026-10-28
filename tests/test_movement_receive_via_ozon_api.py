@@ -136,8 +136,7 @@ def test_mismatch_blocks_auto_accept(mock_orders, mock_items, db, client_logged_
 
     html = resp.get_data(as_text=True)
     assert "показывает расхождение" in html
-    assert "отправлено 10" in html
-    assert "по Ozon принято 7" in html
+    assert "По данным Ozon" in html and "table-danger" in html and ">-3<" in html
     # Поле "Принято по факту" предзаполнено фактически принятым по Ozon
     # (7 для n1, по которому расхождение), а не отправленным (10) — чат:
     # "после проверки кол-во принято по факту вносится автоматически".
@@ -247,3 +246,40 @@ def test_not_available_for_non_ozon_destination(db, client_logged_in):
     resp = client_logged_in.post(f"/movement/{doc.id}/receive/ozon-api", follow_redirects=True)
 
     assert "доступна только для перемещений на Ozon" in resp.get_data(as_text=True)
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_item_missing_in_ozon_is_prefilled_with_zero(mock_orders, mock_items, db, client_logged_in):
+    """Товар, которого нет в ответе Ozon вовсе, принят 0 — а не отправленное
+    количество (было: в поле оставалось 80 при «по Ozon принято 0»)."""
+    doc, sender, dest, n1, n2, box = _setup()
+    mock_orders.return_value = [_order("REQ-1")]
+    mock_items.return_value = (
+        [{"type": "ACCEPTANCE", "barcode": n2.barcode, "offer_id": "", "sku": 1, "name": "",
+          "declared_quantity": 5, "approved_quantity": 5, "fact_quantity": 5}],
+        0,
+    )
+    html = client_logged_in.post(f"/movement/{doc.id}/receive/ozon-api", follow_redirects=True).get_data(as_text=True)
+    assert f'name="qty_{n1.id}"\n                   class="form-control form-control-sm" value="0">' in html
+    assert f'name="qty_{n2.id}"\n                   class="form-control form-control-sm" value="5">' in html
+
+
+@patch("wms.blueprints.movement.fetch_supply_act_items")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_identified_surplus_only_is_accepted_directly(mock_orders, mock_items, db, client_logged_in):
+    doc, sender, dest, n1, n2, box = _setup()
+    mock_orders.return_value = [_order("REQ-1")]
+    mock_items.return_value = (
+        [
+            {"type": "ACCEPTANCE", "barcode": n1.barcode, "offer_id": "", "sku": 1, "name": "",
+             "declared_quantity": 10, "approved_quantity": 12, "fact_quantity": 12},
+            {"type": "ACCEPTANCE", "barcode": n2.barcode, "offer_id": "", "sku": 1, "name": "",
+             "declared_quantity": 5, "approved_quantity": 5, "fact_quantity": 5},
+        ],
+        0,
+    )
+    html = client_logged_in.post(f"/movement/{doc.id}/receive/ozon-api", follow_redirects=True).get_data(as_text=True)
+    assert "с излишком" in html
+    db.session.refresh(doc)
+    assert doc.received_at is not None and doc.received_qty_snapshot == 17

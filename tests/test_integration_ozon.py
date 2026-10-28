@@ -328,3 +328,15 @@ def test_postings_pagination_follows_cursor_while_has_next(mock_post):
     assert mock_post.call_count == 2
     second_call = mock_post.call_args_list[1]
     assert second_call.kwargs["json"]["cursor"] == "c1"
+
+
+@patch("wms.utils.ozon_api.requests.post")
+def test_supply_orders_order_number_keeps_only_exact_match(mock_post):
+    """Поиск по номеру неточный — похожие номера не должны подмешиваться."""
+    mock_post.side_effect = [
+        Mock(status_code=200, json=lambda: _supply_list_response([1, 2], last_id="next")),
+        Mock(status_code=200, json=lambda: _supply_get_response([_order(1, "200001234"), _order(2, "20000123")])),
+    ]
+    orders = fetch_supply_orders("c", "k", days_back=None, order_number="20000123")
+    assert [o["order_number"] for o in orders] == ["20000123"]
+    assert mock_post.call_count == 2      # дальше не листаем

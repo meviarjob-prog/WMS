@@ -213,6 +213,14 @@ def fetch_supply_orders(client_id, api_key, days_back=60, order_number=None, tim
                 result.append(order)
 
         last_id = data.get("last_id") or ""
+        if order_number:
+            # Поиск по номеру неточный (находит и похожие номера): берем
+            # только точное совпадение и, найдя его, дальше не листаем —
+            # иначе суммировались бы чужие поставки, а перебор всех страниц
+            # затягивал проверку до таймаута.
+            exact = [o for o in result if str(o.get("order_number") or "").strip() == str(order_number).strip()]
+            if exact:
+                return exact
         if reached_old or not last_id:
             break
     return result
