@@ -1,0 +1,39 @@
+{# Грузоместа поставки по Ozon API: статус и наш короб (см. movement._ozon_cargo_report).
+   Только просмотр — ничего не меняет. #}
+{% if report.error and not report.rows %}
+  <div class="alert alert-warning small mb-0">Не удалось получить грузоместа из Ozon: {{ report.error }}</div>
+{% else %}
+  {% if report.error %}<div class="alert alert-warning small mb-2">{{ report.error }}</div>{% endif %}
+  <div class="small mb-2">
+    Грузомест в Ozon: <b>{{ report.rows | length }}</b>, коробов в перемещении: <b>{{ report.rows | selectattr('box_id') | list | length + report.unmatched_boxes | length }}</b>.
+    {% if report.not_accepted %}
+      <span class="badge bg-danger">Не принято Ozon: {{ report.not_accepted }}</span>
+    {% else %}
+      <span class="badge bg-success">Непринятых грузомест нет</span>
+    {% endif %}
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-bordered mb-2">
+      <thead><tr><th>Грузоместо (ШК)</th><th>Статус Ozon</th><th>Наш короб</th><th class="text-end">Товара в коробе</th><th>Как сопоставлено</th></tr></thead>
+      <tbody>
+      {% for row in report.rows %}
+        <tr class="{{ 'table-danger' if row.not_accepted else ('table-warning' if not row.box_id else '') }}">
+          <td class="text-nowrap">{{ row.barcode or row.cargo_id }}</td>
+          <td title="{{ row.status }}">{{ row.status_label }}</td>
+          <td>{{ row.box_number or '—' }}</td>
+          <td class="text-end">{{ row.box_qty | qty if row.box_qty is not none else ('заявлено ' ~ (row.declared_qty | qty) if row.declared_qty is not none else '—') }}</td>
+          <td class="small text-muted">{{ row.how or 'не сопоставлено' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if report.unmatched_boxes %}
+    <div class="small text-muted">
+      Короба перемещения без пары среди грузомест Ozon:
+      {% for b in report.unmatched_boxes %}<b>{{ b.box_number }}</b> ({{ b.qty | qty }} шт){% if not loop.last %}, {% endif %}{% endfor %}.
+      {% if report.rows | rejectattr('box_id') | list %}Выгрузите «Состав ГМ» — тогда грузоместа сопоставятся по штрихкоду.{% endif %}
+    </div>
+  {% endif %}
+  <div class="small text-muted mt-1">Красным — грузоместо Ozon не принял (не сдано / отказано / потеряно). Принятого количества по грузоместу Ozon не отдаёт — только статус.</div>
+{% endif %}

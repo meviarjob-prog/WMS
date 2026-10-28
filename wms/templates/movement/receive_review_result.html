@@ -61,6 +61,10 @@
         {% if entry.reason %}
           <div class="text-muted small">{{ entry.reason }}</div>
         {% endif %}
+        {% if not entry.doc.received_at %}
+          <button type="button" class="btn btn-sm btn-outline-primary mt-1" data-ozon-cargoes="{{ url_for('movement.ozon_cargoes', doc_id=entry.doc.id) }}" data-target="#ozonCargoes{{ entry.doc.id }}">📦 Грузоместа Ozon</button>
+          <div id="ozonCargoes{{ entry.doc.id }}" class="mt-2"></div>
+        {% endif %}
         {% if entry.diff_rows %}
           {% set diff_rows = entry.diff_rows %}
           {% include "movement/_qty_diff_table.html" %}

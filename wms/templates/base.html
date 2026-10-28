@@ -155,6 +155,23 @@
     });
   }
 </script>
+<script>
+  // Кнопки «Грузоместа Ozon» (карточка перемещения, ручная проверка приемки):
+  // подгружают таблицу статусов грузомест по Ozon API по нажатию.
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-ozon-cargoes]");
+    if (!button) return;
+    const target = document.querySelector(button.dataset.target);
+    if (!target) return;
+    button.disabled = true;
+    target.innerHTML = '<div class="small text-muted">Запрашиваем Ozon… (до минуты)</div>';
+    fetch(button.dataset.ozonCargoes, {credentials: "same-origin"})
+      .then((r) => r.text())
+      .then((html) => { target.innerHTML = html; })
+      .catch(() => { target.innerHTML = '<div class="small text-danger">Не удалось загрузить грузоместа</div>'; })
+      .finally(() => { button.disabled = false; });
+  });
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

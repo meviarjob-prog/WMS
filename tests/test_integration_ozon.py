@@ -384,3 +384,31 @@ def test_supply_orders_stops_when_all_wanted_numbers_found(mock_post):
     orders = fetch_supply_orders("c", "k", wanted_numbers={"A-2"})
     assert "A-2" in [o["order_number"] for o in orders]
     assert mock_post.call_count == 2
+
+
+@patch("wms.utils.ozon_api.requests.post")
+def test_cargo_places_statuses_and_bundle_parsing(mock_post):
+    from wms.utils.ozon_api import fetch_bundle_items, fetch_cargo_statuses, fetch_supply_cargo_places
+
+    mock_post.side_effect = [
+        Mock(status_code=200, json=lambda: {"supplies_cargoes": [{
+            "supply_id": 77,
+            "cargoes_without_transport_cargoes": [{"cargo_id": 1, "barcode": "GM-1", "bundle_id": "b1"}],
+            "transport_cargoes": [{"cargoes": [{"cargo_id": 2, "barcode": "GM-2", "bundle_id": "b2"}]}],
+        }]}),
+        Mock(status_code=200, json=lambda: {"supplies": [{"supply_id": 77, "cargoes": [
+            {"cargo_id": 1, "tracking_info": {"status": "PROCESSED"}},
+            {"cargo_id": 2, "tracking_info": {"status": "NOT_DELIVERED"}},
+        ]}]}),
+        Mock(status_code=200, json=lambda: {"items": [{"barcode": "460", "offer_id": "A", "quantity": 5}],
+                                            "has_next": True, "last_id": "x"}),
+        Mock(status_code=200, json=lambda: {"items": [{"barcode": "461", "offer_id": "B", "quantity": 2}],
+                                            "has_next": False}),
+    ]
+    places = fetch_supply_cargo_places("c", "k", [77])
+    assert [c["barcode"] for c in places[77]] == ["GM-1", "GM-2"]
+    statuses = fetch_cargo_statuses("c", "k", {77: [1, 2]})
+    assert statuses[2]["status"] == "NOT_DELIVERED"
+    assert mock_post.call_args_list[1].kwargs["json"] == {"supplies": [{"supply_id": 77, "cargo_ids": ["1", "2"]}]}
+    items = fetch_bundle_items("c", "k", "b1")
+    assert [(i["barcode"], i["quantity"]) for i in items] == [("460", 5), ("461", 2)]
