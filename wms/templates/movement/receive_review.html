@@ -23,14 +23,19 @@
     <div class="d-flex gap-2 flex-wrap">
       <button type="button" class="btn btn-sm btn-outline-success" id="rvSelectDone" disabled
               title="Отметить перемещения, приемка которых на Ozon уже закончена (статус «Согласование актов» или «Завершена»)">Выбрать с законченной приёмкой</button>
-      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.rv-check').forEach(c => c.checked = true)">Выбрать все</button>
-      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.rv-check').forEach(c => c.checked = false)">Снять выбор</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="rvSelectVisible" title="Отметить все перемещения, видимые с текущим фильтром">Выбрать все</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.rv-check').forEach(c => c.checked = false); window.rvUpdateCount && window.rvUpdateCount();">Снять выбор</button>
     </div>
   </div>
+  <div class="d-flex flex-wrap align-items-center gap-1 mb-2" id="rvFilters">
+    <span class="small text-muted me-1">Фильтр по статусу Ozon:</span>
+    <span class="small text-muted" id="rvFiltersLoading">загружаются…</span>
+  </div>
+  <div class="small text-muted mb-2">Показано: <b id="rvShown">{{ docs | length }}</b> · отмечено: <b id="rvChecked">0</b></div>
   <form method="post" action="{{ url_for('movement.receive_review_run') }}">
     <ul class="small mb-3 list-unstyled">
       {% for doc in docs %}
-        <li class="mb-1">
+        <li class="mb-1 rv-item" data-doc-id="{{ doc.id }}">
           <div class="d-flex align-items-center gap-2 flex-wrap">
             <input type="checkbox" class="rv-check form-check-input mt-0" name="doc_ids" value="{{ doc.id }}" id="rvDoc{{ doc.id }}" data-doc-id="{{ doc.id }}">
             <a href="{{ url_for('movement.detail', doc_id=doc.id) }}" target="_blank" rel="noopener">{{ doc.number }}</a>
@@ -46,7 +51,75 @@
 <script>
   (function () {
     const DONE = ["REPORTS_CONFIRMATION_AWAITING", "COMPLETED"];
+    // Порядок кнопок фильтра: от законченной приемки к ранним этапам.
+    const ORDER = ["COMPLETED", "REPORTS_CONFIRMATION_AWAITING", "ACCEPTANCE_AT_STORAGE_WAREHOUSE",
+      "IN_TRANSIT", "ACCEPTED_AT_SUPPLY_WAREHOUSE", "READY_TO_SUPPLY", "DATA_FILLING",
+      "REPORT_REJECTED", "REJECTED_AT_SUPPLY_WAREHOUSE", "CANCELLED", "OVERDUE"];
+    const FILTER_KEY = "rvStatusFilter";
     let loaded = {};
+    let active = new Set();
+    try { active = new Set(JSON.parse(localStorage.getItem(FILTER_KEY) || "[]")); } catch (e) {}
+
+    function keyOf(docId) {
+      const info = loaded[docId];
+      return info && info.state ? info.state : "__none__";
+    }
+    function updateCount() {
+      document.getElementById("rvChecked").textContent =
+        document.querySelectorAll(".rv-check:checked").length;
+    }
+    window.rvUpdateCount = updateCount;
+    function applyFilter() {
+      let shown = 0;
+      document.querySelectorAll(".rv-item").forEach(li => {
+        const visible = active.size === 0 || active.has(keyOf(li.dataset.docId));
+        li.classList.toggle("d-none", !visible);
+        if (visible) { shown += 1; }
+        else { li.querySelector(".rv-check").checked = false; }  // скрытое не уходит в проверку
+      });
+      document.getElementById("rvShown").textContent = shown;
+      document.querySelectorAll("#rvFilters [data-filter]").forEach(btn => {
+        const key = btn.dataset.filter;
+        const on = key === "__all__" ? active.size === 0 : active.has(key);
+        btn.classList.toggle("active", on);
+      });
+      updateCount();
+      try { localStorage.setItem(FILTER_KEY, JSON.stringify([...active])); } catch (e) {}
+    }
+    function buildFilters() {
+      const counts = {}, labels = {};
+      document.querySelectorAll(".rv-item").forEach(li => {
+        const key = keyOf(li.dataset.docId);
+        counts[key] = (counts[key] || 0) + 1;
+        const info = loaded[li.dataset.docId];
+        labels[key] = info && info.state ? info.label : "статус неизвестен";
+      });
+      const keys = Object.keys(counts).sort((a, b) => {
+        const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      });
+      [...active].forEach(k => { if (!counts[k]) active.delete(k); });  // запомненный статус исчез
+      const box = document.getElementById("rvFilters");
+      document.getElementById("rvFiltersLoading").remove();
+      const total = document.querySelectorAll(".rv-item").length;
+      const make = (key, text) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn btn-sm btn-outline-secondary py-0";
+        btn.dataset.filter = key;
+        btn.textContent = text;
+        btn.addEventListener("click", () => {
+          if (key === "__all__") active.clear();
+          else if (active.has(key)) active.delete(key);
+          else active.add(key);
+          applyFilter();
+        });
+        box.appendChild(btn);
+      };
+      make("__all__", "Все (" + total + ")");
+      keys.forEach(k => make(k, labels[k] + " (" + counts[k] + ")"));
+      applyFilter();
+    }
     fetch("{{ url_for('movement.receive_review_ozon_states') }}", {credentials: "same-origin"})
       .then(r => r.json())
       .then(data => {
@@ -64,14 +137,28 @@
           note.classList.remove("d-none");
         }
         document.getElementById("rvSelectDone").disabled = false;
+        buildFilters();
       })
-      .catch(() => document.querySelectorAll(".rv-state").forEach(el => { el.textContent = "—"; }));
-    document.getElementById("rvSelectDone").addEventListener("click", () => {
-      document.querySelectorAll(".rv-check").forEach(c => {
-        const info = loaded[c.dataset.docId];
-        c.checked = !!(info && DONE.includes(info.state));
+      .catch(() => {
+        document.querySelectorAll(".rv-state").forEach(el => { el.textContent = "—"; });
+        const loading = document.getElementById("rvFiltersLoading");
+        if (loading) loading.textContent = "недоступен — статусы Ozon не загрузились";
       });
+    document.getElementById("rvSelectDone").addEventListener("click", () => {
+      document.querySelectorAll(".rv-item").forEach(li => {
+        const c = li.querySelector(".rv-check");
+        const info = loaded[c.dataset.docId];
+        c.checked = !li.classList.contains("d-none") && !!(info && DONE.includes(info.state));
+      });
+      updateCount();
     });
+    document.getElementById("rvSelectVisible").addEventListener("click", () => {
+      document.querySelectorAll(".rv-item").forEach(li => {
+        if (!li.classList.contains("d-none")) li.querySelector(".rv-check").checked = true;
+      });
+      updateCount();
+    });
+    document.querySelectorAll(".rv-check").forEach(c => c.addEventListener("change", updateCount));
   })();
 </script>
 {% else %}

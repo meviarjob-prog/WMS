@@ -757,3 +757,12 @@ def test_detail_shows_marketplace_request_number(db, client_logged_in):
     doc, _ = _make_doc("PER-RV0074", "2000070791768", sender, dest, [[(n1, 1)]])
     html = client_logged_in.get(f"/movement/{doc.id}").get_data(as_text=True)
     assert "Заявка на МП:" in html and "2000070791768" in html
+
+
+def test_review_page_has_status_filter(db, client_logged_in):
+    sender, dest = _warehouses(81)
+    n1 = _nomenclature(81)
+    doc, _ = _make_doc("PER-RV0081", "20000081", sender, dest, [[(n1, 1)]])
+    html = client_logged_in.get("/movement/receive-review").get_data(as_text=True)
+    assert 'id="rvFilters"' in html and "Фильтр по статусу Ozon" in html
+    assert f'class="mb-1 rv-item" data-doc-id="{doc.id}"' in html
