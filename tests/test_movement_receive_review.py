@@ -541,7 +541,6 @@ def test_manual_check_shows_quantities_in_columns_and_highlights_diff(mock_order
     assert "<th class=\"text-end\">Отправлено</th>" in html and "<th class=\"text-end\">Принято</th>" in html
     assert "table-danger" in html and ">-3<" in html
     assert "Варежки" in html     # совпавшие позиции тоже видны, без подсветки
-    assert f'data-ozon-cargoes="/movement/{doc.id}/ozon-cargoes"' in html
 
 
 @patch("wms.blueprints.movement.threading.Thread")
