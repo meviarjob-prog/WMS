@@ -80,3 +80,18 @@ def test_detail_page_has_cargo_button(db, client_logged_in):
     doc, *_ = _setup()
     html = client_logged_in.get(f"/movement/{doc.id}").get_data(as_text=True)
     assert f'data-ozon-cargoes="/movement/{doc.id}/ozon-cargoes"' in html
+
+
+@patch("wms.blueprints.movement.fetch_cargo_statuses")
+@patch("wms.blueprints.movement.fetch_supply_cargo_places")
+@patch("wms.blueprints.movement.fetch_supply_orders")
+def test_all_processed_does_not_claim_everything_accepted(mock_orders, mock_places, mock_statuses, db, client_logged_in):
+    """Ozon показывал «Обработано» и у недоехавшего короба — таблица не должна
+    утверждать, что все принято, и отправляет к файлу акта."""
+    doc, boxes, hat, scarf = _setup()
+    mock_orders.return_value = [{"order_number": "2000070000001", "supplies": [{"supply_id": 900}]}]
+    mock_places.return_value = {900: [{"cargo_id": 1, "barcode": "OZN0001", "bundle_id": ""}]}
+    mock_statuses.return_value = {1: {"status": "PROCESSED"}}
+    html = client_logged_in.get(f"/movement/{doc.id}/ozon-cargoes").get_data(as_text=True)
+    assert "Непринятых грузомест нет" not in html
+    assert "не подтверждает приёмку" in html and "файлу акта приёмки" in html

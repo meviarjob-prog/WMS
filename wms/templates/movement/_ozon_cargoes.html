@@ -8,9 +8,12 @@
     Грузомест в Ozon: <b>{{ report.rows | length }}</b>, коробов в перемещении: <b>{{ report.rows | selectattr('box_id') | list | length + report.unmatched_boxes | length }}</b>.
     {% if report.not_accepted %}
       <span class="badge bg-danger">Не принято Ozon: {{ report.not_accepted }}</span>
-    {% else %}
-      <span class="badge bg-success">Непринятых грузомест нет</span>
     {% endif %}
+  </div>
+  <div class="alert alert-warning small py-2 mb-2">
+    ⚠ Статус грузоместа в Ozon <b>не подтверждает приёмку</b>: проверено на живых данных — короб, который
+    не доехал, Ozon показывал как «Обработано». Какой короб не принят, надёжно видно только по
+    <b>файлу акта приёмки</b> (кнопка «Загрузить и сверить» на странице «Принято на складе»).
   </div>
   <div class="table-responsive">
     <table class="table table-sm table-bordered mb-2">
@@ -35,5 +38,5 @@
       {% if report.rows | rejectattr('box_id') | list %}Выгрузите «Состав ГМ» — тогда грузоместа сопоставятся по штрихкоду.{% endif %}
     </div>
   {% endif %}
-  <div class="small text-muted mt-1">Красным — грузоместо Ozon не принял (не сдано / отказано / потеряно). Принятого количества по грузоместу Ozon не отдаёт — только статус.</div>
+  <div class="small text-muted mt-1">Красным — грузоместо, которое Ozon сам отметил непринятым (не сдано / отказано / потеряно). Принятого количества по грузоместу Ozon не отдаёт.</div>
 {% endif %}
