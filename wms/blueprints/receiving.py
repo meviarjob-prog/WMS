@@ -457,6 +457,11 @@ def import_invoice_form():
         return redirect(url_for("receiving.import_invoice_form"))
 
     order_number = request.form.get("order_number", "").strip()
+    if not order_number:
+        # Номер заказа поставщику нужен 1С: по нему возврат поставщику
+        # привязывается к основанию (см. integrations/1c — НайтиЗаказПоставщикуПоНомеру).
+        flash("Укажите № заказа — без него приемку из накладной не загрузить", "danger")
+        return redirect(url_for("receiving.import_invoice_form"))
     file_bytes = file.read()
 
     try:
