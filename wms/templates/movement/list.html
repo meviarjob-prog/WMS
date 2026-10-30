@@ -7,7 +7,7 @@
   <div class="d-flex flex-wrap gap-2">
     <a class="btn btn-outline-primary" href="{{ url_for('movement.box_transfer') }}">↔ Из короба в короб</a>
     {% if current_user.is_admin %}
-    <a class="btn btn-outline-warning" href="{{ url_for('movement.receive_review') }}">🔎 Проверить приемку Ozon</a>
+    <a class="btn btn-outline-warning" href="{{ url_for('movement.receive_review') }}">🔎 Проверить приемку (API Ozon/WB)</a>
     <a class="btn btn-outline-secondary" href="{{ url_for('receipt_audit.index') }}" title="Проверить все непринятые перемещения на Ozon по отчётам о приёмке: провести совпавшие, исправить недостачи">📄 Проверка по отчётам (файлы)</a>
     {% endif %}
     <form method="get" action="{{ url_for('movement.export_summary') }}"

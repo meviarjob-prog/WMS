@@ -222,9 +222,9 @@ def test_matches_item_by_ozon_article_mapping_when_barcode_differs(mock_orders, 
     assert doc.received_at is not None
 
 
-def test_not_available_for_non_ozon_destination(db, client_logged_in):
+def test_not_available_for_non_marketplace_destination(db, client_logged_in):
     sender = Warehouse(code="WH-OA3", name="Основной")
-    dest = Warehouse(code="WH-OA4", name="Невинномысск", marketplace="wb")
+    dest = Warehouse(code="WH-OA4", name="Склад Ростов")
     db.session.add_all([sender, dest])
     n1 = Nomenclature(sku="OA-3", barcode="3000000000035", name="Товар", unit="шт")
     db.session.add(n1)
@@ -245,7 +245,7 @@ def test_not_available_for_non_ozon_destination(db, client_logged_in):
 
     resp = client_logged_in.post(f"/movement/{doc.id}/receive/ozon-api", follow_redirects=True)
 
-    assert "доступна только для перемещений на Ozon" in resp.get_data(as_text=True)
+    assert "доступна только для перемещений на Ozon и WB" in resp.get_data(as_text=True)
 
 
 @patch("wms.blueprints.movement.fetch_supply_act_items")

@@ -2,10 +2,10 @@
 {% block title %}Массовая проверка приемки{% endblock %}
 {% block content %}
 <p><a href="{{ url_for('movement.list_documents') }}">&larr; Перемещения</a></p>
-<h3 class="mb-3">Массовая проверка приемки по Ozon API</h3>
+<h3 class="mb-3">Массовая проверка приемки по API Ozon и WB</h3>
 
 <div class="alert alert-warning">
-  Отметьте перемещения, которые нужно проверить через API Ozon: что сошлось полностью — примет
+  Отметьте перемещения, которые нужно проверить через API Ozon или WB: что сошлось полностью — примет
   как есть; где недостача ровно на один короб — вернет этот короб на склад-отправитель и примет
   остальное; все прочие расхождения останутся для ручной проверки (с подсказкой, если похожий
   излишек или недостача нашелся в другом перемещении из этой же проверки — возможно, короб попал
@@ -22,13 +22,13 @@
       <div class="small text-danger d-none" id="rvStatesError"></div></div>
     <div class="d-flex gap-2 flex-wrap">
       <button type="button" class="btn btn-sm btn-outline-success" id="rvSelectDone" disabled
-              title="Отметить перемещения, приемка которых на Ozon уже закончена (статус «Согласование актов» или «Завершена»)">Выбрать с законченной приёмкой</button>
+              title="Отметить перемещения, приемка которых уже закончена (Ozon: «Согласование актов» или «Завершена», WB: «Принято»)">Выбрать с законченной приёмкой</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" id="rvSelectVisible" title="Отметить все перемещения, видимые с текущим фильтром">Выбрать все</button>
       <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.querySelectorAll('.rv-check').forEach(c => c.checked = false); window.rvUpdateCount && window.rvUpdateCount();">Снять выбор</button>
     </div>
   </div>
   <div class="d-flex flex-wrap align-items-center gap-1 mb-2" id="rvFilters">
-    <span class="small text-muted me-1">Фильтр по статусу Ozon:</span>
+    <span class="small text-muted me-1">Фильтр по статусу на маркетплейсе:</span>
     <span class="small text-muted" id="rvFiltersLoading">загружаются…</span>
   </div>
   <div class="small text-muted mb-2">Показано: <b id="rvShown">{{ docs | length }}</b> · отмечено: <b id="rvChecked">0</b></div>
@@ -50,11 +50,12 @@
 </div>
 <script>
   (function () {
-    const DONE = ["REPORTS_CONFIRMATION_AWAITING", "COMPLETED"];
-    // Порядок кнопок фильтра: от законченной приемки к ранним этапам.
+    const DONE = ["REPORTS_CONFIRMATION_AWAITING", "COMPLETED", "WB_5"];
+    // Порядок кнопок фильтра: от законченной приемки к ранним этапам (Ozon, затем WB).
     const ORDER = ["COMPLETED", "REPORTS_CONFIRMATION_AWAITING", "ACCEPTANCE_AT_STORAGE_WAREHOUSE",
       "IN_TRANSIT", "ACCEPTED_AT_SUPPLY_WAREHOUSE", "READY_TO_SUPPLY", "DATA_FILLING",
-      "REPORT_REJECTED", "REJECTED_AT_SUPPLY_WAREHOUSE", "CANCELLED", "OVERDUE"];
+      "REPORT_REJECTED", "REJECTED_AT_SUPPLY_WAREHOUSE", "CANCELLED", "OVERDUE",
+      "WB_5", "WB_4", "WB_6", "WB_3", "WB_2", "WB_1"];
     const FILTER_KEY = "rvStatusFilter";
     let loaded = {};
     let active = new Set();

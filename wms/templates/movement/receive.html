@@ -42,6 +42,19 @@
     <button type="submit" class="btn btn-outline-secondary">🔌 Свериться и принять по API</button>
   </form>
 </div>
+{% elif doc.to_warehouse.marketplace == 'wb' %}
+<div class="card p-3 mb-3 border-secondary">
+  <h5>Автоприёмка по WB API</h5>
+  <p class="text-muted small mb-2">
+    Проверяет через API WB (поставка с номером заявки {{ doc.marketplace_request_number or '—' }}), сколько принято
+    по каждому товару. Если совпало с отправленным — перемещение сразу примется. Если есть расхождение — WB
+    отдаёт его по каждому коробу: откроется сверка, как при загрузке акта (какие короба вернутся, где поправится
+    количество), с кнопкой подтверждения. Работает, когда WB уже закончил приёмку (статус «Принято»).
+  </p>
+  <form method="post" action="{{ url_for('movement.receive_via_ozon_api', doc_id=doc.id) }}">
+    <button type="submit" class="btn btn-outline-secondary">🔌 Свериться и принять по API</button>
+  </form>
+</div>
 {% endif %}
 
 <div class="text-muted small mb-2">Или введите принятое количество вручную по товарам:</div>

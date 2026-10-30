@@ -38,6 +38,18 @@ from ..utils.http import content_disposition
 from ..utils.numbering import next_number
 from ..utils.ozon_api import SUPPLY_STATES, OzonApiError, fetch_supply_act_items, fetch_supply_orders
 from .integration_ozon import get_ozon_credentials
+from .integration_wb import get_wb_token
+from ..utils.wb_api import (
+    WB_SUPPLY_ACCEPTED,
+    WB_SUPPLY_STATUSES,
+    WbApiError,
+    WbNotFound,
+    fetch_wb_supplies,
+    fetch_wb_supply_details,
+    fetch_wb_supply_discrepancies,
+    fetch_wb_supply_goods,
+    fetch_wb_supply_packages,
+)
 from ..utils.shipping_label_pdf import build_movement_shipping_labels_pdf
 from ..utils.timezone import to_moscow
 from ..utils.work_log import drop_pick_events, log_pick
@@ -2278,6 +2290,187 @@ def _compute_ozon_mismatches(expected, totals):
     return mismatches
 
 
+def _wb_resolve_supply(token, number, common):
+    """(supply_id, preorder, details) по номеру заявки WB: сначала как ID
+    поставки, иначе как ID заказа (тогда supply_id ищем по списку поставок
+    — он нужен методу расхождений по коробам)."""
+    try:
+        return int(number), False, fetch_wb_supply_details(token, number, **common)
+    except WbNotFound:
+        pass
+    details = fetch_wb_supply_details(token, number, preorder=True, **common)
+    supply_id = None
+    for supply in fetch_wb_supplies(token, **common):
+        if str(supply.get("preorderID") or "") == str(number) and supply.get("supplyID"):
+            supply_id = int(supply["supplyID"])
+            break
+    return supply_id, True, details
+
+
+def _fetch_wb_accepted_totals(doc, timeout=None, max_retries=None, deadline=None):
+    """Аналог _fetch_ozon_accepted_totals для WB: принятое по каждому товару
+    поставки (/api/v1/supplies/{ID}/goods, acceptedQuantity). Только если
+    WB уже закончил приемку (статус «Принято»). Возвращает (totals, ошибка,
+    контекст для разбора по коробам)."""
+    token = get_wb_token()
+    number = (doc.marketplace_request_number or "").strip()
+    if not number.isdigit():
+        return None, "у перемещения не указан числовой номер поставки WB", None
+    common = dict(timeout=timeout, max_retries=max_retries, deadline=deadline)
+    try:
+        supply_id, preorder, details = _wb_resolve_supply(token, number, common)
+    except WbNotFound:
+        return None, f"поставка «{number}» не найдена в WB API", None
+    except WbApiError as exc:
+        return None, str(exc), None
+    status = details.get("statusID")
+    if status != WB_SUPPLY_ACCEPTED:
+        label = WB_SUPPLY_STATUSES.get(status, status or "неизвестен")
+        return None, f"приемка на WB еще не завершена — статус «{label}»", None
+    try:
+        goods = fetch_wb_supply_goods(token, number, preorder=preorder, **common)
+    except WbApiError as exc:
+        return None, str(exc), None
+    totals, unmapped = {}, set()
+    for item in goods:
+        accepted = item.get("acceptedQuantity") or 0
+        barcode = str(item.get("barcode") or "").strip()
+        nom = _nomenclature_for_act_barcode(barcode) if barcode else None
+        if nom is None:
+            if accepted:
+                unmapped.add(barcode or str(item.get("vendorCode") or "?"))
+            continue
+        totals[nom.id] = totals.get(nom.id, 0) + accepted
+    if unmapped:
+        return None, "товары без сопоставления в номенклатуре: " + ", ".join(sorted(unmapped)[:10]), None
+    ctx = {"token": token, "supply_id": supply_id, "number": number, "common": common}
+    return totals, None, ctx
+
+
+def _wb_act_boxes(doc, ctx):
+    """«Акт по коробам» из данных WB API — в том же виде, что разбор файла
+    акта WB ({номер_короба: {штрихкод: принято}}), чтобы дальше работала
+    обычная сверка и проведение по акту (_reconcile_with_act /
+    _receive_from_act). Состав каждого короба — наш, поправленный на
+    расхождения WB по этому коробу (/api/supplies/v1/discrepancies). Короб,
+    по которому не принято ничего, в «акт» не попадает — значит не доехал.
+    Код короба WB — наш номер короба (его вписывает «Состав для WB»); если
+    WB присвоил свой код, короб ищем по составу (/api/v1/supplies/{ID}/package).
+    Возвращает (act_boxes, ошибка)."""
+    if not ctx.get("supply_id"):
+        return None, "не удалось определить ID поставки WB для расхождений по коробам"
+    token, common = ctx["token"], ctx["common"]
+    try:
+        discrepancies = fetch_wb_supply_discrepancies(token, ctx["supply_id"], **common)
+    except WbNotFound:
+        discrepancies = []
+    except WbApiError as exc:
+        return None, f"расхождения по коробам не получены: {exc}"
+
+    contents, numbers = {}, {}
+    for line in doc.lines.order_by(MovementLine.id.asc()).all():
+        items = {}
+        for item in line.box.items:
+            items[item.nomenclature_id] = items.get(item.nomenclature_id, 0) + item.qty
+        contents[line.box.box_number] = items
+        numbers[line.box.box_number.strip().upper()] = line.box.box_number
+
+    sku_cache = {}
+
+    def nom_id(sku):
+        sku = str(sku or "").strip()
+        if not sku:
+            return None
+        if sku not in sku_cache:
+            nom = _nomenclature_for_act_barcode(sku)
+            sku_cache[sku] = nom.id if nom else False
+        return sku_cache[sku]
+
+    package_to_box, unmatched = {}, []
+    for package in discrepancies:
+        code = str(package.get("packageCode") or "").strip()
+        box = numbers.get(code.upper())
+        if box:
+            package_to_box[code] = box
+        else:
+            unmatched.append(code)
+    if unmatched:
+        try:
+            packages = fetch_wb_supply_packages(token, ctx["supply_id"], **common)
+        except WbApiError as exc:
+            return None, f"короба WB {', '.join(unmatched[:3])} не сопоставлены с нашими: {exc}"
+        declared = {}
+        for package in packages:
+            code = str(package.get("packageCode") or "").strip()
+            items = {}
+            for row in package.get("barcodes") or []:
+                nid = nom_id(row.get("barcode"))
+                if not nid:
+                    items = None
+                    break
+                items[nid] = items.get(nid, 0) + (row.get("quantity") or 0)
+            declared[code] = items
+        used = set(package_to_box.values())
+        for code in unmatched:
+            items = declared.get(code)
+            candidates = [b for b, c in contents.items() if items and c == items and b not in used]
+            if len(candidates) != 1:
+                return None, f"короб WB {code} не удалось однозначно сопоставить с нашим коробом"
+            package_to_box[code] = candidates[0]
+            used.add(candidates[0])
+
+    deltas = {}
+    for package in discrepancies:
+        box = package_to_box[str(package.get("packageCode") or "").strip()]
+        delta = deltas.setdefault(box, {})
+        for item in package.get("items") or []:
+            for sku_key, qty_key, sign in (("declaredSku", "declaredAmount", -1), ("actualSku", "actualAmount", 1)):
+                qty = item.get(qty_key) or 0
+                if not qty:
+                    continue
+                nid = nom_id(item.get(sku_key))
+                if not nid:
+                    return None, f"в расхождениях WB неизвестный товар {item.get(sku_key)}"
+                delta[nid] = delta.get(nid, 0) + sign * qty
+
+    noms = {n.id: n for n in Nomenclature.query.filter(
+        Nomenclature.id.in_({nid for c in contents.values() for nid in c} | {nid for d in deltas.values() for nid in d} or {0})
+    ).all()}
+    act_boxes = {}
+    for box, items in contents.items():
+        accepted = dict(items)
+        for nid, change in deltas.get(box, {}).items():
+            accepted[nid] = accepted.get(nid, 0) + change
+        if any(qty < 0 for qty in accepted.values()):
+            return None, f"по коробу {box} WB показывает недостачу больше, чем было в коробе"
+        accepted = {nid: qty for nid, qty in accepted.items() if qty > 0}
+        if accepted:
+            act_boxes[box] = {noms[nid].barcode: qty for nid, qty in accepted.items()}
+    return act_boxes, None
+
+
+def _wb_box_reconciliation(doc, ctx, totals):
+    """Сверка по коробам WB, проверенная на итогах: (rec, ошибка). rec —
+    результат _reconcile_with_act, его payload можно проводить через
+    _receive_from_act. Итоги по коробам обязаны совпасть с принятым по
+    товарам (goods) — иначе данные WB неполные, решать вручную."""
+    act_boxes, error = _wb_act_boxes(doc, ctx)
+    if error:
+        return None, error
+    if not act_boxes:
+        return None, "по данным WB не принят ни один короб"
+    rec = _reconcile_with_act(doc, act_boxes)
+    if rec["error"] or rec["unknown_keys"] or rec["unidentified"]:
+        return None, rec["error"] or "в данных WB есть неизвестные короба или товары"
+    by_item = {}
+    for items in rec["payload"].values():
+        for nid, qty in items.items():
+            by_item[int(nid)] = by_item.get(int(nid), 0) + qty
+    if {k: v for k, v in by_item.items() if v} != {k: v for k, v in totals.items() if v}:
+        return None, "расхождения WB по коробам не сходятся с итогами приемки по товарам"
+    return rec, None
+
+
 @bp.route("/<int:doc_id>/receive/ozon-api", methods=["POST"])
 def receive_via_ozon_api(doc_id):
     """Автоприемка по данным Ozon API — без разбора по коробам: если то,
@@ -2292,26 +2485,49 @@ def receive_via_ozon_api(doc_id):
     blocked = _receive_precheck(doc)
     if blocked is not None:
         return blocked
-    if doc.to_warehouse.marketplace != "ozon":
-        flash("Автоприемка по API доступна только для перемещений на Ozon", "danger")
+    marketplace = doc.to_warehouse.marketplace
+    if marketplace not in ("ozon", "wb"):
+        flash("Автоприемка по API доступна только для перемещений на Ozon и WB", "danger")
         return redirect(url_for("movement.receive", doc_id=doc.id))
+    mp_label = "WB" if marketplace == "wb" else "Ozon"
 
     expected = _expected_qty_by_nomenclature(doc)
     if not expected:
         flash("В списке нет коробов с товаром", "danger")
         return redirect(url_for("movement.receive", doc_id=doc.id))
 
-    totals, error = _fetch_ozon_accepted_totals(doc)
+    wb_ctx = None
+    if marketplace == "wb":
+        totals, error, wb_ctx = _fetch_wb_accepted_totals(doc, deadline=time.monotonic() + 120)
+    else:
+        totals, error = _fetch_ozon_accepted_totals(doc)
     if error:
-        flash(f"Не удалось свериться с Ozon API: {error}. Примите вручную.", "danger")
+        flash(f"Не удалось свериться с {mp_label} API: {error}. Примите вручную.", "danger")
         return redirect(url_for("movement.receive", doc_id=doc.id))
 
     mismatches = _compute_ozon_mismatches(expected, totals)
 
+    if mismatches and wb_ctx is not None:
+        # WB отдает расхождения по каждому коробу — показываем тот же экран
+        # сверки, что и при загрузке файла акта: какие короба вернутся, где
+        # поправится количество. Ничего не записывается до подтверждения.
+        rec, box_error = _wb_box_reconciliation(doc, wb_ctx, totals)
+        if rec is not None:
+            flash(
+                "WB API: расхождения разобраны по коробам — проверьте сверку ниже и подтвердите приемку.",
+                "info",
+            )
+            return render_template(
+                "movement/receive_act.html", doc=doc, rec=rec, act_total=sum(totals.values()),
+                filename=f"данные WB API (поставка {wb_ctx['number']})",
+                payload_json=json.dumps(rec["payload"], ensure_ascii=False),
+            )
+        flash(f"WB API: по коробам разобрать не удалось — {box_error}.", "warning")
+
     if mismatches and _is_identified_surplus_only(mismatches):
         _, _, total_received_qty = _accept_with_identified_surplus(doc, expected, totals)
         flash(
-            f"Перемещение {doc.number} принято по данным Ozon API — {total_received_qty:g} шт., "
+            f"Перемещение {doc.number} принято по данным {mp_label} API — {total_received_qty:g} шт., "
             f"{_discrepancy_summary(doc)}; излишек добавлен в короб и списан с остатка отправителя.",
             "success",
         )
@@ -2319,10 +2535,9 @@ def receive_via_ozon_api(doc_id):
 
     if mismatches:
         flash(
-            f"Ozon API показывает расхождение по {len(mismatches)} товар(ам) — они выделены в таблице ниже. "
-            "Автоматически принять нельзя: разбивки по коробам у Ozon API нет, непонятно, какой короб не "
-            "доехал. «Принято по факту» уже проставлено по данным Ozon — проверьте и подтвердите, "
-            "или поправьте вручную.",
+            f"{mp_label} API показывает расхождение по {len(mismatches)} товар(ам) — они выделены в таблице ниже. "
+            "Автоматически принять нельзя: непонятно, какой короб не доехал. «Принято по факту» уже "
+            f"проставлено по данным {mp_label} — проверьте и подтвердите, или поправьте вручную.",
             "warning",
         )
         received = {nid: totals.get(nid, 0) for nid in expected}
@@ -2330,7 +2545,7 @@ def receive_via_ozon_api(doc_id):
 
     _, _, total_received_qty = _apply_receive(doc, expected, expected)
     flash(
-        f"Перемещение {doc.number} принято по данным Ozon API — совпало полностью, {total_received_qty:g} шт.",
+        f"Перемещение {doc.number} принято по данным {mp_label} API — совпало полностью, {total_received_qty:g} шт.",
         "success",
     )
     return redirect(url_for("movement.detail", doc_id=doc.id))
@@ -2345,7 +2560,7 @@ RECEIVE_REVIEW_SLOT_GRACE_DAYS = 2
 
 
 def _pending_ozon_receive_documents():
-    """Завершенные перемещения на Ozon, еще не принятые на складе, —
+    """Завершенные перемещения на Ozon и WB, еще не принятые на складе, —
     кандидаты для массовой проверки (см. receive_review/receive_review_run).
     Исключены (чат: "исключить... даты слотов не наступивших и также
     перемещения без числовых номеров заявки", позже — "текущий день минус
@@ -2365,7 +2580,7 @@ def _pending_ozon_receive_documents():
         .filter(
             MovementDocument.status == "completed",
             MovementDocument.received_at.is_(None),
-            Warehouse.marketplace == "ozon",
+            Warehouse.marketplace.in_(("ozon", "wb")),
             MovementDocument.marketplace_request_number.isnot(None),
             MovementDocument.marketplace_request_number != "",
         )
@@ -2562,6 +2777,10 @@ def receive_review():
 OZON_STATES_CACHE_SECONDS = 300
 OZON_STATES_DEADLINE = 40
 _ozon_states_cache = {"at": None, "states": {}, "requested": set()}
+_wb_states_cache = {"at": None, "states": {}}
+# Статус поставки WB (statusID) → цвет значка: 5 «Принято» — приемка закончена.
+WB_STATE_BADGE = {5: "bg-success", 4: "bg-info text-dark", 6: "bg-warning text-dark",
+                  3: "bg-warning text-dark", 2: "bg-secondary", 1: "bg-secondary"}
 
 # Цвет значка статуса: приемка закончена — зеленый, идет — голубой,
 # спор/отказ/отмена — красный.
@@ -2588,7 +2807,9 @@ def receive_review_ozon_states():
     после открытия, чтобы не ждать API при загрузке."""
     if not current_user.is_admin:
         return jsonify(ok=False, error="Только для администратора"), 403
-    docs = _pending_ozon_receive_documents()
+    all_docs = _pending_ozon_receive_documents()
+    docs = [d for d in all_docs if d.to_warehouse.marketplace == "ozon"]
+    wb_docs = [d for d in all_docs if d.to_warehouse.marketplace == "wb"]
     numbers = {doc.marketplace_request_number.strip() for doc in docs}
     cache = _ozon_states_cache
     fresh = (
@@ -2629,7 +2850,40 @@ def receive_review_ozon_states():
             "label": SUPPLY_STATES.get(state, state) if state else ("—" if error else "не найдена"),
             "badge": OZON_STATE_BADGE.get(state, "bg-secondary") if state else "bg-light text-muted border",
         }
-    return jsonify(ok=error is None, error=error, states=result)
+
+    wb_error = None
+    if wb_docs:
+        wb_cache = _wb_states_cache
+        if (
+            wb_cache["at"] is None
+            or time.monotonic() - wb_cache["at"] >= OZON_STATES_CACHE_SECONDS
+            or request.args.get("refresh")
+        ):
+            try:
+                supplies = fetch_wb_supplies(
+                    get_wb_token(), timeout=RECEIVE_REVIEW_CALL_TIMEOUT,
+                    max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES,
+                    deadline=time.monotonic() + OZON_STATES_DEADLINE,
+                )
+            except WbApiError as exc:
+                wb_error = str(exc)
+            else:
+                wb_states = {}
+                for supply in supplies:
+                    for key in ("supplyID", "preorderID"):
+                        if supply.get(key):
+                            wb_states.setdefault(str(supply[key]), supply.get("statusID"))
+                wb_cache.update({"at": time.monotonic(), "states": wb_states})
+        for doc in wb_docs:
+            status = _wb_states_cache["states"].get(doc.marketplace_request_number.strip())
+            result[doc.id] = {
+                "state": f"WB_{status}" if status else None,
+                "label": f"WB: {WB_SUPPLY_STATUSES.get(status, status)}" if status
+                else ("—" if wb_error else "WB: не найдена"),
+                "badge": WB_STATE_BADGE.get(status, "bg-secondary") if status else "bg-light text-muted border",
+            }
+    errors = [e for e in (error, f"WB: {wb_error}" if wb_error else None) if e]
+    return jsonify(ok=not errors, error="; ".join(errors) or None, states=result)
 
 
 RECEIVE_REVIEW_JOB_KIND = "ozon_receive_review"
@@ -2655,6 +2909,7 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
       remaining_ids: [doc_id] — не успели проверить (бюджет времени)."""
     start = time.monotonic()
     auto_accepted, box_returned, manual, surplus_candidates, surplus_accepted = [], [], [], [], []
+    box_candidates, fixed_by_boxes = [], []
     processed = 0
     for doc in docs:
         # Бюджет времени не применяется к первому документу — иначе при
@@ -2671,10 +2926,15 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
             if not expected:
                 manual.append({"doc": doc, "reason": "в перемещении нет коробов с товаром", "mismatches": []})
                 continue
-            totals, error = _fetch_ozon_accepted_totals(
-                doc, timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES,
+            fetch_args = dict(
+                timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES,
                 deadline=time.monotonic() + RECEIVE_REVIEW_DOC_DEADLINE,
             )
+            wb_ctx = None
+            if doc.to_warehouse.marketplace == "wb":
+                totals, error, wb_ctx = _fetch_wb_accepted_totals(doc, **fetch_args)
+            else:
+                totals, error = _fetch_ozon_accepted_totals(doc, **fetch_args)
             if error:
                 manual.append({"doc": doc, "reason": error, "mismatches": []})
                 continue
@@ -2686,6 +2946,17 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
             all_rows = [
                 (nid, expected.get(nid, 0), totals.get(nid, 0)) for nid in set(expected) | set(totals)
             ]
+            box_note = None
+            if wb_ctx is not None:
+                # WB отдает расхождения по каждому коробу — разбираем точно,
+                # какой короб не доехал и где сколько не хватило/лишнее.
+                rec, box_note = _wb_box_reconciliation(doc, wb_ctx, totals)
+                if rec is not None:
+                    box_candidates.append(
+                        {"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows,
+                         "payload": rec["payload"], "returned": [m["box_number"] for m in rec["missing"]]}
+                    )
+                    continue
             if _is_identified_surplus_only(mismatches):
                 # Решаем после всей пачки: если такой же недостачей отозвалось
                 # другое перемещение — это не излишек, а ошибка при отправке.
@@ -2698,7 +2969,10 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
             if missing_line is not None:
                 box_returned.append([doc.id, _return_single_box_and_accept_rest(doc, missing_line)])
                 continue
-            manual.append({"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows})
+            manual.append({
+                "doc": doc, "mismatches": mismatches, "rows": all_rows,
+                "reason": f"по коробам WB разобрать не удалось: {box_note}" if box_note else None,
+            })
         except Exception as exc:  # noqa: BLE001 — один сбойный документ не должен рушить остальные
             db.session.rollback()
             current_app.logger.exception("Проверка приемки Ozon: ошибка на %s", doc.number)
@@ -2714,10 +2988,24 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
 
     names = {
         n.id: n.name for n in Nomenclature.query.filter(
-            Nomenclature.id.in_({nid for e in manual + surplus_candidates for nid, _, _ in e.get("rows", [])})
+            Nomenclature.id.in_({
+                nid for e in manual + surplus_candidates + box_candidates for nid, _, _ in e.get("rows", [])
+            })
         ).all()
     }
-    _annotate_possible_mixups(manual + surplus_candidates, names)
+    _annotate_possible_mixups(manual + surplus_candidates + box_candidates, names)
+    for entry in box_candidates:
+        if entry.get("hints"):
+            entry["reason"] = "Расхождение похоже на ошибку при отправке — проверьте вручную"
+            manual.append(entry)
+            continue
+        outcome = _receive_from_act(entry["doc"], entry["payload"])
+        if outcome is None:
+            entry["reason"] = "по данным WB не принят ни один короб"
+            manual.append(entry)
+            continue
+        entry["returned"] = outcome["returned"]
+        fixed_by_boxes.append(entry)
     recent_shortages = _recent_shortages() if surplus_candidates else {}
     for entry in surplus_candidates:
         for nid, expected_qty, got_qty in entry["mismatches"]:
@@ -2741,11 +3029,13 @@ def _run_receive_review(docs, time_budget=None, on_progress=None):
             "reason": entry.get("reason"),
             "rows": [list(r) for r in entry.get("rows", [])],
             "hints": entry.get("hints", []),
+            "returned": entry.get("returned", []),
         }
 
     return {
         "auto_accepted": auto_accepted,
         "box_returned": box_returned,
+        "fixed_by_boxes": [_serialize(e) for e in fixed_by_boxes],
         "surplus_accepted": [_serialize(e) for e in surplus_accepted],
         "manual": [_serialize(e) for e in manual],
         "remaining_ids": [doc.id for doc in docs[processed:]],
@@ -2805,9 +3095,10 @@ def receive_ozon_confirm(doc_id):
 def _render_receive_review_result(result, extra_remaining_ids=(), job=None):
     """Показ результата (_run_receive_review) — свежего или сохраненного."""
     doc_ids = set(result["auto_accepted"]) | {d for d, _ in result["box_returned"]}
-    doc_ids |= {e["doc_id"] for e in result["surplus_accepted"] + result["manual"]}
+    result.setdefault("fixed_by_boxes", [])
+    doc_ids |= {e["doc_id"] for e in result["surplus_accepted"] + result["manual"] + result["fixed_by_boxes"]}
     docs = {d.id: d for d in MovementDocument.query.filter(MovementDocument.id.in_(doc_ids or [0])).all()}
-    nids = {r[0] for e in result["surplus_accepted"] + result["manual"] for r in e["rows"]}
+    nids = {r[0] for e in result["surplus_accepted"] + result["manual"] + result["fixed_by_boxes"] for r in e["rows"]}
     noms = {n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(nids or [0])).all()}
 
     def _hydrate(entry):
@@ -2815,6 +3106,7 @@ def _render_receive_review_result(result, extra_remaining_ids=(), job=None):
             "doc": docs.get(entry["doc_id"]),
             "reason": entry["reason"],
             "hints": entry["hints"],
+            "returned": entry.get("returned", []),
             "rows_json": json.dumps(entry["rows"]),
             "sig": _ozon_rows_signature(entry["doc_id"], entry["rows"]) if entry["rows"] else None,
             "diff_rows": sorted(
@@ -2829,6 +3121,7 @@ def _render_receive_review_result(result, extra_remaining_ids=(), job=None):
         auto_accepted=[docs[i] for i in result["auto_accepted"] if i in docs],
         box_returned=[(docs[i], box) for i, box in result["box_returned"] if i in docs],
         surplus_accepted=[e for e in map(_hydrate, result["surplus_accepted"]) if e["doc"]],
+        fixed_by_boxes=[e for e in map(_hydrate, result["fixed_by_boxes"]) if e["doc"]],
         manual=[e for e in map(_hydrate, result["manual"]) if e["doc"]],
         remaining=len(remaining_ids),
         remaining_ids=remaining_ids,

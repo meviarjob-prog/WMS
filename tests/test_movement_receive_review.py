@@ -255,7 +255,7 @@ def test_ozon_api_error_goes_to_manual(mock_orders, db, client_logged_in):
     assert doc.received_at is None
 
 
-def test_pending_list_excludes_wb_and_already_received_and_missing_request_number(db, client_logged_in):
+def test_pending_list_includes_wb_excludes_received_and_missing_request_number(db, client_logged_in):
     sender, dest = _warehouses(7)
     wb_dest = Warehouse(code="WH-RV7WB", name="WB склад", marketplace="wb")
     db.session.add(wb_dest)
@@ -278,7 +278,7 @@ def test_pending_list_excludes_wb_and_already_received_and_missing_request_numbe
     html = resp.get_data(as_text=True)
     assert "PER-RV0008" in html
     assert "PER-RV0009" not in html
-    assert "PER-RV0010" not in html
+    assert "PER-RV0010" in html          # WB теперь тоже проверяется через API
     assert "PER-RV0011" not in html
 
 
@@ -764,5 +764,5 @@ def test_review_page_has_status_filter(db, client_logged_in):
     n1 = _nomenclature(81)
     doc, _ = _make_doc("PER-RV0081", "20000081", sender, dest, [[(n1, 1)]])
     html = client_logged_in.get("/movement/receive-review").get_data(as_text=True)
-    assert 'id="rvFilters"' in html and "Фильтр по статусу Ozon" in html
+    assert 'id="rvFilters"' in html and "Фильтр по статусу на маркетплейсе" in html
     assert f'class="mb-1 rv-item" data-doc-id="{doc.id}"' in html

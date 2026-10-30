@@ -24,7 +24,8 @@ class AppSetting(db.Model):
     __tablename__ = "app_settings"
 
     key = db.Column(db.String(50), primary_key=True)
-    value = db.Column(db.String(200))
+    # Text, а не String(200): токен WB API длиннее 200 символов.
+    value = db.Column(db.Text)
 
 
 class ProductCategory(db.Model):

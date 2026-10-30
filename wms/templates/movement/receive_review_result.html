@@ -5,7 +5,7 @@
 <h3 class="mb-3">Результат массовой проверки приемки</h3>
 
 <div class="card p-3 mb-3 border-success">
-  <h5>✅ Принято полностью — совпало с Ozon ({{ auto_accepted | length }})</h5>
+  <h5>✅ Принято полностью — совпало с маркетплейсом ({{ auto_accepted | length }})</h5>
   {% if auto_accepted %}
   <ul class="mb-0">
     {% for doc in auto_accepted %}
@@ -25,6 +25,21 @@
   </ul>
   {% else %}<div class="text-muted">Нет</div>{% endif %}
 </div>
+
+{% if fixed_by_boxes %}
+<div class="card p-3 mb-3 border-primary">
+  <h5>📦 WB: исправлено по коробам ({{ fixed_by_boxes | length }})</h5>
+  <div class="small text-muted mb-2">По данным WB о расхождениях в каждом коробе: недоехавшие короба возвращены на склад-отправитель, количество в коробах приведено к принятому.</div>
+  {% for entry in fixed_by_boxes %}
+    <div class="border rounded p-2 mb-2">
+      <div><a href="{{ url_for('movement.detail', doc_id=entry.doc.id) }}">{{ entry.doc.number }}</a> — {{ entry.doc.from_warehouse.name }} → {{ entry.doc.to_warehouse.name }}</div>
+      {% if entry.returned %}<div class="small text-danger">Возвращено на склад коробов: {{ entry.returned | length }} ({{ entry.returned | join(', ') }})</div>{% endif %}
+      {% set diff_rows = entry.diff_rows %}
+      {% include "movement/_qty_diff_table.html" %}
+    </div>
+  {% endfor %}
+</div>
+{% endif %}
 
 <div class="card p-3 mb-3 border-info">
   <h5>➕ Принято с излишком — излишек добавлен в короб ({{ surplus_accepted | length }})</h5>
