@@ -114,13 +114,24 @@
 </div>
 
 {% if current_user.can_manage_warehouse_mapping() %}
-{% set hint_fulfillment_1c = "Сопоставление задается отдельно для каждого склада-города маркетплейса. Пустое поле использует общий запасной склад 1С." %}
+{% set hint_fulfillment_1c = "Сопоставление задается отдельно для каждого склада. Для склада-города маркетплейса пустое поле использует общий запасной склад 1С, для собственного склада — его название из WMS." %}
 <div class="card p-3 mt-4">
   <h5>Сопоставление складов с 1С</h5>
   <p class="text-muted small">{{ hint_fulfillment_1c }}</p>
   <table class="table table-sm table-mobile-compact mb-0">
     <thead><tr><th>Склад WMS</th><th>Склад в 1С</th></tr></thead>
     <tbody>
+    {% for wh in own_mapping_warehouses %}
+      <tr>
+        <td><span class="badge bg-primary">Свой склад</span> {{ wh.name }}</td>
+        <td style="min-width:340px">
+          <form method="post" action="{{ url_for('warehouses.update_fulfillment_1c_name', warehouse_id=wh.id) }}" class="d-flex gap-1">
+            <input type="text" name="fulfillment_1c_name" value="{{ wh.fulfillment_1c_name or '' }}" class="form-control form-control-sm" placeholder="Название склада в 1С (пусто — как в WMS)">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Сохранить</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
     {% for wh in fulfillment_warehouses %}
       <tr>
         <td><span class="badge bg-secondary">{{ wh.marketplace_label() }}</span> {{ wh.name }}</td>

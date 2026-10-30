@@ -1,6 +1,11 @@
+import hashlib
+import hmac
+import json
+import threading
+import time
 from datetime import date, datetime, timedelta
 
-from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
@@ -8,28 +13,62 @@ from sqlalchemy.exc import IntegrityError
 from ..extensions import db
 from ..models import (
     AppSetting,
+    BackgroundJob,
     Box,
     BoxItem,
     Cell,
     CELL_CAPACITY,
+    MovementCargoPlace,
     MovementDocument,
     MovementLine,
     MovementReceiptDiscrepancy,
     Nomenclature,
+    OzonArticleMapping,
     ShipmentPlanLine,
     User,
     Warehouse,
     UnplacedStock,
+    WorkEvent,
+)
+from ..utils.acceptance_act import (
+    ARTICLE_KEY_PREFIX, UNIDENTIFIED_KEY, ActParseError, MAX_ACT_BYTES, parse_act,
 )
 from ..utils.excel_io import export_movement_summary_to_excel, export_movement_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
+from ..utils.ozon_api import SUPPLY_STATES, OzonApiError, fetch_supply_act_items, fetch_supply_orders
+from .integration_ozon import get_ozon_credentials
+from .integration_wb import get_wb_token
+from ..utils.wb_api import (
+    WB_SUPPLY_ACCEPTED,
+    WB_SUPPLY_STATUSES,
+    WbApiError,
+    WbNotFound,
+    fetch_wb_supplies,
+    fetch_wb_supply_details,
+    fetch_wb_supply_discrepancies,
+    fetch_wb_supply_goods,
+    fetch_wb_supply_packages,
+)
 from ..utils.shipping_label_pdf import build_movement_shipping_labels_pdf
 from ..utils.timezone import to_moscow
+from ..utils.work_log import drop_pick_events, log_pick
 from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
 MOVEMENTS_PAGE_SIZE = 200
+# Сборка перемещения завершается автоматически, как только в нем набралось
+# столько коробов; следующий короб уходит в новое перемещение на тот же склад.
+MOVEMENT_AUTO_COMPLETE_BOXES = 20
+
+
+def _fulfillment_owns(doc):
+    """Фулфилмент (см. чат — склад «ЦЕХ Марат» и подобные) ведет любое
+    перемещение со своего склада-отправителя, не только созданное лично
+    им — на складе может работать несколько человек. Входящие к ним
+    перемещения (to_warehouse_id) этим не открываются — их фулфилмент не
+    должен видеть/трогать."""
+    return current_user.is_fulfillment_only() and doc.from_warehouse_id == current_user.warehouse_id
 
 
 def _can_view_movement_document(doc):
@@ -54,6 +93,7 @@ def _can_view_movement_document(doc):
         or current_user.can_receive_movements()
         or doc.created_by_id == current_user.id
         or doc.status in ("draft", "collected")
+        or _fulfillment_owns(doc)
     )
 
 
@@ -78,7 +118,7 @@ BOOKKEEPING_ENDPOINTS = {
 # разделам) — например, заведующему складом назначения, который принимает
 # чужие перемещения.
 COMPLETION_ENDPOINTS = {"movement.complete", "movement.mark_shipped"}
-RECEIVING_ENDPOINTS = {"movement.receive"}
+RECEIVING_ENDPOINTS = {"movement.receive", "movement.receive_act", "movement.receive_via_ozon_api"}
 # Отметка "Транспорт забрал" прямо со страницы "Ждут транспорта" — в
 # отличие от обычного mark_shipped (редиректит на детальную страницу
 # документа, к которой у роли "логист" нет доступа), возвращает на тот же
@@ -112,6 +152,7 @@ def _restrict_document_access():
             current_user.is_admin
             or current_user.can_complete_movements()
             or doc.created_by_id == current_user.id
+            or _fulfillment_owns(doc)
         ):
             abort(404)
         return None
@@ -120,12 +161,13 @@ def _restrict_document_access():
             abort(404)
         return None
     # Остальные изменяющие маршруты (добавить/убрать короб, удалить и
-    # т.п.) — только автор или админ, как и раньше. "Просмотр всех
-    # перемещений" здесь не действует (он read-only), а совместный доступ к
-    # черновику дальше даем только через route_box_add (у него нет doc_id в
-    # URL, этот хук на него не срабатывает) — не через произвольное
-    # изменение чужого документа по прямой ссылке.
-    if not (current_user.is_admin or doc.created_by_id == current_user.id):
+    # т.п.) — только автор, админ или фулфилмент на своем складе
+    # (_fulfillment_owns), как и раньше. "Просмотр всех перемещений" здесь
+    # не действует (он read-only), а совместный доступ к черновику дальше
+    # даем только через route_box_add (у него нет doc_id в URL, этот хук на
+    # него не срабатывает) — не через произвольное изменение чужого
+    # документа по прямой ссылке.
+    if not (current_user.is_admin or doc.created_by_id == current_user.id or _fulfillment_owns(doc)):
         abort(404)
     return None
 
@@ -133,6 +175,10 @@ def _restrict_document_access():
 def _visible_movement_query():
     if current_user.can_view_movements() or current_user.can_receive_movements():
         return MovementDocument.query
+    if current_user.is_fulfillment_only():
+        # Весь свой склад-отправитель, а не только документы, созданные
+        # лично этим пользователем (см. чат).
+        return MovementDocument.query.filter(MovementDocument.from_warehouse_id == current_user.warehouse_id)
     return MovementDocument.query.filter(
         or_(MovementDocument.created_by_id == current_user.id, MovementDocument.status.in_(("draft", "collected")))
     )
@@ -317,7 +363,7 @@ def _apply_shipment_fulfillment(box, warehouse_id, shipped_at=None):
             plan_line.fulfilled_qty += item.qty
 
 
-def _committed_by_warehouse_and_item(period_start=None):
+def _committed_by_warehouse_and_item(period_start=None, drafts_only=False):
     """{(warehouse_id, nomenclature_id): кол-во}, уже "закрытое" другими
     коробами, которые едут на этот склад, но еще не отмечены "Принято на
     складе" — черновики перемещения (короб отсканирован, но еще не уехал)
@@ -327,6 +373,16 @@ def _committed_by_warehouse_and_item(period_start=None):
     remaining_qty продолжал бы показывать полную потребность склада, даже
     если она уже полностью закрыта едущими туда коробами, и подсказка
     маршрутизации короба слала бы туда больше, чем реально нужно."""
+    in_progress = or_(
+        MovementDocument.status.in_(("draft", "collected")),
+        and_(MovementDocument.status == "completed", MovementDocument.received_at.is_(None)),
+    )
+    if drafts_only:
+        # Для целей, посчитанных от остатка на складе-отправителе («готово к
+        # отгрузке»): короба, уже уехавшие (completed, еще не принятые), в
+        # этот остаток не входят — их повторно вычитать нельзя, учитываем
+        # только еще не уехавшие (черновики и собранные).
+        in_progress = MovementDocument.status.in_(("draft", "collected"))
     query = (
         db.session.query(
             MovementDocument.to_warehouse_id,
@@ -335,12 +391,7 @@ def _committed_by_warehouse_and_item(period_start=None):
         )
         .join(MovementLine, MovementLine.document_id == MovementDocument.id)
         .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
-        .filter(
-            or_(
-                MovementDocument.status.in_(("draft", "collected")),
-                and_(MovementDocument.status == "completed", MovementDocument.received_at.is_(None)),
-            )
-        )
+        .filter(in_progress)
     )
     if period_start:
         window_start = datetime.combine(period_start, datetime.min.time())
@@ -365,6 +416,105 @@ def _committed_by_warehouse_and_item(period_start=None):
     return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
 
 
+def _live_overflow_targets(lines):
+    """{id строки плана: цель}, пересчитанная ПРЯМО СЕЙЧАС для обычных
+    товаров (без приоритета/новинки), у которых план по всем городам уже
+    закрыт, а упакованный остаток на складах-отправителях еще есть:
+    остаток делится пропорционально доле города в плане (тот же принцип,
+    что у shipment_plan._apply_priority_distribution, но по актуальному
+    остатку, а не по снимку на момент синхронизации плана — иначе короб,
+    собранный после синхронизации, получал «потребности нет»)."""
+    by_item = {}
+    for line in lines:
+        by_item.setdefault(line.nomenclature_id, []).append(line)
+    targets = {}
+    sender_ids = None
+    for nomenclature_id, item_lines in by_item.items():
+        if any(l.novelty_marketplace for l in item_lines):
+            continue    # новинки — по снимку плана (нужны средние доли городов)
+        if any(l.priority is not None for l in item_lines):
+            continue    # приоритетные — по снимку плана (distributed_target_qty)
+        total_planned = sum(l.planned_qty or 0 for l in item_lines)
+        total_open = sum(max((l.planned_qty or 0) - (l.fulfilled_qty or 0), 0) for l in item_lines)
+        if total_planned <= 0 or total_open > 0:
+            continue
+        if sender_ids is None:
+            sender_ids = [
+                wh.id for wh in Warehouse.query.filter_by(marketplace=None, is_active=True).all()
+            ]
+        if not sender_ids:
+            return {}
+        ready = (
+            db.session.query(func.sum(BoxItem.qty))
+            .join(Box, BoxItem.box_id == Box.id)
+            .filter(BoxItem.nomenclature_id == nomenclature_id, Box.warehouse_id.in_(sender_ids))
+            .scalar()
+        ) or 0
+        if ready <= 0:
+            continue
+        for line in item_lines:
+            targets[line.id] = ready * (line.planned_qty or 0) / total_planned
+    return targets
+
+
+def _routing_line_states(box):
+    """Состояние каждой строки плана по товарам короба: сколько осталось
+    (remaining) и по какому правилу посчитано — общая основа для
+    _compute_routing и для блока «Почему так» на экране «Куда везти короб».
+    Возвращает (qty_by_item, [состояния])."""
+    qty_by_item = {}
+    for box_item in box.items:
+        qty_by_item[box_item.nomenclature_id] = (
+            qty_by_item.get(box_item.nomenclature_id, 0) + box_item.qty
+        )
+    if not qty_by_item:
+        return qty_by_item, []
+
+    lines = ShipmentPlanLine.query.filter(
+        ShipmentPlanLine.nomenclature_id.in_(qty_by_item.keys())
+    ).all()
+    committed_by_period = {}
+    drafts_by_period = {}
+    live_targets = _live_overflow_targets(lines)
+
+    states = []
+    for line in lines:
+        period_start = _plan_line_start(line)
+        if period_start not in committed_by_period:
+            committed_by_period[period_start] = _committed_by_warehouse_and_item(period_start)
+            drafts_by_period[period_start] = _committed_by_warehouse_and_item(period_start, drafts_only=True)
+        key = (line.warehouse_id, line.nomenclature_id)
+        already_committed = committed_by_period[period_start].get(key, 0)
+        not_departed = drafts_by_period[period_start].get(key, 0)
+        if line.id in live_targets:
+            # Цель посчитана ПРЯМО СЕЙЧАС от остатка на складах-отправителях
+            # (см. _live_overflow_targets): выполненное и уже уехавшее в
+            # цель не входят, вычитаем только еще не уехавшие короба.
+            target = live_targets[line.id]
+            remaining = max(target - not_departed, 0)
+            rule = "доля остатка на складе (по текущему остатку)"
+        elif line.distributed_target_qty is not None:
+            # Цель из снимка при синхронизации плана — тоже доля остатка на
+            # складе, поэтому ни fulfilled_qty, ни «в пути» не вычитаем (см.
+            # чат: К-тSmile — цель в разы меньше уже отправленного, и короб
+            # с остатком получал «потребности нет»).
+            target = line.effective_planned_qty()
+            remaining = max(target - not_departed, 0)
+            rule = "доля остатка на складе (приоритет/снимок плана)"
+        else:
+            target = line.planned_qty
+            remaining = max(line.planned_qty - line.fulfilled_qty - already_committed, 0)
+            rule = "план − выполнено − уже едет"
+            if line._blocked_by_novelty_marketplace():
+                remaining = 0
+                rule = "новинка другой площадки — сюда не отправляем"
+        states.append({
+            "line": line, "remaining": remaining, "rule": rule, "target": target,
+            "committed": already_committed, "drafts": not_departed,
+        })
+    return qty_by_item, states
+
+
 def _compute_routing(box):
     """Для содержимого короба ищет склады-города, где по актуальному плану
     отгрузок есть невыполненная потребность (remaining_qty > 0, за вычетом
@@ -378,27 +528,10 @@ def _compute_routing(box):
     чат) целью служит не жесткий planned_qty конкретного города, а доля
     текущего "готово к отгрузке" пропорционально доле города в общем плане
     по штрихкоду — план по количеству для них не ограничение."""
-    qty_by_item = {}
-    for box_item in box.items:
-        qty_by_item[box_item.nomenclature_id] = (
-            qty_by_item.get(box_item.nomenclature_id, 0) + box_item.qty
-        )
-    if not qty_by_item:
-        return []
-
-    lines = ShipmentPlanLine.query.filter(
-        ShipmentPlanLine.nomenclature_id.in_(qty_by_item.keys())
-    ).all()
-    committed_by_period = {}
-
+    qty_by_item, states = _routing_line_states(box)
     by_warehouse = {}
-    for line in lines:
-        period_start = _plan_line_start(line)
-        if period_start not in committed_by_period:
-            committed_by_period[period_start] = _committed_by_warehouse_and_item(period_start)
-        committed = committed_by_period[period_start]
-        already_committed = committed.get((line.warehouse_id, line.nomenclature_id), 0)
-        remaining = max(line.effective_planned_qty() - line.fulfilled_qty - already_committed, 0)
+    for state in states:
+        line, remaining = state["line"], state["remaining"]
         box_qty = qty_by_item.get(line.nomenclature_id, 0)
         if remaining <= 0 or box_qty <= 0:
             continue
@@ -411,6 +544,23 @@ def _compute_routing(box):
         entry["items"].append({"nomenclature": line.nomenclature, "box_qty": box_qty, "remaining": remaining})
 
     return sorted(by_warehouse.values(), key=lambda e: -e["matched_qty"])
+
+
+def _routing_explanation(box):
+    """Строки для блока «Почему так»: по каждому городу плана — план,
+    выполнено, едет, в черновиках, цель и итоговая потребность."""
+    _, states = _routing_line_states(box)
+    rows = []
+    for state in states:
+        line = state["line"]
+        rows.append({
+            "warehouse": line.warehouse, "nomenclature": line.nomenclature,
+            "planned": line.planned_qty or 0, "fulfilled": line.fulfilled_qty or 0,
+            "in_transit": max(state["committed"] - state["drafts"], 0), "drafts": state["drafts"],
+            "target": state["target"], "remaining": state["remaining"], "rule": state["rule"],
+        })
+    rows.sort(key=lambda r: (-r["remaining"], r["warehouse"].name))
+    return rows
 
 
 def _transport_waiting_query():
@@ -477,16 +627,151 @@ def transport_mark_shipped(doc_id):
 @bp.route("/")
 def list_documents():
     pagination = _movement_pagination()
+    destination_choices = []
+    if current_user.is_main_admin():
+        destination_choices = (
+            Warehouse.query.filter(Warehouse.is_active.is_(True), Warehouse.marketplace.isnot(None))
+            .order_by(Warehouse.marketplace, Warehouse.name)
+            .all()
+        )
     return render_template(
         "movement/list.html",
         documents=pagination.items,
         pagination=pagination,
+        destination_choices=destination_choices,
         route_box_number="",
         route_box=None,
         route_not_found=False,
         routing=[],
         **_movement_filter_options(),
     )
+
+
+@bp.route("/change-destination", methods=["POST"])
+def change_destination():
+    """Массовая смена склада назначения у выбранных перемещений — только
+    для пользователя «Администратор» (не любого админа). Нужна, чтобы переделать перемещения, ошибочно
+    заведенные на WB, на Ozon (и наоборот), не пересобирая документ.
+
+    Правила: принятые на маркетплейсе (received_at) и объединенные
+    документы не трогаем (по ним уже зачтено выполнение плана — сначала
+    «Вернуть в работу»); у завершенных, но еще не принятых короба
+    физически уезжают на новый склад; запомненное сопоставление ГМ Ozon
+    сбрасывается (оно относилось к старой поставке); при смене WB ↔ Ozon
+    сбрасывается номер заявки на МП (он выдан другим маркетплейсом); в
+    Ozon-документе не больше 30 коробов. Документы, уже выгруженные в 1С,
+    там автоматически не поправятся — об этом говорим в сообщении."""
+    if not current_user.is_main_admin():
+        flash("Менять склад назначения может только пользователь «Администратор»", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    doc_ids = request.form.getlist("doc_ids", type=int)
+    new_warehouse_id = request.form.get("new_to_warehouse_id", type=int)
+    if not doc_ids:
+        flash("Выберите перемещения, у которых нужно сменить склад назначения", "danger")
+        return redirect(url_for("movement.list_documents"))
+    new_warehouse = Warehouse.query.get(new_warehouse_id) if new_warehouse_id else None
+    if new_warehouse is None or not new_warehouse.is_active:
+        flash("Выберите новый склад назначения", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    changed, skipped, synced_numbers = [], [], []
+    for doc in MovementDocument.query.filter(MovementDocument.id.in_(doc_ids)).order_by(MovementDocument.id):
+        if doc.to_warehouse_id == new_warehouse.id:
+            skipped.append(f"{doc.number} (уже на этот склад)")
+            continue
+        if new_warehouse.id == doc.from_warehouse_id:
+            skipped.append(f"{doc.number} (склад назначения совпал бы с отправителем)")
+            continue
+        if doc.status == "merged":
+            skipped.append(f"{doc.number} (объединен)")
+            continue
+        if doc.received_at is not None:
+            skipped.append(f"{doc.number} (уже принят — сначала «Вернуть в работу»)")
+            continue
+        all_lines = doc.lines.order_by(MovementLine.id.asc()).all()
+        line_count = len(all_lines)
+        # В Ozon-перемещении не больше 30 коробов — документ побольше
+        # дробим на несколько по 30 (первый остается за исходным номером).
+        chunks = [all_lines]
+        if new_warehouse.marketplace == "ozon" and line_count > 30:
+            if doc.synced_to_1c_at is not None:
+                skipped.append(
+                    f"{doc.number} ({line_count} коробов, уже выгружен в 1С — дробить нельзя, "
+                    "в 1С уйдут дубли; сначала разбейте вручную)"
+                )
+                continue
+            chunks = [all_lines[i:i + 30] for i in range(0, line_count, 30)]
+
+        old_warehouse = doc.to_warehouse
+        if doc.status == "completed":
+            for line in all_lines:
+                box = line.box
+                if box.warehouse_id == old_warehouse.id:
+                    box.warehouse_id = new_warehouse.id
+                    box.warehouse_arrived_at = datetime.utcnow()
+                    box.cell_id = None
+                    box.zone_id = None
+                    box.status = "open"
+        elif new_warehouse.marketplace == "ozon":
+            if len(chunks[0]) >= 30:
+                doc.status = "collected"
+        elif doc.status == "collected":
+            doc.status = "draft"
+
+        MovementCargoPlace.query.filter_by(document_id=doc.id).delete()
+        if (old_warehouse.marketplace or None) != (new_warehouse.marketplace or None):
+            doc.marketplace_request_number = None
+            doc.marketplace_request_created_at = None
+        if doc.synced_to_1c_at is not None:
+            synced_numbers.append(doc.number)
+        doc.to_warehouse_id = new_warehouse.id
+        changed.append(doc.number)
+        for chunk in chunks[1:]:
+            part = MovementDocument(
+                number=next_number("movement"),
+                from_warehouse_id=doc.from_warehouse_id,
+                to_warehouse_id=new_warehouse.id,
+                created_by_id=doc.created_by_id,
+                created_at=doc.created_at,
+                status=doc.status if doc.status == "completed" else ("collected" if len(chunk) >= 30 else "draft"),
+                completed_at=doc.completed_at,
+                shipped_at=doc.shipped_at,
+                delivery_slot_date=doc.delivery_slot_date,
+                marketplace_request_number=doc.marketplace_request_number,
+                marketplace_request_created_at=doc.marketplace_request_created_at,
+            )
+            db.session.add(part)
+            db.session.flush()
+            moved_box_ids = [line.box_id for line in chunk]
+            for line in chunk:
+                line.document_id = part.id
+            WorkEvent.query.filter(
+                WorkEvent.kind == "pick", WorkEvent.ref_kind == "movement", WorkEvent.ref_id == doc.id,
+                WorkEvent.box_id.in_(moved_box_ids),
+            ).update({"ref_id": part.id}, synchronize_session=False)
+            changed.append(f"{part.number} (из {doc.number}, {len(chunk)} кор.)")
+        current_app.logger.warning(
+            "Склад назначения перемещения %s: «%s» → «%s» (%s)",
+            doc.number, old_warehouse.name, new_warehouse.name, current_user.username,
+        )
+    db.session.commit()
+
+    if changed:
+        flash(
+            f"Склад назначения изменен на «{new_warehouse.name}»: {', '.join(changed)}. "
+            "Если у перемещения был номер заявки на МП другого маркетплейса — он сброшен, внесите заново.",
+            "success",
+        )
+    if synced_numbers:
+        flash(
+            "Уже выгружены в 1С и там склад автоматически не изменится — поправьте вручную: "
+            + ", ".join(synced_numbers),
+            "warning",
+        )
+    if skipped:
+        flash("Не изменены: " + "; ".join(skipped), "warning")
+    return redirect(url_for("movement.list_documents"))
 
 
 @bp.route("/merge", methods=["POST"])
@@ -574,6 +859,7 @@ def route_box():
 
     box = None
     routing = []
+    routing_explain = []
     not_found = False
     if box_number:
         box = Box.find_by_scanned_code(box_number)
@@ -581,6 +867,7 @@ def route_box():
             not_found = True
         else:
             routing = _compute_routing(box)
+            routing_explain = _routing_explanation(box)
 
     return render_template(
         "movement/list.html",
@@ -590,6 +877,7 @@ def route_box():
         route_box=box,
         route_not_found=not_found,
         routing=routing,
+        routing_explain=routing_explain,
     )
 
 
@@ -647,6 +935,7 @@ def _create_movement_line(doc, box):
     )
     db.session.add(line)
     box.mark_scanned(current_user)
+    log_pick(current_user, box, doc.id)
     return line
 
 
@@ -718,22 +1007,7 @@ def route_box_add():
     # находили бы только СВОИ черновики (owned_query ограничивает чужие) и
     # получали бы разные документы вместо одного общего (см. также
     # new_document, где этот же поиск сделан без owned_query).
-    doc = (
-        MovementDocument.query.filter_by(
-            from_warehouse_id=box.warehouse_id, to_warehouse_id=to_warehouse_id, status="draft"
-        )
-        .order_by(MovementDocument.created_at.desc())
-        .first()
-    )
-    if not doc:
-        doc = MovementDocument(
-            number=next_number("movement"),
-            from_warehouse_id=box.warehouse_id,
-            to_warehouse_id=to_warehouse_id,
-            created_by_id=current_user.id,
-        )
-        db.session.add(doc)
-        db.session.flush()
+    doc = _open_draft_for_route(box.warehouse_id, to_warehouse_id, current_user.id)
 
     if doc.lines.filter_by(box_id=box.id).first():
         flash(f"Короб {box.box_number} уже в списке перемещения {doc.number}", "warning")
@@ -745,8 +1019,7 @@ def route_box_add():
         return redirect(url_for("movement.list_documents"))
 
     _create_movement_line(doc, box)
-    if to_warehouse.marketplace == "ozon" and doc.lines.count() >= 30:
-        doc.status = "collected"
+    auto_completed = _auto_complete_if_full(doc)
     try:
         db.session.commit()
     except IntegrityError:
@@ -765,7 +1038,11 @@ def route_box_add():
     flash(
         f"Короб {box.box_number} добавлен в перемещение {doc.number} на «{to_warehouse.name}». "
         f"Содержимое: {contents}"
-        + (" Перемещение достигло лимита 30 коробов и отмечено как собранное." if doc.status == "collected" else ""),
+        + (
+            f" В перемещении {MOVEMENT_AUTO_COMPLETE_BOXES} коробов — сборка завершена автоматически, "
+            "следующий короб на этот склад попадет в новое перемещение."
+            if auto_completed else ""
+        ),
         "success",
     )
     return redirect(url_for("movement.list_documents"))
@@ -959,6 +1236,7 @@ def _revert_line_effects(doc, line):
     if doc.received_at is not None:
         _revert_shipment_fulfillment(box, doc.to_warehouse_id, doc.shipped_at)
     box.warehouse_id = line.from_warehouse_id
+    box.warehouse_arrived_at = datetime.utcnow()
     box.cell_id = line.from_cell_id
     box.status = "stored" if line.from_cell_id else "open"
 
@@ -992,9 +1270,11 @@ def flag_movement_dirty_for_box(box_id):
 @bp.route("/<int:doc_id>/boxes/add", methods=["POST"])
 def add_box(doc_id):
     doc = MovementDocument.query.get_or_404(doc_id)
+    redirected_from = None
     if doc.status == "collected":
-        flash("В Ozon-перемещении уже 30 коробов. Следующий короб добавляйте в новый документ.", "warning")
-        return redirect(url_for("movement.detail", doc_id=doc.id))
+        # Документ уже собран полностью — короб уходит в черновик на тот же склад.
+        redirected_from = doc.number
+        doc = _open_draft_for_route(doc.from_warehouse_id, doc.to_warehouse_id, current_user.id)
     editing_after_completion = doc.status not in ("draft", "collected")
     if editing_after_completion and not current_user.is_admin:
         flash("Документ уже завершен — изменить может только администратор", "danger")
@@ -1025,8 +1305,7 @@ def add_box(doc_id):
 
     _create_movement_line(doc, box)
 
-    if doc.to_warehouse.marketplace == "ozon" and doc.lines.count() >= 30:
-        doc.status = "collected"
+    auto_completed = False if editing_after_completion else _auto_complete_if_full(doc)
 
     if doc.synced_to_1c_at is not None:
         # Документ уже выгружен в 1С — новый короб в нем 1С еще не видела,
@@ -1039,6 +1318,7 @@ def add_box(doc_id):
         # это сделал бы complete(), а не оставляем висеть "как будто в
         # черновике", где его никто больше не завершит.
         box.warehouse_id = doc.to_warehouse_id
+        box.warehouse_arrived_at = datetime.utcnow()
         box.cell_id = None
         box.status = "open"
         if doc.received_at is not None:
@@ -1055,9 +1335,20 @@ def add_box(doc_id):
         db.session.rollback()
         flash(f"Короб {box.box_number} уже в этом списке — его только что добавил кто-то другой", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
-    if doc.status == "collected":
+    if auto_completed:
+        next_doc = _open_draft_for_route(doc.from_warehouse_id, doc.to_warehouse_id, current_user.id)
+        db.session.commit()
         flash(
-            f"Короб {box.box_number} добавлен. В перемещении 30 коробов — оно отмечено как собранное.",
+            f"Короб {box.box_number} добавлен. В перемещении {doc.number} {MOVEMENT_AUTO_COMPLETE_BOXES} коробов — "
+            f"сборка завершена автоматически. Продолжайте сканировать в новое перемещение {next_doc.number} "
+            f"на «{doc.to_warehouse.name}».",
+            "success",
+        )
+        return redirect(url_for("movement.detail", doc_id=next_doc.id))
+    elif redirected_from:
+        flash(
+            f"Перемещение {redirected_from} уже собрано — короб {box.box_number} добавлен "
+            f"в перемещение {doc.number} на тот же склад",
             "success",
         )
     elif box.items.count() == 0:
@@ -1089,6 +1380,7 @@ def delete_line(doc_id, line_id):
         # там нужно убрать (см. composition_changed_at).
         doc.composition_changed_at = datetime.utcnow()
 
+    drop_pick_events(doc.id, line.box_id)
     db.session.delete(line)
     if doc.status == "collected":
         doc.status = "draft"
@@ -1204,10 +1496,59 @@ def delete_document(doc_id):
         source.status = "draft"
 
     number = doc.number
+    drop_pick_events(doc.id)
     db.session.delete(doc)
     db.session.commit()
     flash(f"Список перемещения {number} удален", "success")
     return redirect(url_for("movement.list_documents"))
+
+
+def _complete_document(doc):
+    """Завершение сборки: короба переезжают на склад назначения. Без commit —
+    вызывающий сам фиксирует транзакцию."""
+    for line in doc.lines:
+        box = line.box
+        box.warehouse_id = doc.to_warehouse_id
+        box.warehouse_arrived_at = datetime.utcnow()
+        box.cell_id = line.to_cell_id
+        box.status = "stored" if line.to_cell_id else "open"
+        # Выполнение плана отгрузок засчитывается не здесь, а отдельным
+        # действием "Принято на складе" (см. receive()) — короб физически
+        # мог еще ехать/лежать непроверенным на складе назначения.
+
+    doc.sent_qty_snapshot = doc.total_item_qty()
+    doc.status = "completed"
+    doc.completed_at = datetime.utcnow()
+
+
+def _auto_complete_if_full(doc):
+    """Завершает сборку черновика, набравшего MOVEMENT_AUTO_COMPLETE_BOXES
+    коробов. Возвращает True, если документ завершен."""
+    if doc.status in ("draft", "collected") and doc.lines.count() >= MOVEMENT_AUTO_COMPLETE_BOXES:
+        _complete_document(doc)
+        return True
+    return False
+
+
+def _open_draft_for_route(from_warehouse_id, to_warehouse_id, created_by_id):
+    """Черновик на маршрут: существующий (кем бы ни был начат) или новый."""
+    doc = (
+        MovementDocument.query.filter_by(
+            from_warehouse_id=from_warehouse_id, to_warehouse_id=to_warehouse_id, status="draft"
+        )
+        .order_by(MovementDocument.created_at.desc())
+        .first()
+    )
+    if doc is None:
+        doc = MovementDocument(
+            number=next_number("movement"),
+            from_warehouse_id=from_warehouse_id,
+            to_warehouse_id=to_warehouse_id,
+            created_by_id=created_by_id,
+        )
+        db.session.add(doc)
+        db.session.flush()
+    return doc
 
 
 @bp.route("/<int:doc_id>/complete", methods=["POST"])
@@ -1221,18 +1562,7 @@ def complete(doc_id):
         flash("В списке нет коробов", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
-    for line in doc.lines:
-        box = line.box
-        box.warehouse_id = doc.to_warehouse_id
-        box.cell_id = line.to_cell_id
-        box.status = "stored" if line.to_cell_id else "open"
-        # Выполнение плана отгрузок засчитывается не здесь, а отдельным
-        # действием "Принято на складе" (см. receive()) — короб физически
-        # мог еще ехать/лежать непроверенным на складе назначения.
-
-    doc.sent_qty_snapshot = doc.total_item_qty()
-    doc.status = "completed"
-    doc.completed_at = datetime.utcnow()
+    _complete_document(doc)
     db.session.commit()
     flash(f"Перемещение {doc.number} завершено — {doc.lines.count()} короб(ов)", "success")
     return redirect(url_for("movement.detail", doc_id=doc.id))
@@ -1304,12 +1634,17 @@ def _expected_qty_by_nomenclature(doc):
 
 
 def _apply_receipt_stock_difference(doc, nomenclature_id, expected_qty, received_qty):
-    """Приводит физический остаток склада назначения к факту приемки.
+    """Приводит физический остаток к факту приемки (см. чат: расхождение
+    при приемке на СЦ должно менять физический остаток, а не только
+    записываться).
 
-    Недовоз списывается из содержимого коробов этого перемещения, излишек
-    попадает в неразмещенный остаток — его затем можно упаковать обычным
-    размещением. Документ сохраняет исходное отправленное количество в
-    sent_qty_snapshot.
+    Недовоз списывается из содержимого коробов этого перемещения (на
+    складе назначения они физически не довезли столько, сколько заявлено).
+    Излишек — обратная ситуация: со склада-отправителя физически увезли
+    больше, чем было упаковано в короб, поэтому списываем этот излишек с
+    неразмещенного остатка отправителя (а не добавляем остаток складу
+    назначения — там взялось именно оттуда, не из воздуха). Документ
+    сохраняет исходное отправленное количество в sent_qty_snapshot.
     """
     shortage = max(expected_qty - received_qty, 0)
     for line in doc.lines.order_by(MovementLine.id.desc()).all():
@@ -1328,11 +1663,15 @@ def _apply_receipt_stock_difference(doc, nomenclature_id, expected_qty, received
 
     excess = max(received_qty - expected_qty, 0)
     if excess:
-        UnplacedStock.add(doc.to_warehouse_id, nomenclature_id, excess)
+        UnplacedStock.consume(doc.from_warehouse_id, nomenclature_id, excess)
 
 
 def _revert_document_receipt(doc):
-    """Отменяет учет фактической приемки перед удалением документа."""
+    """Отменяет учет фактической приемки перед удалением документа. Короба
+    и неразмещенный остаток возвращаются как обычно; receipt_changed_boxes
+    может быть False только у приемок, принятых в короткий период, когда
+    расхождение лишь записывалось без изменения коробов (см. чат) — для
+    них короба и тогда не трогали, поэтому и здесь их не трогаем."""
     current = _expected_qty_by_nomenclature(doc)
     discrepancies = {d.nomenclature_id: d for d in doc.discrepancies}
     for nomenclature_id, qty in current.items():
@@ -1343,6 +1682,8 @@ def _revert_document_receipt(doc):
         if plan_line and _shipment_is_in_plan(plan_line, doc.shipped_at or doc.completed_at):
             plan_line.fulfilled_qty = max(plan_line.fulfilled_qty - actual_qty, 0)
 
+    if doc.receipt_changed_boxes is False:
+        return
     for discrepancy in doc.discrepancies:
         if discrepancy.shortage_qty():
             first_line = doc.lines.first()
@@ -1359,28 +1700,64 @@ def _revert_document_receipt(doc):
                         nomenclature_id=discrepancy.nomenclature_id,
                         qty=discrepancy.shortage_qty(),
                     ))
+        if discrepancy.excess_qty() and doc.receipt_from_act:
+            # При приёмке по акту излишек был добавлен в короб — снимаем.
+            left = discrepancy.excess_qty()
+            for line in doc.lines.order_by(MovementLine.id.desc()).all():
+                if left <= 0:
+                    break
+                item = BoxItem.query.filter_by(
+                    box_id=line.box_id, nomenclature_id=discrepancy.nomenclature_id
+                ).first()
+                if item:
+                    take = min(item.qty, left)
+                    item.qty -= take
+                    left -= take
+                    if item.qty <= 0:
+                        db.session.delete(item)
         if discrepancy.excess_qty():
-            UnplacedStock.consume(
-                doc.to_warehouse_id,
+            # Симметрично _apply_receipt_stock_difference: излишек списывался
+            # с остатка отправителя — возвращаем его туда же.
+            UnplacedStock.add(
+                doc.from_warehouse_id,
                 discrepancy.nomenclature_id,
                 discrepancy.excess_qty(),
             )
 
 
-@bp.route("/<int:doc_id>/receive", methods=["GET", "POST"])
-def receive(doc_id):
-    """Единственная кнопка "Принято на складе" (см. чат: раньше рядом была
-    отдельная "Принято с расхождением" — убрали, эта форма покрывает оба
-    случая сразу). По каждому товару показываем, сколько отправлено, по
-    умолчанию проставлено столько же — обычная приемка без расхождений это
-    просто подтверждает как есть; если по факту меньше/больше, исправляют
-    нужные строки. Именно введенное здесь количество, а не то, что было
-    упаковано в коробах, зачисляется в выполнение плана отгрузок; настоящее
-    расхождение сохраняется отдельной строкой (см. MovementReceiptDiscrepancy)
-    для учета, а не молча теряется. Статус "Отгружено" фиксируется раньше
-    отдельной кнопкой "Транспорт забрал"; здесь подтверждается именно
-    фактическая приемка маркетплейсом."""
+@bp.route("/<int:doc_id>/unreceive", methods=["POST"])
+def unreceive(doc_id):
+    """Администратор возвращает «Принято на складе» в работу, чтобы
+    поправить принятое количество: откатывается учет приемки (недовоз
+    возвращается в короба, излишек снимается с неразмещенного остатка,
+    выполнение плана отгрузок уменьшается), расхождения удаляются. После
+    этого кнопка «Принято на складе» снова доступна."""
+    if not current_user.is_admin:
+        flash("Вернуть приемку в работу может только администратор", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc_id))
     doc = MovementDocument.query.get_or_404(doc_id)
+    if doc.received_at is None:
+        flash("Перемещение еще не принято на складе", "danger")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+    _revert_document_receipt(doc)
+    for discrepancy in list(doc.discrepancies):
+        db.session.delete(discrepancy)
+    doc.received_at = None
+    doc.received_qty_snapshot = None
+    doc.receipt_changed_boxes = None
+    doc.receipt_from_act = None
+    doc.receipt_returned_boxes = None
+    if doc.synced_to_1c_at is not None:
+        doc.composition_changed_at = datetime.utcnow()
+    db.session.commit()
+    current_app.logger.warning("Приемка перемещения %s возвращена в работу (%s)", doc.number, current_user.username)
+    flash(f"Приемка перемещения {doc.number} возвращена в работу — поправьте и снова нажмите «Принято на складе»", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+def _receive_precheck(doc):
+    """Условия, без которых «Принято на складе» недоступно (общие для
+    ручной приемки и приемки по акту). Возвращает redirect или None."""
     if doc.status != "completed":
         flash("Сначала завершите перемещение", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
@@ -1402,6 +1779,290 @@ def receive(doc_id):
     if doc.shipped_at is None:
         flash("Сначала отметьте, что товар забрал транспорт", "danger")
         return redirect(url_for("movement.detail", doc_id=doc.id))
+    return None
+
+
+def _nomenclature_for_act_barcode(code):
+    """Товар по баркоду из акта: основной или доп. штрихкод; в отчётах WB
+    встречается ведущий ноль ('04640580741533') — сравниваем без него."""
+    item = Nomenclature.find_by_barcode(code)
+    if item is None and code.lstrip("0") != code:
+        item = Nomenclature.find_by_barcode(code.lstrip("0"))
+    if item is None and code.isdigit():
+        item = Nomenclature.find_by_barcode("0" + code)
+    return item
+
+
+def _nomenclature_for_act_item(key):
+    """Позиция акта → товар. Обычный ключ — баркод. Ключ Ozon
+    «артикул␟баркод»: сначала по справочнику артикулов Ozon
+    (OzonArticleMapping: артикул → баркод → товар), баркод строки — запасной
+    путь. Возвращает (товар, описание для сообщения)."""
+    if not key.startswith(ARTICLE_KEY_PREFIX):
+        return _nomenclature_for_act_barcode(key), key
+    article, _, barcode = key[len(ARTICLE_KEY_PREFIX):].partition("\x1f")
+    mappings = OzonArticleMapping.query.filter(OzonArticleMapping.article == article).all()
+    if not mappings:
+        mappings = OzonArticleMapping.query.filter(
+            func.lower(OzonArticleMapping.article) == article.lower()
+        ).all()
+    for mapping in mappings:
+        item = _nomenclature_for_act_barcode(mapping.barcode)
+        if item is not None:
+            return item, article
+    return _nomenclature_for_act_barcode(barcode), article
+
+
+def _reconcile_with_act(doc, act_boxes, key_to_box=None):
+    """Сверка акта приёмки с составом коробов перемещения. Ничего не
+    записывает. Ключ короба в акте: у WB — наш номер короба, у Ozon —
+    штрихкод грузоместа (сопоставление запомнено при выгрузке состава ГМ,
+    см. MovementCargoPlace). Возвращает словарь для шаблона и payload
+    {номер_короба: {id_товара: принятое_кол-во}} для подтверждения.
+    key_to_box — готовое сопоставление ГМ → номер короба (если задано, вместо
+    запомненного в БД; так проверка непринятых подставляет сопоставление,
+    выведенное по составу)."""
+    is_ozon = doc.to_warehouse.marketplace == "ozon"
+    result = {
+        "boxes": [], "missing": [], "unknown_keys": [], "unknown_barcodes": [],
+        "payload": {}, "error": None, "is_ozon": is_ozon,
+        "unidentified": [], "ignored_qty": 0, "matched_qty": 0, "unidentified_qty": 0,
+        "sent_qty": sum(_expected_qty_by_nomenclature(doc).values()),
+    }
+    if is_ozon and key_to_box is None:
+        key_to_box = {}
+        places = MovementCargoPlace.query.filter_by(document_id=doc.id).all()
+        if not places:
+            result["error"] = (
+                "Для Ozon акт сверяется по грузоместам, но для этого перемещения не "
+                "запомнено сопоставление ГМ ↔ короб. Сначала выгрузите «Состав ГМ для Ozon»."
+            )
+            return result
+        key_to_box = {p.cargo_barcode: p.box_number for p in places}
+    key_to_box = key_to_box or {}
+
+    act_by_box = {}
+    barcode_cache = {}
+    for key, items in act_boxes.items():
+        box_number = key_to_box.get(key) if is_ozon else key
+        if box_number is None:
+            result["unknown_keys"].append(key)
+            result["ignored_qty"] += sum(items.values())
+            continue
+        target = act_by_box.setdefault(box_number, {})
+        for code, qty in items.items():
+            if code == UNIDENTIFIED_KEY:
+                result["unidentified"].append((box_number, qty))
+                result["unidentified_qty"] += qty
+                continue
+            if code not in barcode_cache:
+                barcode_cache[code] = _nomenclature_for_act_item(code)
+            nom, label = barcode_cache[code]
+            if nom is None:
+                if label not in result["unknown_barcodes"]:
+                    result["unknown_barcodes"].append(label)
+                continue
+            target[nom.id] = target.get(nom.id, 0) + qty
+
+    doc_box_numbers = set()
+    for line in doc.lines.order_by(MovementLine.id.asc()).all():
+        number = line.box.box_number
+        doc_box_numbers.add(number)
+        expected = {}
+        for it in line.box.items:
+            expected[it.nomenclature_id] = expected.get(it.nomenclature_id, 0) + it.qty
+        if number not in act_by_box:
+            result["missing"].append({"line": line, "box_number": number, "total": sum(expected.values())})
+            continue
+        accepted = act_by_box[number]
+        names = {
+            n.id: n for n in Nomenclature.query.filter(
+                Nomenclature.id.in_(set(expected) | set(accepted))
+            ).all()
+        }
+        rows = []
+        for nid in sorted(set(expected) | set(accepted), key=lambda i: names[i].name):
+            rows.append({
+                "nomenclature": names[nid],
+                "expected": expected.get(nid, 0),
+                "accepted": accepted.get(nid, 0),
+            })
+        result["boxes"].append({
+            "box_number": number,
+            "rows": rows,
+            "has_diff": any(r["expected"] != r["accepted"] for r in rows),
+        })
+        result["payload"][number] = {str(nid): qty for nid, qty in accepted.items()}
+
+    for number in act_by_box:
+        if number not in doc_box_numbers:
+            result["unknown_keys"].append(number)
+            result["ignored_qty"] += sum(act_by_box[number].values())
+    result["matched_qty"] = sum(sum(v.values()) for v in result["payload"].values())
+    result["payload"] = {k: v for k, v in result["payload"].items()}
+    if not result["boxes"]:
+        result["error"] = "Ни один короб из акта не найден в этом перемещении — нечего принимать."
+    elif result["unknown_barcodes"]:
+        result["error"] = (
+            "В акте есть товары, которых нет в номенклатуре (для Ozon — артикулы без сопоставления в «Артикулы Ozon»): "
+            + ", ".join(result["unknown_barcodes"][:10])
+            + ". Добавьте сопоставление артикула/штрихкод и загрузите акт снова."
+        )
+    return result
+
+
+def _receive_from_act(doc, payload):
+    """Приёмка по акту: короба приводятся к принятому количеству, короба,
+    которых нет в акте, снимаются с перемещения и возвращаются на
+    склад-отправитель (в план отгрузок не засчитываются). Расхождение
+    считается по оставшимся коробам; отправлено (sent_qty_snapshot) — по
+    всем исходным, поэтому в списке видно «отправлено (принято)»."""
+    lines = doc.lines.order_by(MovementLine.id.asc()).all()
+    sent_total = sum(_expected_qty_by_nomenclature(doc).values())
+
+    returned = [l for l in lines if l.box.box_number not in payload]
+    kept = [l for l in lines if l.box.box_number in payload]
+    if not kept:
+        return None
+    returned_numbers = [l.box.box_number for l in returned]
+    for line in returned:
+        _revert_line_effects(doc, line)
+        MovementCargoPlace.query.filter_by(document_id=doc.id, box_id=line.box_id).delete()
+        db.session.delete(line)
+    db.session.flush()
+
+    expected = _expected_qty_by_nomenclature(doc)
+    received = {}
+    for line in kept:
+        accepted = {int(k): float(v) for k, v in payload[line.box.box_number].items()}
+        items = {it.nomenclature_id: it for it in line.box.items}
+        for nid in set(items) | set(accepted):
+            old = items[nid].qty if nid in items else 0
+            new = accepted.get(nid, 0)
+            if new > old:
+                UnplacedStock.consume(doc.from_warehouse_id, nid, new - old)
+            if nid in items:
+                if new <= 0:
+                    db.session.delete(items[nid])
+                else:
+                    items[nid].qty = new
+            elif new > 0:
+                db.session.add(BoxItem(box_id=line.box_id, nomenclature_id=nid, qty=new))
+            received[nid] = received.get(nid, 0) + new
+
+    for nid in set(expected) | set(received):
+        exp_qty = expected.get(nid, 0)
+        got_qty = received.get(nid, 0)
+        plan_line = ShipmentPlanLine.query.filter_by(
+            warehouse_id=doc.to_warehouse_id, nomenclature_id=nid
+        ).first()
+        if plan_line and _shipment_is_in_plan(plan_line, doc.shipped_at):
+            plan_line.fulfilled_qty += got_qty
+        if got_qty != exp_qty:
+            db.session.add(MovementReceiptDiscrepancy(
+                document_id=doc.id, nomenclature_id=nid, expected_qty=exp_qty, received_qty=got_qty,
+            ))
+
+    doc.sent_qty_snapshot = sent_total
+    doc.received_qty_snapshot = sum(received.values())
+    doc.receipt_changed_boxes = True
+    doc.receipt_from_act = True
+    doc.receipt_returned_boxes = ", ".join(returned_numbers) or None
+    doc.received_at = datetime.utcnow()
+    if doc.synced_to_1c_at is not None:
+        doc.composition_changed_at = datetime.utcnow()
+    db.session.commit()
+    return {"returned": returned_numbers, "sent": sent_total, "received": sum(received.values())}
+
+
+@bp.route("/<int:doc_id>/receive/act", methods=["POST"])
+def receive_act(doc_id):
+    """Шаг 1 приёмки по акту: загрузка файла акта и экран сверки (ничего не
+    записывается до подтверждения на этом экране)."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    blocked = _receive_precheck(doc)
+    if blocked is not None:
+        return blocked
+    upload = request.files.get("act_file")
+    if upload is None or not upload.filename:
+        flash("Выберите файл акта приёмки (.xlsx или .zip)", "danger")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+    data = upload.read(MAX_ACT_BYTES + 1)
+    try:
+        act_boxes, act_total = parse_act(data, prefer_article=doc.to_warehouse.marketplace == "ozon")
+    except ActParseError as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+    rec = _reconcile_with_act(doc, act_boxes)
+    return render_template(
+        "movement/receive_act.html", doc=doc, rec=rec, act_total=act_total,
+        filename=upload.filename, payload_json=json.dumps(rec["payload"], ensure_ascii=False),
+    )
+
+
+def _render_receive_form(doc, expected, received_by_nomenclature=None, ozon_totals=None):
+    """Строит строки и рендерит форму ручной приемки (movement/receive.html).
+    "Отправлено" — всегда expected; значение по умолчанию в поле "Принято
+    по факту" — из received_by_nomenclature, если передано (например,
+    после сверки с Ozon API на расхождение, см. receive_via_ozon_api —
+    чат: "после проверки кол-во принято по факту вносится автоматически",
+    чтобы не перебивать совпавшие позиции руками), иначе как раньше равно
+    expected (обычная приемка без расхождений)."""
+    received_by_nomenclature = received_by_nomenclature or {}
+    extra_ids = set(ozon_totals or {}) - set(expected)
+    nomenclature_by_id = {
+        n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(set(expected) | extra_ids)).all()
+    }
+    rows = sorted(
+        (
+            {
+                "nomenclature": nomenclature_by_id[nid],
+                "expected_qty": qty,
+                "received_qty": received_by_nomenclature.get(nid, qty),
+                "ozon_qty": None if ozon_totals is None else ozon_totals.get(nid, 0),
+            }
+            for nid, qty in expected.items()
+            if nid in nomenclature_by_id
+        ),
+        # Расхождения по Ozon — наверх, чтобы не искать их в длинном списке.
+        key=lambda r: (
+            r["ozon_qty"] is None or r["ozon_qty"] == r["expected_qty"],
+            r["nomenclature"].name,
+        ),
+    )
+    # Товар, который Ozon принял, а мы не отправляли — показываем для
+    # сведения (в форме его не принять: в коробах его нет).
+    extra_rows = sorted(
+        (
+            {"nomenclature": nomenclature_by_id[nid], "ozon_qty": ozon_totals[nid]}
+            for nid in extra_ids
+            if nid in nomenclature_by_id and ozon_totals[nid]
+        ),
+        key=lambda r: r["nomenclature"].name,
+    )
+    return render_template(
+        "movement/receive.html", doc=doc, rows=rows, extra_rows=extra_rows,
+        show_ozon=ozon_totals is not None,
+    )
+
+
+@bp.route("/<int:doc_id>/receive", methods=["GET", "POST"])
+def receive(doc_id):
+    """Единственная кнопка "Принято на складе" (см. чат: раньше рядом была
+    отдельная "Принято с расхождением" — убрали, эта форма покрывает оба
+    случая сразу). По каждому товару показываем, сколько отправлено, по
+    умолчанию проставлено столько же — обычная приемка без расхождений это
+    просто подтверждает как есть; если по факту меньше/больше, исправляют
+    нужные строки. Именно введенное здесь количество, а не то, что было
+    упаковано в коробах, зачисляется в выполнение плана отгрузок; настоящее
+    расхождение сохраняется отдельной строкой (см. MovementReceiptDiscrepancy)
+    для учета, а не молча теряется. Статус "Отгружено" фиксируется раньше
+    отдельной кнопкой "Транспорт забрал"; здесь подтверждается именно
+    фактическая приемка маркетплейсом."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    blocked = _receive_precheck(doc)
+    if blocked is not None:
+        return blocked
 
     expected = _expected_qty_by_nomenclature(doc)
     if not expected:
@@ -1409,24 +2070,88 @@ def receive(doc_id):
         return redirect(url_for("movement.detail", doc_id=doc.id))
 
     if request.method == "GET":
-        nomenclature_by_id = {
-            n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(expected.keys())).all()
-        }
-        rows = sorted(
-            (
-                {"nomenclature": nomenclature_by_id[nid], "expected_qty": qty}
-                for nid, qty in expected.items()
-                if nid in nomenclature_by_id
-            ),
-            key=lambda r: r["nomenclature"].name,
-        )
-        return render_template("movement/receive.html", doc=doc, rows=rows)
+        return _render_receive_form(doc, expected)
 
+    if request.form.get("act_payload"):
+        try:
+            payload = json.loads(request.form["act_payload"])
+            assert isinstance(payload, dict)
+        except (ValueError, AssertionError):
+            flash("Данные акта повреждены — загрузите акт заново", "danger")
+            return redirect(url_for("movement.receive", doc_id=doc.id))
+        outcome = _receive_from_act(doc, payload)
+        if outcome is None:
+            flash("Ни один короб из акта не найден в этом перемещении", "danger")
+            return redirect(url_for("movement.receive", doc_id=doc.id))
+        msg = (
+            f"Перемещение {doc.number} принято по акту: принято {outcome['received']:g} из "
+            f"{outcome['sent']:g} шт."
+        )
+        if outcome["returned"]:
+            msg += f" Возвращено на склад «{doc.from_warehouse.name}» коробов: {len(outcome['returned'])}."
+        flash(msg, "warning" if outcome["received"] != outcome["sent"] else "success")
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    # Товар, которого вообще не было заявлено в отправке (короба не
+    # ожидали), но по факту его привезли на СЦ — излишек не из заявленного
+    # (см. чат). Строка добавляется на этой же форме через автокомплит,
+    # expected_qty=0 заставляет остальной код (расхождение, зачисление
+    # излишка на отправителя) сработать как для обычного излишка.
+    for raw_id in request.form.getlist("extra_nomenclature_id"):
+        try:
+            extra_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if extra_id in expected:
+            continue
+        qty = request.form.get(f"qty_{extra_id}", type=float)
+        if not qty or qty <= 0:
+            continue
+        if not Nomenclature.query.get(extra_id):
+            continue
+        expected[extra_id] = 0.0
+
+    received_by_nomenclature = {
+        nomenclature_id: request.form.get(f"qty_{nomenclature_id}", type=float)
+        for nomenclature_id in expected
+    }
+    has_discrepancy, shortage_qty, total_received_qty = _apply_receive(doc, expected, received_by_nomenclature)
+    if has_discrepancy:
+        flash(
+            f"Перемещение {doc.number} принято на складе «{doc.to_warehouse.name}»: "
+            + _discrepancy_summary(doc),
+            "warning",
+        )
+    else:
+        flash(f"Перемещение {doc.number} принято на складе МП «{doc.to_warehouse.name}»", "success")
+    return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+def _discrepancy_summary(doc):
+    """«недовоз 5 шт., излишек 3 шт.» по записанным расхождениям документа."""
+    db.session.refresh(doc)
+    parts = []
+    if doc.total_shortage_qty():
+        parts.append(f"недовоз {doc.total_shortage_qty():g} шт.")
+    if doc.total_excess_qty():
+        parts.append(f"излишек {doc.total_excess_qty():g} шт.")
+    return ", ".join(parts) or "без расхождений"
+
+
+def _apply_receive(doc, expected, received_by_nomenclature):
+    """Общее ядро приемки — используется и ручной формой (receive(), ввод
+    количества по каждому товару), и автоприемкой по API Ozon (см.
+    receive_via_ozon_api), когда расхождения нет совсем. received_by_nomenclature —
+    {nomenclature_id: количество}; отсутствующий/отрицательный/None элемент
+    — считается как expected_qty (без расхождения), как и раньше при
+    незаполненном поле формы.
+
+    Возвращает (has_discrepancy, shortage_qty, total_received_qty)."""
     has_discrepancy = False
     shortage_qty = 0
     total_received_qty = 0
     for nomenclature_id, expected_qty in expected.items():
-        received_qty = request.form.get(f"qty_{nomenclature_id}", type=float)
+        received_qty = received_by_nomenclature.get(nomenclature_id)
         if received_qty is None or received_qty < 0:
             received_qty = expected_qty
         total_received_qty += received_qty
@@ -1448,28 +2173,1153 @@ def receive(doc_id):
                     received_qty=received_qty,
                 )
             )
-            _apply_receipt_stock_difference(
-                doc, nomenclature_id, expected_qty, received_qty
-            )
+            _apply_receipt_stock_difference(doc, nomenclature_id, expected_qty, received_qty)
 
-    doc.sent_qty_snapshot = doc.sent_qty_snapshot or sum(expected.values())
+    # Перезаписываем всегда, а не только если было пусто: expected посчитан
+    # заново в начале receive(), по текущему содержимому короба на момент
+    # приемки. Если короб поправили МЕЖДУ завершением сборки (complete(),
+    # где снимок берется первый раз) и приемкой, старый снимок с completion
+    # иначе навсегда остался бы устаревшим и расходился бы с расхождением,
+    # посчитанным по уже новому содержимому (см. чат: бейдж "Излишек" при
+    # видимом недовозе в скобках).
+    doc.sent_qty_snapshot = sum(expected.values())
     doc.received_qty_snapshot = total_received_qty
+    doc.receipt_changed_boxes = True
     doc.received_at = datetime.utcnow()
     db.session.commit()
-    if shortage_qty:
-        flash(
-            f"Перемещение {doc.number} принято с недовозом {shortage_qty:g} шт. "
-            f"на складе «{doc.to_warehouse.name}»",
-            "warning",
+    return has_discrepancy, shortage_qty, total_received_qty
+
+
+def _nomenclature_for_ozon_sku_info(sku_info):
+    """Товар по данным строки акта Ozon (sku_info — барcode/offer_id/sku
+    из ответа /v1/supply-order/act/product/get). Сначала по штрихкоду
+    (_nomenclature_for_act_barcode — та же логика, что и для файла акта),
+    запасной путь — артикул Ozon через OzonArticleMapping, как и в
+    _nomenclature_for_act_item для файла."""
+    barcode = sku_info.get("barcode") or ""
+    item = _nomenclature_for_act_barcode(barcode) if barcode else None
+    if item is not None:
+        return item
+    offer_id = sku_info.get("offer_id") or ""
+    if not offer_id:
+        return None
+    mappings = OzonArticleMapping.query.filter(OzonArticleMapping.article == offer_id).all()
+    if not mappings:
+        mappings = OzonArticleMapping.query.filter(
+            func.lower(OzonArticleMapping.article) == offer_id.lower()
+        ).all()
+    for mapping in mappings:
+        item = _nomenclature_for_act_barcode(mapping.barcode)
+        if item is not None:
+            return item
+    return None
+
+
+def _fetch_ozon_accepted_totals(doc, timeout=None, max_retries=None, deadline=None):
+    """Сводное фактически принятое количество по каждому товару этого
+    перемещения через API Ozon (/v1/supply-order/act/product/get) — БЕЗ
+    разбивки по коробам, которую этот метод не отдает вообще (см. чат —
+    сверено по официальному Swagger-спеку Ozon). Поэтому используется
+    только для автоприемки "все сошлось целиком" (см.
+    receive_via_ozon_api) — решить, какие именно короба не доехали, по
+    этим данным нельзя.
+
+    timeout/max_retries пробрасываются в вызовы Ozon API как есть — см.
+    RECEIVE_REVIEW_CALL_TIMEOUT в receive_review_run: интерактивный вызов
+    не должен зависать на полных повторах (до 5 попыток по 60с — свыше
+    5 минут на один проблемный запрос, см. чат про 504 от реверс-прокси).
+
+    Возвращает (totals_by_nomenclature_id, ошибка) — при ошибке первое
+    значение None, вызывающая сторона не должна автопринимать."""
+    client_id, api_key = get_ozon_credentials()
+    order_number = (doc.marketplace_request_number or "").strip()
+    if not order_number:
+        return None, "у перемещения не указан номер заявки на маркетплейс"
+    try:
+        orders = fetch_supply_orders(
+            client_id, api_key, order_number=order_number, days_back=None,
+            timeout=timeout, max_retries=max_retries, deadline=deadline,
         )
-    elif has_discrepancy:
-        flash(
-            f"Перемещение {doc.number} принято с расхождением на складе «{doc.to_warehouse.name}»",
-            "warning",
-        )
+    except OzonApiError as exc:
+        return None, str(exc)
+    if not orders:
+        return None, f"заявка «{order_number}» не найдена в Ozon API"
+
+    totals = {}
+    unmapped = set()
+    for order in orders:
+        for supply in order.get("supplies") or []:
+            supply_id = supply.get("supply_id")
+            if not supply_id:
+                continue
+            try:
+                items, unidentified = fetch_supply_act_items(
+                    client_id, api_key, supply_id, timeout=timeout, max_retries=max_retries, deadline=deadline,
+                )
+            except OzonApiError as exc:
+                return None, str(exc)
+            if unidentified:
+                return None, f"в поставке {supply_id} есть неопознанные излишки ({unidentified:g} шт)"
+            for item in items:
+                nom = _nomenclature_for_ozon_sku_info(item)
+                fact_qty = item["fact_quantity"]
+                if nom is None:
+                    if fact_qty:
+                        unmapped.add(item["barcode"] or item["offer_id"] or "?")
+                    continue
+                totals[nom.id] = totals.get(nom.id, 0) + fact_qty
+    if unmapped:
+        return None, "товары без сопоставления в номенклатуре: " + ", ".join(sorted(unmapped)[:10])
+    return totals, None
+
+
+def _compute_ozon_mismatches(expected, totals):
+    """Сравнивает отправленное (expected) с фактически принятым по Ozon API
+    (totals) по каждому товару — список (nomenclature_id, expected_qty,
+    got_qty) только для несовпавших позиций. Используется и одиночной
+    автоприемкой (receive_via_ozon_api), и массовой проверкой
+    (receive_review_run)."""
+    mismatches = []
+    for nomenclature_id, expected_qty in expected.items():
+        got_qty = totals.get(nomenclature_id, 0)
+        if got_qty != expected_qty:
+            mismatches.append((nomenclature_id, expected_qty, got_qty))
+    for nomenclature_id in set(totals) - set(expected):
+        if totals[nomenclature_id]:
+            mismatches.append((nomenclature_id, 0, totals[nomenclature_id]))
+    return mismatches
+
+
+def _wb_resolve_supply(token, number, common):
+    """(supply_id, preorder, details) по номеру заявки WB: сначала как ID
+    поставки, иначе как ID заказа (тогда supply_id ищем по списку поставок
+    — он нужен методу расхождений по коробам)."""
+    try:
+        return int(number), False, fetch_wb_supply_details(token, number, **common)
+    except WbNotFound:
+        pass
+    details = fetch_wb_supply_details(token, number, preorder=True, **common)
+    supply_id = None
+    for supply in fetch_wb_supplies(token, **common):
+        if str(supply.get("preorderID") or "") == str(number) and supply.get("supplyID"):
+            supply_id = int(supply["supplyID"])
+            break
+    return supply_id, True, details
+
+
+def _fetch_wb_accepted_totals(doc, timeout=None, max_retries=None, deadline=None):
+    """Аналог _fetch_ozon_accepted_totals для WB: принятое по каждому товару
+    поставки (/api/v1/supplies/{ID}/goods, acceptedQuantity). Только если
+    WB уже закончил приемку (статус «Принято»). Возвращает (totals, ошибка,
+    контекст для разбора по коробам)."""
+    token = get_wb_token()
+    number = (doc.marketplace_request_number or "").strip()
+    if not number.isdigit():
+        return None, "у перемещения не указан числовой номер поставки WB", None
+    common = dict(timeout=timeout, max_retries=max_retries, deadline=deadline)
+    try:
+        supply_id, preorder, details = _wb_resolve_supply(token, number, common)
+    except WbNotFound:
+        return None, f"поставка «{number}» не найдена в WB API", None
+    except WbApiError as exc:
+        return None, str(exc), None
+    status = details.get("statusID")
+    if status != WB_SUPPLY_ACCEPTED:
+        label = WB_SUPPLY_STATUSES.get(status, status or "неизвестен")
+        return None, f"приемка на WB еще не завершена — статус «{label}»", None
+    try:
+        goods = fetch_wb_supply_goods(token, number, preorder=preorder, **common)
+    except WbApiError as exc:
+        return None, str(exc), None
+    totals, unmapped = {}, set()
+    for item in goods:
+        accepted = item.get("acceptedQuantity") or 0
+        barcode = str(item.get("barcode") or "").strip()
+        nom = _nomenclature_for_act_barcode(barcode) if barcode else None
+        if nom is None:
+            if accepted:
+                unmapped.add(barcode or str(item.get("vendorCode") or "?"))
+            continue
+        totals[nom.id] = totals.get(nom.id, 0) + accepted
+    if unmapped:
+        return None, "товары без сопоставления в номенклатуре: " + ", ".join(sorted(unmapped)[:10]), None
+    ctx = {"token": token, "supply_id": supply_id, "number": number, "common": common}
+    return totals, None, ctx
+
+
+def _wb_act_boxes(doc, ctx):
+    """«Акт по коробам» из данных WB API — в том же виде, что разбор файла
+    акта WB ({номер_короба: {штрихкод: принято}}), чтобы дальше работала
+    обычная сверка и проведение по акту (_reconcile_with_act /
+    _receive_from_act). Состав каждого короба — наш, поправленный на
+    расхождения WB по этому коробу (/api/supplies/v1/discrepancies). Короб,
+    по которому не принято ничего, в «акт» не попадает — значит не доехал.
+    Код короба WB — наш номер короба (его вписывает «Состав для WB»); если
+    WB присвоил свой код, короб ищем по составу (/api/v1/supplies/{ID}/package).
+    Возвращает (act_boxes, ошибка)."""
+    if not ctx.get("supply_id"):
+        return None, "не удалось определить ID поставки WB для расхождений по коробам"
+    token, common = ctx["token"], ctx["common"]
+    try:
+        discrepancies = fetch_wb_supply_discrepancies(token, ctx["supply_id"], **common)
+    except WbNotFound:
+        discrepancies = []
+    except WbApiError as exc:
+        return None, f"расхождения по коробам не получены: {exc}"
+
+    contents, numbers = {}, {}
+    for line in doc.lines.order_by(MovementLine.id.asc()).all():
+        items = {}
+        for item in line.box.items:
+            items[item.nomenclature_id] = items.get(item.nomenclature_id, 0) + item.qty
+        contents[line.box.box_number] = items
+        numbers[line.box.box_number.strip().upper()] = line.box.box_number
+
+    sku_cache = {}
+
+    def nom_id(sku):
+        sku = str(sku or "").strip()
+        if not sku:
+            return None
+        if sku not in sku_cache:
+            nom = _nomenclature_for_act_barcode(sku)
+            sku_cache[sku] = nom.id if nom else False
+        return sku_cache[sku]
+
+    package_to_box, unmatched = {}, []
+    for package in discrepancies:
+        code = str(package.get("packageCode") or "").strip()
+        box = numbers.get(code.upper())
+        if box:
+            package_to_box[code] = box
+        else:
+            unmatched.append(code)
+    if unmatched:
+        try:
+            packages = fetch_wb_supply_packages(token, ctx["supply_id"], **common)
+        except WbApiError as exc:
+            return None, f"короба WB {', '.join(unmatched[:3])} не сопоставлены с нашими: {exc}"
+        declared = {}
+        for package in packages:
+            code = str(package.get("packageCode") or "").strip()
+            items = {}
+            for row in package.get("barcodes") or []:
+                nid = nom_id(row.get("barcode"))
+                if not nid:
+                    items = None
+                    break
+                items[nid] = items.get(nid, 0) + (row.get("quantity") or 0)
+            declared[code] = items
+        used = set(package_to_box.values())
+        for code in unmatched:
+            items = declared.get(code)
+            candidates = [b for b, c in contents.items() if items and c == items and b not in used]
+            if len(candidates) != 1:
+                return None, f"короб WB {code} не удалось однозначно сопоставить с нашим коробом"
+            package_to_box[code] = candidates[0]
+            used.add(candidates[0])
+
+    deltas = {}
+    for package in discrepancies:
+        box = package_to_box[str(package.get("packageCode") or "").strip()]
+        delta = deltas.setdefault(box, {})
+        for item in package.get("items") or []:
+            for sku_key, qty_key, sign in (("declaredSku", "declaredAmount", -1), ("actualSku", "actualAmount", 1)):
+                qty = item.get(qty_key) or 0
+                if not qty:
+                    continue
+                nid = nom_id(item.get(sku_key))
+                if not nid:
+                    return None, f"в расхождениях WB неизвестный товар {item.get(sku_key)}"
+                delta[nid] = delta.get(nid, 0) + sign * qty
+
+    noms = {n.id: n for n in Nomenclature.query.filter(
+        Nomenclature.id.in_({nid for c in contents.values() for nid in c} | {nid for d in deltas.values() for nid in d} or {0})
+    ).all()}
+    act_boxes = {}
+    for box, items in contents.items():
+        accepted = dict(items)
+        for nid, change in deltas.get(box, {}).items():
+            accepted[nid] = accepted.get(nid, 0) + change
+        if any(qty < 0 for qty in accepted.values()):
+            return None, f"по коробу {box} WB показывает недостачу больше, чем было в коробе"
+        accepted = {nid: qty for nid, qty in accepted.items() if qty > 0}
+        if accepted:
+            act_boxes[box] = {noms[nid].barcode: qty for nid, qty in accepted.items()}
+    return act_boxes, None
+
+
+def _wb_box_reconciliation(doc, ctx, totals):
+    """Сверка по коробам WB, проверенная на итогах: (rec, ошибка). rec —
+    результат _reconcile_with_act, его payload можно проводить через
+    _receive_from_act. Итоги по коробам обязаны совпасть с принятым по
+    товарам (goods) — иначе данные WB неполные, решать вручную."""
+    act_boxes, error = _wb_act_boxes(doc, ctx)
+    if error:
+        return None, error
+    if not act_boxes:
+        return None, "по данным WB не принят ни один короб"
+    rec = _reconcile_with_act(doc, act_boxes)
+    if rec["error"] or rec["unknown_keys"] or rec["unidentified"]:
+        return None, rec["error"] or "в данных WB есть неизвестные короба или товары"
+    by_item = {}
+    for items in rec["payload"].values():
+        for nid, qty in items.items():
+            by_item[int(nid)] = by_item.get(int(nid), 0) + qty
+    if {k: v for k, v in by_item.items() if v} != {k: v for k, v in totals.items() if v}:
+        return None, "расхождения WB по коробам не сходятся с итогами приемки по товарам"
+    return rec, None
+
+
+@bp.route("/<int:doc_id>/receive/ozon-api", methods=["POST"])
+def receive_via_ozon_api(doc_id):
+    """Автоприемка по данным Ozon API — без разбора по коробам: если то,
+    что Ozon показывает как фактически принятое, СОВПАДАЕТ ПОЛНОСТЬЮ с
+    тем, что отправили (по каждому товару), подтверждаем приемку как есть
+    — как обычная кнопка "Принято на складе" без расхождений. Если есть
+    хоть какое-то расхождение — не принимаем автоматически: понять, какие
+    именно короба не доехали, по этим данным нельзя (нет разбивки по
+    грузоместам, см. _fetch_ozon_accepted_totals), поэтому решать нужно
+    вручную — обычной формой или актом файлом (см. чат)."""
+    doc = MovementDocument.query.get_or_404(doc_id)
+    blocked = _receive_precheck(doc)
+    if blocked is not None:
+        return blocked
+    marketplace = doc.to_warehouse.marketplace
+    if marketplace not in ("ozon", "wb"):
+        flash("Автоприемка по API доступна только для перемещений на Ozon и WB", "danger")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+    mp_label = "WB" if marketplace == "wb" else "Ozon"
+
+    expected = _expected_qty_by_nomenclature(doc)
+    if not expected:
+        flash("В списке нет коробов с товаром", "danger")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+
+    wb_ctx = None
+    if marketplace == "wb":
+        totals, error, wb_ctx = _fetch_wb_accepted_totals(doc, deadline=time.monotonic() + 120)
     else:
-        flash(f"Перемещение {doc.number} принято на складе МП «{doc.to_warehouse.name}»", "success")
+        totals, error = _fetch_ozon_accepted_totals(doc)
+    if error:
+        flash(f"Не удалось свериться с {mp_label} API: {error}. Примите вручную.", "danger")
+        return redirect(url_for("movement.receive", doc_id=doc.id))
+
+    mismatches = _compute_ozon_mismatches(expected, totals)
+
+    if mismatches and wb_ctx is not None:
+        # WB отдает расхождения по каждому коробу — показываем тот же экран
+        # сверки, что и при загрузке файла акта: какие короба вернутся, где
+        # поправится количество. Ничего не записывается до подтверждения.
+        rec, box_error = _wb_box_reconciliation(doc, wb_ctx, totals)
+        if rec is not None:
+            flash(
+                "WB API: расхождения разобраны по коробам — проверьте сверку ниже и подтвердите приемку.",
+                "info",
+            )
+            return render_template(
+                "movement/receive_act.html", doc=doc, rec=rec, act_total=sum(totals.values()),
+                filename=f"данные WB API (поставка {wb_ctx['number']})",
+                payload_json=json.dumps(rec["payload"], ensure_ascii=False),
+            )
+        flash(f"WB API: по коробам разобрать не удалось — {box_error}.", "warning")
+
+    if mismatches and _is_identified_surplus_only(mismatches):
+        _, _, total_received_qty = _accept_with_identified_surplus(doc, expected, totals)
+        flash(
+            f"Перемещение {doc.number} принято по данным {mp_label} API — {total_received_qty:g} шт., "
+            f"{_discrepancy_summary(doc)}; излишек добавлен в короб и списан с остатка отправителя.",
+            "success",
+        )
+        return redirect(url_for("movement.detail", doc_id=doc.id))
+
+    if mismatches:
+        flash(
+            f"{mp_label} API показывает расхождение по {len(mismatches)} товар(ам) — они выделены в таблице ниже. "
+            "Автоматически принять нельзя: непонятно, какой короб не доехал. «Принято по факту» уже "
+            f"проставлено по данным {mp_label} — проверьте и подтвердите, или поправьте вручную.",
+            "warning",
+        )
+        received = {nid: totals.get(nid, 0) for nid in expected}
+        return _render_receive_form(doc, expected, received, ozon_totals=totals)
+
+    _, _, total_received_qty = _apply_receive(doc, expected, expected)
+    flash(
+        f"Перемещение {doc.number} принято по данным {mp_label} API — совпало полностью, {total_received_qty:g} шт.",
+        "success",
+    )
     return redirect(url_for("movement.detail", doc_id=doc.id))
+
+
+# Сколько дней после даты слота приемки выжидаем перед проверкой через
+# Ozon API (чат: "также в исключения добавим текущий день минус 2 дня на
+# приемку") — Ozon обрабатывает приемку поставки не мгновенно в день
+# слота, и сверка раньше срока видела бы ложную недостачу (товар еще
+# физически не разобран и не внесен в систему Ozon).
+RECEIVE_REVIEW_SLOT_GRACE_DAYS = 2
+
+
+def _pending_ozon_receive_documents():
+    """Завершенные перемещения на Ozon и WB, еще не принятые на складе, —
+    кандидаты для массовой проверки (см. receive_review/receive_review_run).
+    Исключены (чат: "исключить... даты слотов не наступивших и также
+    перемещения без числовых номеров заявки", позже — "текущий день минус
+    2 дня на приемку"):
+      - без номера заявки или с номером не из одних цифр (например "fbs" —
+        попадает в это поле не как настоящий номер поставки Ozon и ведет
+        только к ошибке/лишнему запросу к API, см. чат про такие записи);
+      - с датой слота приемки (delivery_slot_date) позже, чем
+        RECEIVE_REVIEW_SLOT_GRACE_DAYS дней назад — включая и еще не
+        наступившие даты, и совсем недавние, которые Ozon может еще не
+        успеть обработать; такие даты заполняются вручную заранее, поэтому
+        сами по себе НЕ являются признаком ошибки (см. отличие от записей
+        без номера заявки выше)."""
+    cutoff = date.today() - timedelta(days=RECEIVE_REVIEW_SLOT_GRACE_DAYS)
+    candidates = (
+        MovementDocument.query.join(Warehouse, MovementDocument.to_warehouse_id == Warehouse.id)
+        .filter(
+            MovementDocument.status == "completed",
+            MovementDocument.received_at.is_(None),
+            Warehouse.marketplace.in_(("ozon", "wb")),
+            MovementDocument.marketplace_request_number.isnot(None),
+            MovementDocument.marketplace_request_number != "",
+        )
+        .order_by(MovementDocument.shipped_at.asc())
+        .all()
+    )
+    return [
+        doc
+        for doc in candidates
+        if doc.marketplace_request_number.strip().isdigit()
+        and (doc.delivery_slot_date is None or doc.delivery_slot_date <= cutoff)
+    ]
+
+
+def _find_single_missing_box(doc, mismatches):
+    """Проверяет, объясняется ли расхождение ровно ОДНИМ недоехавшим
+    коробом (см. чат: "проверить все ли короба, если короб отсутствует —
+    вернуть его на склад"). API Ozon не отдает разбивку по коробам
+    (_fetch_ozon_accepted_totals), поэтому это лишь предположение по сумме:
+    если нет ни одного излишка (только недостача) и ровно один короб
+    документа по составу СОВПАДАЕТ С НЕДОСТАЧЕЙ ТОЧНО — считаем, что не
+    доехал именно он. Если есть излишек, или недостача не сходится ровно с
+    одним коробом (несколько кандидатов или вообще ни одного) — считать
+    однозначно нельзя, нужна ручная проверка (возвращает None)."""
+    required = {}
+    for nomenclature_id, expected_qty, got_qty in mismatches:
+        if got_qty > expected_qty:
+            return None
+        shortage = expected_qty - got_qty
+        if shortage:
+            required[nomenclature_id] = shortage
+    if not required:
+        return None
+    matches = []
+    for line in doc.lines.order_by(MovementLine.id.asc()).all():
+        box_contents = {}
+        for item in line.box.items:
+            box_contents[item.nomenclature_id] = box_contents.get(item.nomenclature_id, 0) + item.qty
+        if box_contents == required:
+            matches.append(line)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _return_single_box_and_accept_rest(doc, line):
+    """Возвращает один короб на склад-отправитель как недоехавший (тот же
+    прием, что и у возврата коробов, не найденных в акте — см.
+    _receive_from_act) и принимает остальное как есть: после удаления
+    строки оставшееся содержимое документа по построению (см.
+    _find_single_missing_box) уже равно тому, что показал Ozon API,
+    поэтому расхождение не записывается."""
+    box_number = line.box.box_number
+    _revert_line_effects(doc, line)
+    MovementCargoPlace.query.filter_by(document_id=doc.id, box_id=line.box_id).delete()
+    db.session.delete(line)
+    db.session.flush()
+    expected = _expected_qty_by_nomenclature(doc)
+    _apply_receive(doc, expected, expected)
+    doc.receipt_returned_boxes = box_number
+    db.session.commit()
+    return box_number
+
+
+def _is_identified_surplus_only(mismatches):
+    """Расхождение только излишком (по каждому товару принято не меньше
+    отправленного). Товары тут всегда опознаны: неопознанные позиции и
+    товары без сопоставления _fetch_ozon_accepted_totals отдает ошибкой."""
+    return bool(mismatches) and all(got_qty >= expected_qty for _, expected_qty, got_qty in mismatches)
+
+
+def _accept_with_identified_surplus(doc, expected, totals):
+    """Приемка по количествам Ozon (totals). Недостачу _apply_receive
+    списывает из коробов как обычно. Приемка с излишком (см. чат: "если товар принят излишком — добавить
+    его, если его можно идентифицировать"). Излишек добавляется в короб
+    перемещения (в тот, где этот товар уже есть, иначе в последний) и,
+    как и при ручной приемке, списывается с неразмещенного остатка
+    отправителя; расхождение записывается. receipt_from_act — чтобы
+    «Вернуть в работу» снял добавленное из коробов обратно."""
+    lines = doc.lines.order_by(MovementLine.id.asc()).all()
+    full_expected = dict(expected)
+    for nomenclature_id, got_qty in totals.items():
+        expected_qty = full_expected.setdefault(nomenclature_id, 0)
+        excess = got_qty - expected_qty
+        if excess <= 0 or not lines:
+            continue
+        target = None
+        for line in reversed(lines):
+            target = BoxItem.query.filter_by(box_id=line.box_id, nomenclature_id=nomenclature_id).first()
+            if target is not None:
+                break
+        if target is not None:
+            target.qty += excess
+        else:
+            db.session.add(BoxItem(box_id=lines[-1].box_id, nomenclature_id=nomenclature_id, qty=excess))
+    received = {nid: totals.get(nid, 0) for nid in full_expected}
+    doc.receipt_from_act = True
+    if doc.synced_to_1c_at is not None:
+        doc.composition_changed_at = datetime.utcnow()
+    return _apply_receive(doc, full_expected, received)
+
+
+def _recent_shortages(days=60):
+    """{id товара: [(номер перемещения, недостача)]} по уже принятым за
+    последние дни перемещениям — вдруг излишек здесь это недостача там."""
+    since = datetime.utcnow() - timedelta(days=days)
+    found = {}
+    rows = (
+        db.session.query(MovementDocument.number, MovementReceiptDiscrepancy)
+        .join(MovementReceiptDiscrepancy, MovementReceiptDiscrepancy.document_id == MovementDocument.id)
+        .filter(MovementDocument.received_at >= since)
+        .all()
+    )
+    for number, discrepancy in rows:
+        if discrepancy.received_qty < discrepancy.expected_qty:
+            found.setdefault(discrepancy.nomenclature_id, []).append(
+                (number, discrepancy.expected_qty - discrepancy.received_qty)
+            )
+    return found
+
+
+def _annotate_possible_mixups(manual, names):
+    """Подсказка для ручной проверки (см. чат: "возможно, в таком же
+    кол-ве товар всплыл или не хватило в другом перемещении — ошибка при
+    отправке"): если в ДРУГОМ перемещении из этой же проверки по тому же
+    товару нашлось расхождение ровно противоположное и той же величины —
+    похоже, короб по ошибке попал не в ту поставку при отправке. Ничего не
+    меняет — только добавляет текстовую подсказку entry["hints"], решение
+    все равно за человеком."""
+    deltas = []
+    for idx, entry in enumerate(manual):
+        for nomenclature_id, expected_qty, got_qty in entry["mismatches"]:
+            delta = got_qty - expected_qty
+            if delta:
+                deltas.append((idx, nomenclature_id, delta))
+    for idx, nomenclature_id, delta in deltas:
+        for other_idx, other_nid, other_delta in deltas:
+            if other_idx == idx or other_nid != nomenclature_id or other_delta != -delta:
+                continue
+            other_doc = manual[other_idx]["doc"]
+            name = names.get(nomenclature_id, nomenclature_id)
+            kind = "Недостача" if delta < 0 else "Излишек"
+            other_kind = "излишком" if delta < 0 else "недостачей"
+            manual[idx].setdefault("hints", []).append(
+                f"{kind} «{name}» {abs(delta):g} шт. совпадает по величине с {other_kind} в "
+                f"перемещении {other_doc.number} — возможно, короб по ошибке попал не в ту "
+                f"поставку при отправке."
+            )
+
+
+# Сколько документов проверять за один вызов (см. чат: 504 от реверс-прокси
+# при проверке сразу всех неприятых документов — на каждый нужно 2-4 живых
+# запроса к Ozon API, и при большом количестве накопившихся документов
+# суммарное время легко превышает таймаут прокси). Остальные отмеченные
+# документы проверяются следующим нажатием кнопки "Продолжить проверку".
+RECEIVE_REVIEW_BATCH_LIMIT = 8
+
+# Бюджет на весь вызов и на одну попытку запроса к Ozon API (см. чат: 504
+# повторялся даже при выборе всего 8 документов — обычные ozon_api.REQUEST_TIMEOUT=60с
+# и MAX_RETRIES=5 дают больше 5 минут на ОДИН зависший/ошибающийся вызов, и
+# батч тут не спасает. Здесь — жестче: максимум 3 попытки по 10с на вызов
+# (2 попытки оказалось мало — при обычном 429 "слишком много запросов" от
+# Ozon это всего 1 повтор, не хватает пережить кратковременное
+# ограничение, см. чат про /v1/supply-order/act/product/get: 429),
+# и как только суммарное время по всем уже обработанным документам
+# превышает RECEIVE_REVIEW_TIME_BUDGET, обработка следующих документов из
+# пачки останавливается (они уходят в "остальные ждут проверки" вместе с
+# теми, что не поместились в RECEIVE_REVIEW_BATCH_LIMIT) — так единственный
+# проблемный документ не утягивает за собой весь запрос.
+RECEIVE_REVIEW_TIME_BUDGET = 25.0
+RECEIVE_REVIEW_CALL_TIMEOUT = 10
+RECEIVE_REVIEW_CALL_MAX_RETRIES = 3
+
+
+@bp.route("/receive-review", methods=["GET"])
+def receive_review():
+    """Админская страница массовой проверки неприятых перемещений на Ozon
+    (см. чат: "нужна кнопка для роли админ для проверки всех непринятых
+    перемешений", позже — "надо сделать так чтобы выбирать перемещения
+    для проверки": список с чекбоксами, проверяются только отмеченные)."""
+    if not current_user.is_admin:
+        flash("Массовая проверка приемки доступна только администратору", "danger")
+        return redirect(url_for("movement.list_documents"))
+    return render_template(
+        "movement/receive_review.html",
+        docs=_pending_ozon_receive_documents(),
+        batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
+        slot_grace_days=RECEIVE_REVIEW_SLOT_GRACE_DAYS,
+    )
+
+
+# Статусы заявок Ozon для списка проверки — кэш на несколько минут, чтобы
+# повторное открытие страницы не гоняло десятки запросов к API.
+OZON_STATES_CACHE_SECONDS = 300
+OZON_STATES_DEADLINE = 40
+_ozon_states_cache = {"at": None, "states": {}, "requested": set()}
+_wb_states_cache = {"at": None, "states": {}}
+# Статус поставки WB (statusID) → цвет значка: 5 «Принято» — приемка закончена.
+WB_STATE_BADGE = {5: "bg-success", 4: "bg-info text-dark", 6: "bg-warning text-dark",
+                  3: "bg-warning text-dark", 2: "bg-secondary", 1: "bg-secondary"}
+
+# Цвет значка статуса: приемка закончена — зеленый, идет — голубой,
+# спор/отказ/отмена — красный.
+OZON_STATE_BADGE = {
+    "COMPLETED": "bg-success",
+    "REPORTS_CONFIRMATION_AWAITING": "bg-success",
+    "ACCEPTANCE_AT_STORAGE_WAREHOUSE": "bg-info text-dark",
+    "IN_TRANSIT": "bg-warning text-dark",
+    "ACCEPTED_AT_SUPPLY_WAREHOUSE": "bg-warning text-dark",
+    "READY_TO_SUPPLY": "bg-secondary",
+    "DATA_FILLING": "bg-secondary",
+    "REPORT_REJECTED": "bg-danger",
+    "REJECTED_AT_SUPPLY_WAREHOUSE": "bg-danger",
+    "CANCELLED": "bg-danger",
+    "OVERDUE": "bg-danger",
+}
+
+
+@bp.route("/receive-review/ozon-states")
+def receive_review_ozon_states():
+    """Статусы заявок Ozon для перемещений из списка массовой проверки —
+    одной выборкой списка заявок (/v3/supply-order/list + get), а не
+    запросом на каждое перемещение. Отдается JSON, страница подгружает его
+    после открытия, чтобы не ждать API при загрузке."""
+    if not current_user.is_admin:
+        return jsonify(ok=False, error="Только для администратора"), 403
+    all_docs = _pending_ozon_receive_documents()
+    docs = [d for d in all_docs if d.to_warehouse.marketplace == "ozon"]
+    wb_docs = [d for d in all_docs if d.to_warehouse.marketplace == "wb"]
+    numbers = {doc.marketplace_request_number.strip() for doc in docs}
+    cache = _ozon_states_cache
+    fresh = (
+        cache["at"] is not None
+        and time.monotonic() - cache["at"] < OZON_STATES_CACHE_SECONDS
+        and numbers <= cache["requested"]
+        and not request.args.get("refresh")
+    )
+    error = None
+    if not fresh and numbers:
+        client_id, api_key = get_ozon_credentials()
+        oldest = min((doc.shipped_at or doc.completed_at or doc.created_at) for doc in docs)
+        days_back = min(max((datetime.utcnow() - oldest).days + 14, 30), 365)
+        try:
+            orders = fetch_supply_orders(
+                client_id, api_key, days_back=days_back,
+                timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES,
+                deadline=time.monotonic() + OZON_STATES_DEADLINE, wanted_numbers=numbers, partial_ok=True,
+            )
+        except OzonApiError as exc:
+            orders = None
+            error = str(exc)
+        if orders is not None:
+            states = {}
+            for order in orders:
+                number = str(order.get("order_number") or "").strip()
+                if number and number not in states:
+                    states[number] = order.get("state") or "UNSPECIFIED"
+            cache["states"] = states
+            cache["requested"] = set(numbers)
+            cache["at"] = time.monotonic()
+    states = cache["states"]
+    result = {}
+    for doc in docs:
+        state = states.get(doc.marketplace_request_number.strip())
+        result[doc.id] = {
+            "state": state,
+            "label": SUPPLY_STATES.get(state, state) if state else ("—" if error else "не найдена"),
+            "badge": OZON_STATE_BADGE.get(state, "bg-secondary") if state else "bg-light text-muted border",
+        }
+
+    wb_error = None
+    if wb_docs:
+        wb_cache = _wb_states_cache
+        if (
+            wb_cache["at"] is None
+            or time.monotonic() - wb_cache["at"] >= OZON_STATES_CACHE_SECONDS
+            or request.args.get("refresh")
+        ):
+            try:
+                supplies = fetch_wb_supplies(
+                    get_wb_token(), timeout=RECEIVE_REVIEW_CALL_TIMEOUT,
+                    max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES,
+                    deadline=time.monotonic() + OZON_STATES_DEADLINE,
+                )
+            except WbApiError as exc:
+                wb_error = str(exc)
+            else:
+                wb_states = {}
+                for supply in supplies:
+                    for key in ("supplyID", "preorderID"):
+                        if supply.get(key):
+                            wb_states.setdefault(str(supply[key]), supply.get("statusID"))
+                wb_cache.update({"at": time.monotonic(), "states": wb_states})
+        for doc in wb_docs:
+            status = _wb_states_cache["states"].get(doc.marketplace_request_number.strip())
+            result[doc.id] = {
+                "state": f"WB_{status}" if status else None,
+                "label": f"WB: {WB_SUPPLY_STATUSES.get(status, status)}" if status
+                else ("—" if wb_error else "WB: не найдена"),
+                "badge": WB_STATE_BADGE.get(status, "bg-secondary") if status else "bg-light text-muted border",
+            }
+    errors = [e for e in (error, f"WB: {wb_error}" if wb_error else None) if e]
+    return jsonify(ok=not errors, error="; ".join(errors) or None, states=result)
+
+
+RECEIVE_REVIEW_JOB_KIND = "ozon_receive_review"
+# Поток проверки отмечается «жив» каждые RECEIVE_REVIEW_HEARTBEAT_SECONDS;
+# без отметки дольше RECEIVE_REVIEW_JOB_STALE_SECONDS (сервер перезапустили,
+# поток погиб) проверка считается оборванной — страница не висит вечно.
+RECEIVE_REVIEW_HEARTBEAT_SECONDS = 10
+RECEIVE_REVIEW_JOB_STALE_SECONDS = 120
+# Сколько максимум ждем Ozon по одному перемещению (все запросы вместе):
+# дальше оно уходит в ручную проверку с причиной «Ozon не ответил вовремя».
+RECEIVE_REVIEW_DOC_DEADLINE = 90
+# Если ход проверки не сдвигается дольше этого (поток жив, но застрял),
+# проверка помечается зависшей.
+RECEIVE_REVIEW_JOB_STALL_SECONDS = 300
+
+
+def _run_receive_review(docs, time_budget=None, on_progress=None):
+    """Ядро массовой проверки (см. receive_review_run). Возвращает
+    сериализуемый результат — его можно и сразу показать, и сохранить для
+    фоновой проверки:
+      auto_accepted: [doc_id], box_returned: [[doc_id, короб]],
+      surplus_accepted / manual: [{doc_id, reason, rows: [[nid, отпр., принято]], hints}],
+      remaining_ids: [doc_id] — не успели проверить (бюджет времени)."""
+    start = time.monotonic()
+    auto_accepted, box_returned, manual, surplus_candidates, surplus_accepted = [], [], [], [], []
+    box_candidates, fixed_by_boxes = [], []
+    processed = 0
+    for doc in docs:
+        # Бюджет времени не применяется к первому документу — иначе при
+        # уже истекшем бюджете пачка могла бы не обработать вообще ничего.
+        if time_budget is not None and processed and time.monotonic() - start > time_budget:
+            break
+        processed += 1
+        doc_started = time.monotonic()
+        try:
+            db.session.refresh(doc)
+            if doc.received_at is not None:
+                continue      # уже приняли (вручную или другой проверкой) — не трогаем
+            expected = _expected_qty_by_nomenclature(doc)
+            if not expected:
+                manual.append({"doc": doc, "reason": "в перемещении нет коробов с товаром", "mismatches": []})
+                continue
+            fetch_args = dict(
+                timeout=RECEIVE_REVIEW_CALL_TIMEOUT, max_retries=RECEIVE_REVIEW_CALL_MAX_RETRIES,
+                deadline=time.monotonic() + RECEIVE_REVIEW_DOC_DEADLINE,
+            )
+            wb_ctx = None
+            if doc.to_warehouse.marketplace == "wb":
+                totals, error, wb_ctx = _fetch_wb_accepted_totals(doc, **fetch_args)
+            else:
+                totals, error = _fetch_ozon_accepted_totals(doc, **fetch_args)
+            if error:
+                manual.append({"doc": doc, "reason": error, "mismatches": []})
+                continue
+            mismatches = _compute_ozon_mismatches(expected, totals)
+            if not mismatches:
+                _apply_receive(doc, expected, expected)
+                auto_accepted.append(doc.id)
+                continue
+            all_rows = [
+                (nid, expected.get(nid, 0), totals.get(nid, 0)) for nid in set(expected) | set(totals)
+            ]
+            box_note = None
+            if wb_ctx is not None:
+                # WB отдает расхождения по каждому коробу — разбираем точно,
+                # какой короб не доехал и где сколько не хватило/лишнее.
+                rec, box_note = _wb_box_reconciliation(doc, wb_ctx, totals)
+                if rec is not None:
+                    box_candidates.append(
+                        {"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows,
+                         "payload": rec["payload"], "returned": [m["box_number"] for m in rec["missing"]]}
+                    )
+                    continue
+            if _is_identified_surplus_only(mismatches):
+                # Решаем после всей пачки: если такой же недостачей отозвалось
+                # другое перемещение — это не излишек, а ошибка при отправке.
+                surplus_candidates.append(
+                    {"doc": doc, "reason": None, "mismatches": mismatches, "rows": all_rows,
+                     "expected": expected, "totals": totals}
+                )
+                continue
+            missing_line = _find_single_missing_box(doc, mismatches)
+            if missing_line is not None:
+                box_returned.append([doc.id, _return_single_box_and_accept_rest(doc, missing_line)])
+                continue
+            manual.append({
+                "doc": doc, "mismatches": mismatches, "rows": all_rows,
+                "reason": f"по коробам WB разобрать не удалось: {box_note}" if box_note else None,
+            })
+        except Exception as exc:  # noqa: BLE001 — один сбойный документ не должен рушить остальные
+            db.session.rollback()
+            current_app.logger.exception("Проверка приемки Ozon: ошибка на %s", doc.number)
+            manual.append({"doc": doc, "reason": f"ошибка при проверке: {exc}", "mismatches": []})
+        finally:
+            spent = time.monotonic() - doc_started
+            if spent > 30:
+                current_app.logger.warning(
+                    "Проверка приемки Ozon: %s проверялся %.0f с", doc.number, spent
+                )
+            if on_progress is not None:
+                on_progress(processed)
+
+    names = {
+        n.id: n.name for n in Nomenclature.query.filter(
+            Nomenclature.id.in_({
+                nid for e in manual + surplus_candidates + box_candidates for nid, _, _ in e.get("rows", [])
+            })
+        ).all()
+    }
+    _annotate_possible_mixups(manual + surplus_candidates + box_candidates, names)
+    for entry in box_candidates:
+        if entry.get("hints"):
+            entry["reason"] = "Расхождение похоже на ошибку при отправке — проверьте вручную"
+            manual.append(entry)
+            continue
+        outcome = _receive_from_act(entry["doc"], entry["payload"])
+        if outcome is None:
+            entry["reason"] = "по данным WB не принят ни один короб"
+            manual.append(entry)
+            continue
+        entry["returned"] = outcome["returned"]
+        fixed_by_boxes.append(entry)
+    recent_shortages = _recent_shortages() if surplus_candidates else {}
+    for entry in surplus_candidates:
+        for nid, expected_qty, got_qty in entry["mismatches"]:
+            excess = got_qty - expected_qty
+            for number, shortage in recent_shortages.get(nid, []):
+                if abs(shortage - excess) < 1e-6 and number != entry["doc"].number:
+                    entry.setdefault("hints", []).append(
+                        f"Излишек «{names.get(nid, nid)}» {excess:g} шт. совпадает с недостачей в уже "
+                        f"принятом перемещении {number} — возможно, товар уехал не в ту поставку."
+                    )
+        if entry.get("hints"):
+            entry["reason"] = "Излишек похож на ошибку при отправке — проверьте вручную"
+            manual.append(entry)
+            continue
+        _accept_with_identified_surplus(entry["doc"], entry["expected"], entry["totals"])
+        surplus_accepted.append(entry)
+
+    def _serialize(entry):
+        return {
+            "doc_id": entry["doc"].id,
+            "reason": entry.get("reason"),
+            "rows": [list(r) for r in entry.get("rows", [])],
+            "hints": entry.get("hints", []),
+            "returned": entry.get("returned", []),
+        }
+
+    return {
+        "auto_accepted": auto_accepted,
+        "box_returned": box_returned,
+        "fixed_by_boxes": [_serialize(e) for e in fixed_by_boxes],
+        "surplus_accepted": [_serialize(e) for e in surplus_accepted],
+        "manual": [_serialize(e) for e in manual],
+        "remaining_ids": [doc.id for doc in docs[processed:]],
+    }
+
+
+def _ozon_rows_signature(doc_id, rows):
+    """Подпись строк сверки (товар, отправлено, принято по Ozon) для кнопки
+    «Подтвердить приемку»: количество нельзя подправить в форме, а принять
+    можно только то, что показано на экране."""
+    normalized = sorted([int(nid), float(exp), float(got)] for nid, exp, got in rows)
+    raw = json.dumps({"doc": int(doc_id), "rows": normalized}, sort_keys=True)
+    key = str(current_app.config.get("SECRET_KEY") or "").encode()
+    return hmac.new(key, raw.encode(), hashlib.sha256).hexdigest()
+
+
+@bp.route("/<int:doc_id>/receive/ozon-confirm", methods=["POST"])
+def receive_ozon_confirm(doc_id):
+    """Кнопка «Подтвердить приемку» в результате массовой проверки: принять
+    перемещение ровно по данным Ozon, показанным в таблице (недостача
+    списывается из коробов, излишек добавляется в короб и списывается с
+    остатка отправителя). Если состав коробов изменился после проверки —
+    не принимаем, нужно проверить заново."""
+    return_to = request.form.get("return_to") or ""
+    if not return_to.startswith("/") or return_to.startswith("//"):
+        return_to = url_for("movement.receive_review")
+    if not current_user.is_admin:
+        flash("Подтвердить приемку по проверке может только администратор", "danger")
+        return redirect(return_to)
+    doc = MovementDocument.query.get_or_404(doc_id)
+    blocked = _receive_precheck(doc)
+    if blocked is not None:
+        return redirect(return_to)
+    try:
+        rows = json.loads(request.form.get("rows") or "[]")
+        rows = [(int(nid), float(exp), float(got)) for nid, exp, got in rows]
+    except (TypeError, ValueError):
+        rows = []
+    sig = request.form.get("sig") or ""
+    if not rows or not hmac.compare_digest(sig, _ozon_rows_signature(doc.id, rows)):
+        flash(f"{doc.number}: данные проверки повреждены — запустите проверку заново", "danger")
+        return redirect(return_to)
+    expected = _expected_qty_by_nomenclature(doc)
+    shown_expected = {nid: exp for nid, exp, _ in rows if exp}
+    if {nid: qty for nid, qty in expected.items() if qty} != shown_expected:
+        flash(f"{doc.number}: состав коробов изменился после проверки — запустите проверку заново", "danger")
+        return redirect(return_to)
+    totals = {nid: got for nid, _, got in rows}
+    _, _, total_received_qty = _accept_with_identified_surplus(doc, expected, totals)
+    flash(
+        f"Перемещение {doc.number} принято по данным Ozon: {total_received_qty:g} шт. — {_discrepancy_summary(doc)}",
+        "success",
+    )
+    return redirect(return_to)
+
+
+def _render_receive_review_result(result, extra_remaining_ids=(), job=None):
+    """Показ результата (_run_receive_review) — свежего или сохраненного."""
+    doc_ids = set(result["auto_accepted"]) | {d for d, _ in result["box_returned"]}
+    result.setdefault("fixed_by_boxes", [])
+    doc_ids |= {e["doc_id"] for e in result["surplus_accepted"] + result["manual"] + result["fixed_by_boxes"]}
+    docs = {d.id: d for d in MovementDocument.query.filter(MovementDocument.id.in_(doc_ids or [0])).all()}
+    nids = {r[0] for e in result["surplus_accepted"] + result["manual"] + result["fixed_by_boxes"] for r in e["rows"]}
+    noms = {n.id: n for n in Nomenclature.query.filter(Nomenclature.id.in_(nids or [0])).all()}
+
+    def _hydrate(entry):
+        return {
+            "doc": docs.get(entry["doc_id"]),
+            "reason": entry["reason"],
+            "hints": entry["hints"],
+            "returned": entry.get("returned", []),
+            "rows_json": json.dumps(entry["rows"]),
+            "sig": _ozon_rows_signature(entry["doc_id"], entry["rows"]) if entry["rows"] else None,
+            "diff_rows": sorted(
+                ((noms[nid], exp, got) for nid, exp, got in entry["rows"] if nid in noms),
+                key=lambda r: r[0].name,
+            ),
+        }
+
+    remaining_ids = list(result["remaining_ids"]) + list(extra_remaining_ids)
+    return render_template(
+        "movement/receive_review_result.html",
+        auto_accepted=[docs[i] for i in result["auto_accepted"] if i in docs],
+        box_returned=[(docs[i], box) for i, box in result["box_returned"] if i in docs],
+        surplus_accepted=[e for e in map(_hydrate, result["surplus_accepted"]) if e["doc"]],
+        fixed_by_boxes=[e for e in map(_hydrate, result["fixed_by_boxes"]) if e["doc"]],
+        manual=[e for e in map(_hydrate, result["manual"]) if e["doc"]],
+        remaining=len(remaining_ids),
+        remaining_ids=remaining_ids,
+        batch_limit=RECEIVE_REVIEW_BATCH_LIMIT,
+        job=job,
+        return_to=url_for("movement.receive_review_job", job_id=job.id) if job else url_for("movement.receive_review"),
+    )
+
+
+def _running_review_job():
+    job = (
+        BackgroundJob.query.filter_by(kind=RECEIVE_REVIEW_JOB_KIND, status="running")
+        .order_by(BackgroundJob.id.desc())
+        .first()
+    )
+    if job is None:
+        return None
+    now = datetime.utcnow()
+    last_seen = job.heartbeat_at or job.started_at
+    last_progress = job.progress_at or job.started_at
+    error = None
+    if now - last_seen > timedelta(seconds=RECEIVE_REVIEW_JOB_STALE_SECONDS):
+        error = "проверка оборвалась — скорее всего, сервер перезапускался"
+    elif now - last_progress > timedelta(seconds=RECEIVE_REVIEW_JOB_STALL_SECONDS):
+        error = (
+            f"проверка зависла на перемещении {job.current_label or '?'} — "
+            f"больше {RECEIVE_REVIEW_JOB_STALL_SECONDS // 60} минут без продвижения"
+        )
+    if error:
+        job.status = "failed"
+        job.error = error
+        job.finished_at = now
+        db.session.commit()
+        return None
+    return job
+
+
+def _job_heartbeat(app, job_id, stop):
+    """Отдельный поток: пока идет проверка, раз в несколько секунд
+    отмечает задачу живой (сам поток проверки может надолго уйти в запрос
+    к Ozon API)."""
+    with app.app_context():
+        while not stop.wait(RECEIVE_REVIEW_HEARTBEAT_SECONDS):
+            try:
+                BackgroundJob.query.filter_by(id=job_id, status="running").update(
+                    {"heartbeat_at": datetime.utcnow()}
+                )
+                db.session.commit()
+            except Exception:  # noqa: BLE001
+                db.session.rollback()
+        db.session.remove()
+
+
+class _ReviewJobStopped(Exception):
+    """Фоновую проверку пометили оборванной — поток должен остановиться."""
+
+
+def _receive_review_background(app, job_id, doc_ids):
+    stop = threading.Event()
+    threading.Thread(target=_job_heartbeat, args=(app, job_id, stop), daemon=True).start()
+    try:
+        _receive_review_background_body(app, job_id, doc_ids)
+    finally:
+        stop.set()
+
+
+def _receive_review_background_body(app, job_id, doc_ids):
+    with app.app_context():
+        try:
+            order = {doc_id: i for i, doc_id in enumerate(doc_ids)}
+            docs = sorted(
+                (d for d in _pending_ozon_receive_documents() if d.id in order), key=lambda d: order[d.id]
+            )
+            job = BackgroundJob.query.get(job_id)
+            job.progress_total = len(docs)
+            db.session.commit()
+
+            def _progress(done):
+                status = db.session.query(BackgroundJob.status).filter_by(id=job_id).scalar()
+                if status != "running":
+                    # Сторож уже пометил проверку зависшей (и, возможно,
+                    # запущена новая) — дальше не проверяем, чтобы не
+                    # принимать те же перемещения параллельно.
+                    raise _ReviewJobStopped()
+                label = docs[done].number if done < len(docs) else None
+                now = datetime.utcnow()
+                BackgroundJob.query.filter_by(id=job_id).update(
+                    {"progress_done": done, "current_label": label, "heartbeat_at": now, "progress_at": now}
+                )
+                db.session.commit()
+
+            _progress(0)
+            result = _run_receive_review(docs, on_progress=_progress)
+            job = BackgroundJob.query.get(job_id)
+            job.result = json.dumps(result)
+            job.status = "done"
+        except _ReviewJobStopped:
+            db.session.rollback()
+            db.session.remove()
+            return
+        except Exception as exc:  # noqa: BLE001
+            db.session.rollback()
+            app.logger.exception("Фоновая проверка приемки Ozon не удалась")
+            job = BackgroundJob.query.get(job_id)
+            job.status = "failed"
+            job.error = str(exc)[:2000]
+        job.finished_at = datetime.utcnow()
+        db.session.commit()
+        db.session.remove()
+
+
+@bp.route("/receive-review/run", methods=["POST"])
+def receive_review_run():
+    """Выполняет проверку отмеченных на странице /receive-review
+    документов (doc_ids в форме): что сошлось полностью по данным Ozon API
+    — принимает как есть; где недостача ровно на один короб — вернет этот
+    короб и примет остальное; где только излишек опознанного товара —
+    добавит его в короб и примет (если такой же недостачи нет в другом
+    перемещении); все прочее (недостача вместе с излишком, неоднозначная
+    недостача, ошибки API) — в список на ручную проверку, с подсказкой при
+    похожем расхождении в другом перемещении (см. _annotate_possible_mixups).
+
+    На сервере проверка идет в фоне (страница /receive-review/job/<id>
+    показывает ход и затем результат) — живые запросы к Ozon API по
+    нескольким документам не укладывались в таймаут веб-сервера (504).
+    В тестах (RECEIVE_REVIEW_INLINE) — сразу, пачками по
+    RECEIVE_REVIEW_BATCH_LIMIT с бюджетом времени, как раньше."""
+    if not current_user.is_admin:
+        flash("Массовая проверка приемки доступна только администратору", "danger")
+        return redirect(url_for("movement.list_documents"))
+
+    try:
+        selected_ids = [int(v) for v in request.form.getlist("doc_ids")]
+    except ValueError:
+        selected_ids = []
+    if not selected_ids:
+        flash("Выберите хотя бы одно перемещение для проверки", "warning")
+        return redirect(url_for("movement.receive_review"))
+
+    if current_app.config.get("RECEIVE_REVIEW_INLINE", current_app.config.get("TESTING")):
+        selected = [doc for doc in _pending_ozon_receive_documents() if doc.id in set(selected_ids)]
+        batch = selected[:RECEIVE_REVIEW_BATCH_LIMIT]
+        result = _run_receive_review(batch, time_budget=RECEIVE_REVIEW_TIME_BUDGET)
+        return _render_receive_review_result(
+            result, extra_remaining_ids=[doc.id for doc in selected[RECEIVE_REVIEW_BATCH_LIMIT:]]
+        )
+
+    running = _running_review_job()
+    if running is not None:
+        flash("Проверка уже идет — дождитесь ее окончания", "warning")
+        return redirect(url_for("movement.receive_review_job", job_id=running.id))
+    job = BackgroundJob(
+        kind=RECEIVE_REVIEW_JOB_KIND, created_by_id=current_user.id,
+        progress_total=len(selected_ids), params=json.dumps(selected_ids),
+        heartbeat_at=datetime.utcnow(),
+    )
+    db.session.add(job)
+    db.session.commit()
+    threading.Thread(
+        target=_receive_review_background,
+        args=(current_app._get_current_object(), job.id, selected_ids),
+        daemon=True,
+    ).start()
+    return redirect(url_for("movement.receive_review_job", job_id=job.id))
+
+
+@bp.route("/receive-review/job/<int:job_id>")
+def receive_review_job(job_id):
+    if not current_user.is_admin:
+        flash("Массовая проверка приемки доступна только администратору", "danger")
+        return redirect(url_for("movement.list_documents"))
+    job = BackgroundJob.query.filter_by(id=job_id, kind=RECEIVE_REVIEW_JOB_KIND).first_or_404()
+    if job.status == "running":
+        _running_review_job()  # помечает оборвавшуюся
+        db.session.refresh(job)
+    if job.status == "done":
+        return _render_receive_review_result(json.loads(job.result), job=job)
+    remaining_ids = []
+    if job.status == "failed":
+        try:
+            wanted = set(json.loads(job.params or "[]"))
+        except ValueError:
+            wanted = set()
+        remaining_ids = [d.id for d in _pending_ozon_receive_documents() if d.id in wanted]
+    return render_template("movement/receive_review_progress.html", job=job, remaining_ids=remaining_ids)
+
+
+@bp.route("/receive-review/job/<int:job_id>/status")
+def receive_review_job_status(job_id):
+    if not current_user.is_admin:
+        return jsonify(status="forbidden"), 403
+    job = BackgroundJob.query.filter_by(id=job_id, kind=RECEIVE_REVIEW_JOB_KIND).first_or_404()
+    if job.status == "running":
+        _running_review_job()  # помечает оборвавшуюся
+        db.session.refresh(job)
+    return jsonify(
+        status=job.status, done=job.progress_done, total=job.progress_total, current=job.current_label or ""
+    )
 
 
 @bp.route("/<int:doc_id>/toggle-accounting", methods=["POST"])

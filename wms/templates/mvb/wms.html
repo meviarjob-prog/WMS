@@ -1,0 +1,54 @@
+{% extends "mvb/base.html" %}
+{% block title %}Короба из WMS{% endblock %}
+{% block content %}
+<h3 class="mb-1">Свои короба из WMS</h3>
+<p class="text-muted">Собранные перемещения WMS на склады Wildberries и Ozon. Отметьте перемещения с одного склада-отправителя — получится одна заявка с несколькими направлениями, с теми же коробами и штрихкодами (этикетки не переклеиваются). Заявка с забором сразу попадает водителям. Можно и без этой страницы: скан этикетки короба WMS при заборе или приемке сам передаст его перемещение.</p>
+<form method="post" action="{{ url_for('mvb.wms_import') }}">
+<div class="table-responsive">
+<table class="table align-middle">
+  <thead><tr><th></th><th>Перемещение</th><th>Откуда → куда</th><th class="text-end">Коробов</th><th>Слот (дата поставки)</th><th>Собрано</th><th>Заявка на МП</th><th>МВБ</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    {% set d = r.doc %}
+    <tr>
+      <td>{% if not r.order %}<input class="form-check-input" type="checkbox" name="doc_id" value="{{ d.id }}" data-from="{{ d.from_warehouse_id }}">{% endif %}</td>
+      <td>{{ d.number }}</td>
+      <td>{{ d.from_warehouse.name }} → {{ d.to_warehouse.name }}</td>
+      <td class="text-end">{{ r.boxes }}</td>
+      <td>{{ d.delivery_slot_date.strftime('%d.%m.%Y') if d.delivery_slot_date else '—' }}</td>
+      <td>{{ (d.completed_at|msk).strftime('%d.%m %H:%M') if d.completed_at else '' }}</td>
+      <td>{{ d.marketplace_request_number or '—' }}</td>
+      <td>
+        {% if r.order %}
+          <a href="{{ url_for('mvb.order_detail', order_id=r.order.id) }}">{{ r.order.number }}</a> · {{ r.order.progress_label() }}
+        {% else %}<span class="text-muted">не передано</span>{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="text-muted">Нет собранных перемещений на маркетплейсы, ожидающих отправки</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if rows %}
+<div class="d-flex flex-wrap gap-2 align-items-center">
+  <select name="delivery_method" class="form-select w-auto">
+    <option value="pickup">Забор водителем</option>
+    <option value="self">Привезем сами</option>
+  </select>
+  <button class="btn btn-success">Передать отмеченные в МВБ одной заявкой</button>
+  <span id="wms-warn" class="text-danger small"></span>
+</div>
+{% endif %}
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+  const boxes = [...document.querySelectorAll("input[name=doc_id]")];
+  const warn = document.getElementById("wms-warn");
+  boxes.forEach(b => b.addEventListener("change", () => {
+    const from = new Set(boxes.filter(x => x.checked).map(x => x.dataset.from));
+    if (warn) warn.textContent = from.size > 1 ? "Отмечены перемещения с разных складов — в одну заявку объединяется только один склад-отправитель." : "";
+  }));
+</script>
+{% endblock %}

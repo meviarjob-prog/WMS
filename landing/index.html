@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warehouse SW — план отгрузок и учёт склада для Ozon и Wildberries</title>
+<meta name="description" content="Система учёта склада и плана отгрузок для продавцов и производителей на Ozon и Wildberries: факт к дате по городам, перемещения коробами, недовоз и излишек, обмен с 1С.">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:title" content="Warehouse SW — план отгрузок и учёт склада для Ozon и Wildberries">
+<meta property="og:description" content="Факт к дате по городам, перемещения коробами, недовоз и излишек, обмен с 1С. Демо на 20 минут, пилот 4 недели.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%A6%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #ffffff; --bg-soft: #f4f6fa; --text: #1b2430; --muted: #5b6676;
+    --brand: #1f5eff; --brand-text: #ffffff; --border: #dfe4ec; --card: #ffffff;
+    --accent-bg: #eaf1ff; --warn: #fff6dd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10151d; --bg-soft: #161c26; --text: #e8edf5; --muted: #9aa6b8;
+      --brand: #5b8cff; --brand-text: #0b1020; --border: #263041; --card: #161c26;
+      --accent-bg: #1a2742; --warn: #3a3217;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.55; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 16px; }
+  header.top { border-bottom: 1px solid var(--border); background: var(--bg); position: sticky; top: 0; z-index: 5; }
+  header.top .wrap { display: flex; align-items: center; justify-content: space-between; min-height: 58px; padding-top: 8px; padding-bottom: 8px; gap: 12px; }
+  .btn.small { white-space: nowrap; }
+  .logo { font-weight: 700; font-size: 18px; }
+  .btn { display: inline-block; padding: 11px 20px; border-radius: 9px; background: var(--brand); color: var(--brand-text); text-decoration: none; font-weight: 600; border: 0; font-size: 16px; }
+  .btn.ghost { background: transparent; color: var(--brand); border: 1px solid var(--brand); }
+  .btn.small { padding: 8px 14px; font-size: 14px; }
+  h1 { font-size: clamp(28px, 5vw, 44px); line-height: 1.15; margin: 0 0 16px; }
+  h2 { font-size: clamp(22px, 3.4vw, 30px); margin: 0 0 8px; }
+  h3 { font-size: 18px; margin: 0 0 6px; }
+  section { padding: 48px 0; }
+  section.soft { background: var(--bg-soft); }
+  .lead { font-size: clamp(17px, 2.2vw, 20px); color: var(--muted); max-width: 720px; margin: 0 0 24px; }
+  .hero { padding: 56px 0 40px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  .card p { margin: 0; color: var(--muted); }
+  .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: var(--accent-bg); color: var(--brand); margin-bottom: 8px; }
+  figure { margin: 28px 0 0; }
+  figure img { width: 100%; height: auto; border: 1px solid var(--border); border-radius: 10px; display: block; }
+  figcaption { color: var(--muted); font-size: 14px; margin-top: 8px; }
+  .steps { counter-reset: s; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 24px; }
+  .steps .card { position: relative; padding-top: 44px; }
+  .steps .card::before { counter-increment: s; content: counter(s); position: absolute; top: 12px; left: 18px; width: 26px; height: 26px; border-radius: 50%; background: var(--brand); color: var(--brand-text); display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+  .two { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 24px; }
+  ul.clean { margin: 8px 0 0; padding-left: 20px; color: var(--muted); }
+  details { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; margin-top: 10px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { margin: 8px 0 0; color: var(--muted); }
+  .contact { background: var(--accent-bg); border-radius: 14px; padding: 28px; }
+  .todo { background: var(--warn); padding: 0 4px; border-radius: 4px; }
+  footer { padding: 28px 0 40px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <span class="logo">📦 Warehouse SW</span>
+    <a class="btn small" href="#contact">Запросить демо</a>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <h1>План отгрузок и учёт склада для тех, кто продаёт на Ozon и Wildberries</h1>
+    <p class="lead">Видите по каждому городу, сколько отгружено к нужной дате и какой процент плана выполнен, где недовоз и что везти в первую очередь. Без таблиц, пересорта и ручных сверок.</p>
+    <div class="cta">
+      <a class="btn" href="#contact">Запросить демо на 20 минут</a>
+      <a class="btn ghost" href="#start">Как начать работу</a>
+    </div>
+  </div>
+</section>
+
+<section class="soft">
+  <div class="wrap">
+    <h2>Знакомо?</h2>
+    <div class="grid">
+      <div class="card"><h3>План живёт в таблицах</h3><p>Каждый раз вручную считаете, сколько отгрузили по городу и успеваете ли к сроку.</p></div>
+      <div class="card"><h3>Короба и пересорт</h3><p>Непонятно, что в каком коробе, что уже уехало, а что ещё лежит на складе.</p></div>
+      <div class="card"><h3>Расхождения при приёмке</h3><p>Маркетплейс принял меньше или больше, чем отправили, а разбираться в цифрах некому.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Что вы получаете</h2>
+    <div class="grid">
+      <div class="card"><span class="tag">План</span><h3>Выполнение плана по городам</h3><p>Для каждого города — дата плана, факт к этой дате в штуках и процентах, общий процент выполнения и прогноз: успеваем к сроку или нет. Меняете дату — цифры обновляются сразу.</p></div>
+      <div class="card"><span class="tag">Отгрузка</span><h3>Перемещения коробами</h3><p>Сборка, заявка на маркетплейс, передача транспорту и приёмка на складе назначения — каждый этап виден статусом. Стикеры на короба и накладные печатаются из системы.</p></div>
+      <div class="card"><span class="tag">Контроль</span><h3>Недовоз и излишек</h3><p>При приёмке фиксируется фактическое количество. Расхождение сохраняется отдельно и попадает в отчёт, а план считается по реально принятому.</p></div>
+      <div class="card"><span class="tag">Склад</span><h3>Приёмка, размещение, остатки</h3><p>Приёмка по накладной, размещение по коробам и ячейкам, инвентаризация, этикетки 58×40 мм. Штрихкоды сканируются так, как удобно: камерой смартфона, терминалом сбора данных (ТСД) или обычным сканером.</p></div>
+      <div class="card"><span class="tag">Интеграции</span><h3>1С, Google Таблицы, кабинеты МП</h3><p>Обмен с 1С, загрузка плана из Google Таблицы, выгрузки в форматах для заявок Ozon и Wildberries.</p></div>
+      <div class="card"><span class="tag">Производство</span><h3>Выработка сотрудников</h3><p>Сотрудник сканирует готовое изделие, система считает нормо-минуты и эффективность за смену. Для трикотажных и швейных цехов.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="soft">
+  <div class="wrap">
+    <h2>Как это выглядит</h2>
+    <p class="lead">Скриншоты демо-версии. Все данные на них вымышленные.</p>
+    <figure>
+      <img src="img/plan.webp" width="1100" height="550" decoding="async" alt="Экран плана отгрузок: Ozon и Wildberries, выполнение по городам" loading="lazy">
+      <figcaption>План отгрузок: выполнение по городам, факт к выбранной дате и прогноз «успеваем / не успеваем».</figcaption>
+    </figure>
+    <figure>
+      <img src="img/movement.webp" width="1100" height="487" decoding="async" alt="Список перемещений со статусами сборки, заявки и приёмки" loading="lazy">
+      <figcaption>Перемещения: статус каждого документа от сборки до приёмки на складе маркетплейса.</figcaption>
+    </figure>
+    <figure>
+      <img src="img/stock.webp" width="1100" height="409" decoding="async" alt="Номенклатура и остатки по складам" loading="lazy">
+      <figcaption>Номенклатура и остатки по складам, поиск по основному и дополнительному штрихкоду.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <h2>Как начать</h2>
+    <div class="steps">
+      <div class="card"><h3>Демо на 20 минут</h3><p>Покажем систему на вымышленных данных и обсудим, как у вас устроены склад и отгрузки.</p></div>
+      <div class="card"><h3>Пилот 4 недели</h3><p>Устанавливаем систему, загружаем вашу номенклатуру и план, обучаем сотрудников. В конце — цифры «до и после».</p></div>
+      <div class="card"><h3>Решаете сами</h3><p>Если результат устраивает — переходите на тариф. Если нет — выгружаем ваши данные в Excel, без обязательств.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="soft">
+  <div class="wrap">
+    <h2>Кому подойдёт</h2>
+    <div class="two">
+      <div class="card"><h3>Подойдёт, если</h3>
+        <ul class="clean">
+          <li>вы продаёте или производите товар и регулярно отгружаете на Ozon и Wildberries;</li>
+          <li>у вас 1–3 склада или цеха и до нескольких десятков сотрудников;</li>
+          <li>план и остатки сейчас в таблицах, возможно, вместе с 1С.</li>
+        </ul>
+      </div>
+      <div class="card"><h3>Скорее не подойдёт, если</h3>
+        <ul class="clean">
+          <li>нужен крупный автоматизированный склад с конвейерами и тысячами адресных ячеек;</li>
+          <li>на складе нет интернета и нет ни смартфонов, ни ТСД, ни сканеров у персонала.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Частые вопросы</h2>
+    <details><summary>Где хранятся наши данные?</summary><p>На отдельном сервере, который разворачивается под вашу компанию. Данные принадлежат вам; по запросу удаляем их или выгружаем.</p></details>
+    <details><summary>Какое оборудование нужно?</summary><p>Работает с тем, что у вас есть: смартфон с камерой, терминал сбора данных (ТСД) или обычный сканер штрихкодов (USB или Bluetooth). Для печати этикеток подойдёт термопринтер 58×40 мм. Обычный ПК или ноутбук для руководителя и приёмки.</p></details>
+    <details><summary>Можно ли выгрузить данные, если мы решим уйти?</summary><p>Да. Номенклатура, документы приёмки и перемещений, остатки выгружаются в Excel.</p></details>
+    <details><summary>Работает ли это с 1С?</summary><p>Да, есть обмен документами с 1С. Состав обмена зависит от вашей конфигурации, обсудим на демо.</p></details>
+    <details><summary>Сколько стоит?</summary><p>Зависит от числа складов и пользователей — называем после демо, когда понятно, что вам нужно. Пилот — бесплатно или со скидкой, условия обсуждаем на демо.</p></details>
+  </div>
+</section>
+
+<section id="contact">
+  <div class="wrap">
+    <div class="contact">
+      <h2>Запросить демо или пилот</h2>
+      <p class="lead">Расскажите коротко о своём складе, и мы покажем, как это будет работать у вас.</p>
+      <div class="cta">
+        <a class="btn" href="https://t.me/Arturle">Написать в Telegram</a>
+        <a class="btn ghost" href="mailto:lievs@mail.ru?subject=Демо Warehouse SW">Написать на почту</a>
+      </div>
+      <p style="margin-top:14px;color:var(--muted)">Telegram: @Arturle · Почта: lievs@mail.ru</p>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    Warehouse SW · Скриншоты демо-версии, данные вымышленные.
+  </div>
+</footer>
+
+</body>
+</html>

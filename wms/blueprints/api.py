@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from flask_login import current_user
 
 from ..extensions import db
 from ..models import Box, Cell, Nomenclature
@@ -68,7 +69,10 @@ def nomenclature_by_barcode(barcode):
 @bp.route("/box/by-number/<box_number>")
 def box_by_number(box_number):
     box = Box.find_by_scanned_code(box_number)
-    if not box:
+    if not box or (
+        current_user.is_fulfillment_only() and box.warehouse_id != current_user.warehouse_id
+    ):
+        # Короб другого склада для фулфилмента не существует.
         return jsonify({"found": False}), 404
     return jsonify(
         {

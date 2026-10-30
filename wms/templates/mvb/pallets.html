@@ -1,0 +1,59 @@
+{% extends "mvb/base.html" %}
+{% block title %}Паллеты{% endblock %}
+{% block content %}
+<h3 class="mb-3">Паллеты</h3>
+<form method="get" class="card p-3 mb-3 border-primary">
+  <h5 class="mb-1">📷 Скан паллеты</h5>
+  <div class="small text-muted mb-2">Отсканируйте стикер паллеты — откроется паллета, сразу сканируйте в нее короба.</div>
+  <div class="input-group input-group-lg" style="max-width:560px">
+    <input name="code" id="palletCode" class="form-control" placeholder="PLT-…" autocomplete="off" required autofocus>
+    <button type="button" class="btn btn-outline-success" data-camera-scan-target="#palletCode" title="Сканировать камерой">📷</button>
+    <button class="btn btn-primary">Открыть</button>
+  </div>
+</form>
+{% if loose %}
+<div class="card p-3 mb-3 border-danger">
+  <h5 class="mb-1">Короба без паллеты</h5>
+  <p class="text-muted small mb-2">После приемки короба обязательно собираются в паллеты — в машину грузим только паллетами.</p>
+  {% for r in loose %}
+  <div class="border-top py-2">
+    {{ r.label }}{% if r.slot_date %} · слот {{ r.slot_date.strftime('%d.%m') }}{% endif %}: <b>{{ r.count }}</b> кор. без паллеты
+    · нужно паллет: <b>{{ -(-r.count // per_pallet) }}</b> <span class="text-muted small">(до {{ per_pallet }} кор. на паллете)</span>
+    {% if r.open_pallets %}<br><span class="small">Можно доложить: {% for p in r.open_pallets %}<a href="{{ url_for('mvb.pallet_detail', pallet_id=p.id) }}">{{ p.number }}</a> ({{ p.boxes|length }}/{{ per_pallet }}){{ ', ' if not loop.last }}{% endfor %}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+<div class="row g-3 mb-4">
+  <div class="col-md-8">
+    <form method="post" target="_blank" class="card p-3 h-100" onsubmit="setTimeout(() => window.location.reload(), 1500)">
+      <h6>🖨 Создать стикеры паллет</h6>
+      <div class="small text-muted mb-2">Пустые стикеры без направления. Наклейте на паллету, отсканируйте стикер и затем короба (можно разных направлений).</div>
+      <div class="d-flex gap-2">
+        <input name="count" type="number" min="1" max="100" value="10" class="form-control" style="max-width:120px" required>
+        <button class="btn btn-success">Создать стикеры</button>
+      </div>
+    </form>
+  </div>
+</div>
+<div class="table-responsive">
+<table class="table table-hover align-middle">
+  <thead><tr><th>Паллета</th><th>Направление</th><th class="text-end">Коробов</th><th>Где</th><th>Создана</th><th></th></tr></thead>
+  <tbody>
+  {% for p in pallets %}
+    {% set trip_box = p.boxes|selectattr('trip')|first %}
+    <tr>
+      <td><a href="{{ url_for('mvb.pallet_detail', pallet_id=p.id) }}">{{ p.number }}</a></td>
+      <td>{{ p.marketplace_label }}{% if p.destination %} · {{ p.destination }}{% endif %}</td>
+      <td class="text-end">{{ p.boxes|length }}</td>
+      <td>{% if trip_box %}Рейс {{ trip_box.trip.number }}{% else %}На складе{% if p.planned_trip and p.planned_trip.status in ('searching', 'assigned', 'arrived', 'loading') %} <span class="badge bg-info text-dark">в рейсе {{ p.planned_trip.number }}, ждет погрузки</span>{% endif %}{% endif %}</td>
+      <td>{{ (p.created_at|msk).strftime('%d.%m %H:%M') }}</td>
+      <td><a class="btn btn-sm btn-outline-success" target="_blank" href="{{ url_for('mvb.pallet_label_pdf', pallet_id=p.id) }}" title="Этикетка паллеты">🖨</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="text-muted">Паллет пока нет</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

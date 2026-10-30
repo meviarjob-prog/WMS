@@ -1,9 +1,12 @@
 """Отчет «Недовозы по перемещениям» (/reports/movement-shortages) —
-колонка "Отправлено" должна показывать актуальное total_sent_qty() (то же
-самое, что и total_item_qty()), а не замороженный на момент отправки
-sent_qty_snapshot: эти цифры сверяют с заявками на самом маркетплейсе,
-поэтому нужны актуальные данные, а не то, что было отправлено изначально
-(см. чат: "экспорт показывает 2220, строка показывает 2147")."""
+колонка "Отправлено" после приемки должна показывать зафиксированный на
+момент приемки snapshot (sent_qty_snapshot), а не текущее "живое"
+содержимое короба: правка короба уже ПОСЛЕ приемки по другой причине
+(например, нашли ошибку задним числом) не должна задним числом менять
+то, что когда-то фактически отправили/приняли (см. чат: "если поменять
+кол-во в перемещении, он минусует еще больше — не должен быть привязан к
+основному перемещению"). До приемки отчет по-прежнему live (см.
+test_movement_summary_export.test_summary_export_kolvo_v_korobah_shows_live_qty_not_stale_snapshot)."""
 
 from datetime import datetime
 
@@ -19,7 +22,7 @@ from wms.models import (
 )
 
 
-def test_shortages_report_shows_live_qty_not_stale_snapshot(db, client_logged_in):
+def test_shortages_report_shows_snapshot_not_live_qty_after_receipt(db, client_logged_in):
     sender = Warehouse(code="WH-SHORT-A", name="Отправитель")
     dest = Warehouse(code="WH-SHORT-B", name="ОЗОН: Тест", marketplace="ozon", marketplace_city="Тест")
     db.session.add_all([sender, dest])
@@ -40,7 +43,8 @@ def test_shortages_report_shows_live_qty_not_stale_snapshot(db, client_logged_in
         to_warehouse_id=dest.id,
         status="completed",
         received_at=datetime.utcnow(),
-        sent_qty_snapshot=10,  # старый снимок на момент завершения сборки — больше не читается
+        sent_qty_snapshot=10,  # зафиксировано на момент приемки
+        received_qty_snapshot=7,  # зафиксировано на момент приемки
     )
     db.session.add(doc)
     db.session.commit()
@@ -52,7 +56,8 @@ def test_shortages_report_shows_live_qty_not_stale_snapshot(db, client_logged_in
     )
     db.session.commit()
 
-    # Короб поправили постфактум — "живое" количество теперь другое.
+    # Короб поправили постфактум, уже после приемки, по другой причине —
+    # "живое" количество теперь другое, но отчет должен остаться прежним.
     box.items.first().qty = 55
     db.session.commit()
     assert doc.total_item_qty() == 55
@@ -62,5 +67,6 @@ def test_shortages_report_shows_live_qty_not_stale_snapshot(db, client_logged_in
     idx = html.find(doc.number)
     assert idx != -1
     tail = html[idx:idx + 600]
-    assert ">55<" in tail  # актуальное количество
-    assert ">10<" not in tail  # не старый снимок
+    assert ">10<" in tail  # отправлено — зафиксированный снимок
+    assert ">7<" in tail  # принято — зафиксированный снимок
+    assert ">55<" not in tail  # не текущее содержимое короба

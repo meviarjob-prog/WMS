@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Результат проверки приемки{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('movement.receive_review') }}">&larr; Массовая проверка приемки</a></p>
+<h3 class="mb-3">Результат массовой проверки приемки</h3>
+
+<div class="card p-3 mb-3 border-success">
+  <h5>✅ Принято полностью — совпало с маркетплейсом ({{ auto_accepted | length }})</h5>
+  {% if auto_accepted %}
+  <ul class="mb-0">
+    {% for doc in auto_accepted %}
+      <li><a href="{{ url_for('movement.detail', doc_id=doc.id) }}">{{ doc.number }}</a> — {{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}<div class="text-muted">Нет</div>{% endif %}
+</div>
+
+<div class="card p-3 mb-3 border-warning">
+  <h5>📦 Короб возвращен на склад-отправитель, остальное принято ({{ box_returned | length }})</h5>
+  {% if box_returned %}
+  <ul class="mb-0">
+    {% for doc, box_number in box_returned %}
+      <li><a href="{{ url_for('movement.detail', doc_id=doc.id) }}">{{ doc.number }}</a> — короб {{ box_number }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}<div class="text-muted">Нет</div>{% endif %}
+</div>
+
+{% if fixed_by_boxes %}
+<div class="card p-3 mb-3 border-primary">
+  <h5>📦 WB: исправлено по коробам ({{ fixed_by_boxes | length }})</h5>
+  <div class="small text-muted mb-2">По данным WB о расхождениях в каждом коробе: недоехавшие короба возвращены на склад-отправитель, количество в коробах приведено к принятому.</div>
+  {% for entry in fixed_by_boxes %}
+    <div class="border rounded p-2 mb-2">
+      <div><a href="{{ url_for('movement.detail', doc_id=entry.doc.id) }}">{{ entry.doc.number }}</a> — {{ entry.doc.from_warehouse.name }} → {{ entry.doc.to_warehouse.name }}</div>
+      {% if entry.returned %}<div class="small text-danger">Возвращено на склад коробов: {{ entry.returned | length }} ({{ entry.returned | join(', ') }})</div>{% endif %}
+      {% set diff_rows = entry.diff_rows %}
+      {% include "movement/_qty_diff_table.html" %}
+    </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card p-3 mb-3 border-info">
+  <h5>➕ Принято с излишком — излишек добавлен в короб ({{ surplus_accepted | length }})</h5>
+  {% if surplus_accepted %}
+    {% for entry in surplus_accepted %}
+      <div class="border rounded p-2 mb-2">
+        <div><a href="{{ url_for('movement.detail', doc_id=entry.doc.id) }}">{{ entry.doc.number }}</a> — {{ entry.doc.from_warehouse.name }} → {{ entry.doc.to_warehouse.name }}</div>
+        {% set diff_rows = entry.diff_rows %}
+        {% include "movement/_qty_diff_table.html" %}
+      </div>
+    {% endfor %}
+  {% else %}<div class="text-muted">Нет</div>{% endif %}
+</div>
+
+<div class="card p-3 mb-3 border-danger">
+  <h5>⚠ Требуется ручная проверка ({{ manual | length }})</h5>
+  {% if manual %}
+    {% for entry in manual %}
+      <div class="border rounded p-2 mb-2">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div><a href="{{ url_for('movement.detail', doc_id=entry.doc.id) }}">{{ entry.doc.number }}</a> — {{ entry.doc.from_warehouse.name }} → {{ entry.doc.to_warehouse.name }}</div>
+          {% if entry.doc.received_at %}
+            <span class="badge bg-success">✅ Принято</span>
+          {% elif entry.sig %}
+            <form method="post" action="{{ url_for('movement.receive_ozon_confirm', doc_id=entry.doc.id) }}" class="mb-0"
+                  onsubmit="return confirm('Принять {{ entry.doc.number }} по данным Ozon из таблицы? Недостача спишется из коробов, излишек добавится в короб.');">
+              <input type="hidden" name="rows" value="{{ entry.rows_json }}">
+              <input type="hidden" name="sig" value="{{ entry.sig }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <button type="submit" class="btn btn-sm btn-success">✔ Подтвердить приемку</button>
+            </form>
+          {% endif %}
+        </div>
+        {% if entry.reason %}
+          <div class="text-muted small">{{ entry.reason }}</div>
+        {% endif %}
+        {% if entry.diff_rows %}
+          {% set diff_rows = entry.diff_rows %}
+          {% include "movement/_qty_diff_table.html" %}
+        {% endif %}
+        {% if entry.hints %}
+          <ul class="small mb-0">
+            {% for hint in entry.hints %}
+              <li class="text-primary">💡 {{ hint }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% else %}<div class="text-muted">Нет</div>{% endif %}
+</div>
+
+{% if remaining %}
+<div class="alert alert-info d-flex flex-wrap justify-content-between align-items-center gap-2">
+  <div>За один раз проверяется не более {{ batch_limit }} документов (чтобы не упереться в таймаут). Из отмеченных еще не проверено: {{ remaining }}.</div>
+  <form method="post" action="{{ url_for('movement.receive_review_run') }}" class="mb-0">
+    {% for doc_id in remaining_ids %}
+      <input type="hidden" name="doc_ids" value="{{ doc_id }}">
+    {% endfor %}
+    <button type="submit" class="btn btn-primary btn-sm">Продолжить проверку</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}
