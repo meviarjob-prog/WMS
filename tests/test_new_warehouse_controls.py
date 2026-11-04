@@ -147,6 +147,27 @@ def test_twentieth_box_in_document_page_opens_new_document_same_city(db, client_
     assert second.lines.count() == 1
 
 
+def test_regular_warehouse_movement_has_no_box_limit(db, client_logged_in):
+    sender = Warehouse(code="S-NOLIMIT", name="Склад отправитель")
+    target = Warehouse(code="T-NOLIMIT", name="Обычный склад")
+    db.session.add_all([sender, target])
+    db.session.commit()
+    boxes = [Box(box_number=f"NL-{i:03}", warehouse_id=sender.id) for i in range(25)]
+    db.session.add_all(boxes)
+    db.session.commit()
+
+    for box in boxes:
+        client_logged_in.post(
+            "/movement/route-box/add",
+            data={"box_id": box.id, "to_warehouse_id": target.id},
+        )
+
+    doc = MovementDocument.query.one()
+    assert doc.status == "draft"
+    assert doc.lines.count() == 25
+    assert all(box.warehouse_id == sender.id for box in boxes)
+
+
 def test_split_moves_selected_boxes_to_new_document(db, client_logged_in):
     sender = Warehouse(code="SS", name="Отправитель")
     target = Warehouse(code="ST", name="Получатель")

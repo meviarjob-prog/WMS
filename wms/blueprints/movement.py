@@ -57,8 +57,9 @@ from ..utils.waybill_pdf import build_movement_waybills_pdf
 
 bp = Blueprint("movement", __name__)
 MOVEMENTS_PAGE_SIZE = 200
-# Сборка перемещения завершается автоматически, как только в нем набралось
-# столько коробов; следующий короб уходит в новое перемещение на тот же склад.
+# Перемещение на склад маркетплейса завершается автоматически, как только в
+# нем набралось столько коробов; следующий короб уходит в новое перемещение
+# на тот же склад. Для перемещений между обычными складами лимита нет.
 MOVEMENT_AUTO_COMPLETE_BOXES = 20
 
 
@@ -1522,9 +1523,16 @@ def _complete_document(doc):
 
 
 def _auto_complete_if_full(doc):
-    """Завершает сборку черновика, набравшего MOVEMENT_AUTO_COMPLETE_BOXES
-    коробов. Возвращает True, если документ завершен."""
-    if doc.status in ("draft", "collected") and doc.lines.count() >= MOVEMENT_AUTO_COMPLETE_BOXES:
+    """Завершает сборку перемещения на маркетплейс при достижении лимита.
+
+    Между обычными складами количество коробов не ограничено. Возвращает
+    True, если документ завершен.
+    """
+    if (
+        doc.to_warehouse.marketplace
+        and doc.status in ("draft", "collected")
+        and doc.lines.count() >= MOVEMENT_AUTO_COMPLETE_BOXES
+    ):
         _complete_document(doc)
         return True
     return False
