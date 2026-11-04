@@ -2302,6 +2302,30 @@ def test_delivery_schedule_shows_nearest_dates_and_validates_slot(db, client):
     assert MvbOrder.query.count() == 1
 
 
+def test_delivery_schedule_presets_from_reference_images(db):
+    from wms import _seed_mvb_default_schedules
+
+    wb = MvbDestination(marketplace="wb", city="Коледино", is_active=True)
+    ozon = MvbDestination(marketplace="ozon", city="Невинномысск РФЦ", is_active=True)
+    yandex = MvbDestination(marketplace="yandex", city="Софьино", is_active=True)
+    custom = MvbDestination(marketplace="wb", city="СЦ Истра", is_active=True, schedule_json='{"2": 4}')
+    unknown = MvbDestination(marketplace="wb", city="Новое направление", is_active=True)
+    db.session.add_all([wb, ozon, yandex, custom, unknown])
+    db.session.commit()
+
+    _seed_mvb_default_schedules()
+    db.session.refresh(wb)
+    db.session.refresh(ozon)
+    db.session.refresh(yandex)
+    db.session.refresh(custom)
+    db.session.refresh(unknown)
+    assert wb.schedule_json == '{"0": 3, "1": 5, "2": 5, "3": 0, "4": 0}'
+    assert ozon.schedule_json == '{"0": 1, "1": 2, "2": 3, "3": 4, "4": 5}'
+    assert yandex.schedule_json == '{"0": 4, "1": 4}'
+    assert custom.schedule_json == '{"2": 4}'  # ручную настройку не перезаписали
+    assert unknown.schedule_json is None  # без предустановки дата остается свободной
+
+
 def test_client_legal_entities_under_one_login(db, client):
     """Несколько юрлиц под одним входом: новое юрлицо из кабинета ждет
     подтверждения оператора, после — клиент выбирает его в заявке и видит

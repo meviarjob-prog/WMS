@@ -1,4 +1,5 @@
 import contextlib
+import json
 import os
 import secrets
 
@@ -448,6 +449,85 @@ MVB_DEFAULT_CITIES = [
 MVB_DEFAULT_PICKUP_ZONES = [("Черкесск", 1000), ("Регионы", 1500), ("Хабез", 1800), ("Отрадная", 2800)]
 
 
+def _mvb_preset_schedule(marketplace, destination):
+    """График с предоставленных изображений: день отправки → выгрузка.
+
+    Дни недели: 0=пн … 6=вс. Названия в рабочей базе могут содержать
+    «СЦ», «РФЦ», номер площадки, поэтому сопоставляем по устойчивой части.
+    """
+    name = " ".join((destination or "").lower().replace("ё", "е").split())
+    weekday_chain = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5}
+    common_long = {0: 3, 1: 5, 2: 5, 3: 0, 4: 0}
+    ekaterinburg = {0: 0, 1: 0, 2: 0, 3: 3, 4: 3}
+
+    if marketplace == "ozon":
+        if any(value in name for value in ("гривно", "софьино", "софино", "ногинск", "хоругвино", "пушкино", "домодедово")):
+            return common_long
+        if "петровск" in name:
+            return {0: 3}
+        if "казан" in name:
+            return common_long
+        if "ростов" in name:
+            return {0: 3, 1: 3, 2: 5, 3: 5}
+        if any(value in name for value in ("санкт-петербург", "спб", "бугры", "шушары")):
+            return {0: 5, 1: 5, 2: 5}
+        if any(value in name for value in ("колпино", "порошкино")):
+            return {3: 2, 4: 2}
+        if "невинномыс" in name:
+            return weekday_chain
+        if "екатеринбург" in name:
+            return ekaterinburg
+        if "адыгейск" in name:
+            return {0: 1, 2: 3, 4: 5}
+    elif marketplace == "wb":
+        if any(value in name for value in ("чашников", "радумл", "никольск", "щеглов", "подольск", "домодедово", "коледино")):
+            return common_long
+        if "истра" in name:
+            return {0: 4}
+        if "мичуринск" in name:
+            return {0: 3}
+        if "рязан" in name:
+            return {0: 4}
+        if any(value in name for value in ("казан", "столбищ", "самар")):
+            return common_long
+        if "тахтамукай" in name:
+            return {0: 1, 2: 3, 4: 5}
+        if "невинномыс" in name:
+            return {**weekday_chain, 5: 6}
+        if "екатеринбург" in name:
+            return ekaterinburg
+        if "шушар" in name:
+            return {0: 5, 1: 5, 3: 2, 4: 2}
+    elif marketplace == "yandex":
+        if "соф" in name:
+            return {0: 4, 1: 4}
+        if "ростов" in name:
+            return {0: 3, 1: 3}
+    elif marketplace == "lamoda" and any(value in name for value in ("соф", "быково")):
+        return {0: 4, 1: 4}
+    return None
+
+
+def _seed_mvb_default_schedules():
+    """Один раз ставит графики из изображений, не меняя ручные настройки."""
+    from .models import AppSetting, MvbDestination
+
+    key = "mvb_default_delivery_schedules_v1"
+    if db.session.get(AppSetting, key) is not None:
+        return
+    changed = 0
+    for destination in MvbDestination.query.all():
+        if destination.schedule_json:
+            continue
+        schedule = _mvb_preset_schedule(destination.marketplace, destination.value)
+        if schedule:
+            destination.schedule_json = json.dumps(schedule, ensure_ascii=False)
+            changed += 1
+    db.session.add(AppSetting(key=key, value="1"))
+    db.session.commit()
+    print(f"[schema] МВБ: предустановлен график поставок — {changed} направлений")
+
+
 def _seed_mvb_default_prices():
     """Один раз заносит прайс MWB по умолчанию: города с прайсом, пункты
     назначения WB / Ozon и зоны забора. То, что оператор уже завел, не
@@ -662,6 +742,7 @@ def create_app(config_class=Config):
         _ensure_mvb_destinations()
         if not app.config.get("TESTING"):
             _seed_mvb_default_prices()
+            _seed_mvb_default_schedules()
         _bootstrap_admin()
         bootstrap_categories()
 

@@ -3199,6 +3199,9 @@ def delivery_schedule():
         dest = db.session.get(MvbDestination, request.form.get("destination_id", type=int)) or abort(404)
         schedule = {}
         raw_ship = request.form.get("ship_day", "")
+        if raw_ship == "keep":
+            flash(f"Предустановленный график сохранен без изменений: {dest.label()}", "success")
+            return redirect(url_for("mvb.delivery_schedule"))
         if raw_ship != "":
             try:
                 ship = int(raw_ship)
@@ -3221,7 +3224,11 @@ def delivery_schedule():
         schedule = _destination_schedule(dest)
         pair = next(iter(sorted(schedule.items()))) if schedule else (None, None)
         rows.append({"destination": dest, "ship_day": pair[0], "delivery_day": pair[1],
-                     "nearest": _nearest_delivery_dates(dest, 3)})
+                     "nearest": _nearest_delivery_dates(dest, 3), "is_multi": len(schedule) > 1,
+                     "schedule_label": ", ".join(
+                         f"{WEEKDAYS_RU[ship][:2]} → {WEEKDAYS_RU[delivery][:2]}"
+                         for ship, delivery in sorted(schedule.items())
+                     )})
     return render_template(
         "mvb/delivery_schedule.html", rows=rows, weekdays=WEEKDAYS_RU,
     )
