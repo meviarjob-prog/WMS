@@ -423,7 +423,8 @@ def test_trip_rejects_other_direction_and_cancel_returns_boxes(db, client):
     assert _load_scan(client, trip, order.boxes[0].barcode).status_code == 409
 
     ozon_trip = _trip(client, marketplace="ozon", destination="хоругвино")
-    assert _load_scan(client, ozon_trip, order.boxes[0].barcode).get_json()["ok"]
+    data = _load_scan(client, ozon_trip, order.boxes[0].barcode).get_json()
+    assert data["ok"], data
     client.post(f"/mvb/trips/{ozon_trip.id}/cancel")
     box = db.session.get(MvbBox, order.boxes[0].id)
     assert box.status == "received" and box.trip_id is None and box.loaded_at is None
@@ -485,15 +486,15 @@ def test_driver_sees_assigned_and_unassigned_pickups_only(db, client):
 
 def test_vehicles_page_staff_only(db, client):
     _login(client, _user("staff1", "mvb_admin"))
-    # без телефона водителя машину не сохранить
+    # ФИО обязательно, телефон водителя на СЦ — нет.
     client.post("/mvb/vehicles", data={"plate": "а001аа77", "capacity_boxes": "40"})
     assert MvbVehicle.query.count() == 0
     client.post("/mvb/vehicles", data={
         "plate": "а001аа77", "capacity_boxes": "40",
-        "driver_name": "Петров П.П.", "driver_phone": "+79990000001",
+        "driver_name": "Петров П.П.",
     })
     v = MvbVehicle.query.one()
-    assert v.plate == "А001АА77" and v.driver_phone == "+79990000001" and v.driver_name == "Петров П.П."
+    assert v.plate == "А001АА77" and not v.driver_phone and v.driver_name == "Петров П.П."
     _login(client, _user("client1", "mvb_client", _mvb_client()))
     assert client.get("/mvb/vehicles").status_code == 302
 
@@ -539,9 +540,9 @@ def test_multi_stop_route_driver_delivers_each_point(db, client):
     client.post(f"/mvb/trips/{trip.id}/plan", data={"vehicle_id": str(vehicle.id)})
     for box in wb.boxes + oz.boxes:
         assert _load_scan(client, trip, box.barcode).get_json()["ok"]
-    # направления нет в маршруте — отказ с подсказкой
+    # Паллета не относится к рейсу — отказ до проверки маршрута.
     r = _load_scan(client, trip, other.boxes[0].barcode)
-    assert r.status_code == 409 and "добавьте точку" in r.get_json()["message"]
+    assert r.status_code == 409 and "не в рейс" in r.get_json()["message"]
     # точку можно добавить и тогда короб грузится; пустая точка убирается при отправке
     client.post(f"/mvb/trips/{trip.id}/stops", data={"marketplace": "wb", "destination": "Электросталь"})
     db.session.refresh(trip)
@@ -878,10 +879,11 @@ def test_fill_mode_packs_whole_orders(db, client):
     assert [l.order.number for l in trips[0].planned_lines] == [a.number, c.number]
     assert [l.order.number for l in trips[1].planned_lines] == [b.number]
 
-    # погрузка короба заявки из другого рейса — предупреждение
+    # Паллета другого рейса в это авто не грузится.
     client.post(f"/mvb/trips/{trips[1].id}/plan", data={"car_plate": "А1"})
-    data = _load_scan(client, trips[1], a.boxes[0].barcode).get_json()
-    assert data["ok"] and trips[0].number in data["warning"]
+    response = _load_scan(client, trips[1], a.boxes[0].barcode)
+    data = response.get_json()
+    assert response.status_code == 409 and not data["ok"] and trips[0].number in data["message"]
 
     # отмена рейса освобождает заявки
     client.post(f"/mvb/trips/{trips[0].id}/cancel")
@@ -909,10 +911,11 @@ def test_slot_date_required_and_separates_trips(db, client):
     trips = MvbTrip.query.order_by(MvbTrip.id).all()
     assert [(t.slot_date.isoformat(), t.planned_boxes) for t in trips] == [("2026-10-07", 1), ("2026-10-09", 2)]
 
-    # короб с другим слотом грузится с предупреждением
+    # Паллета с другим слотом назначена в другой рейс и блокируется.
     client.post(f"/mvb/trips/{trips[0].id}/plan", data={"car_plate": "А1"})
-    data = _load_scan(client, trips[0], late.boxes[0].barcode).get_json()
-    assert data["ok"] and "слот заявки 09.10" in data["warning"]
+    response = _load_scan(client, trips[0], late.boxes[0].barcode)
+    data = response.get_json()
+    assert response.status_code == 409 and not data["ok"] and trips[1].number in data["message"]
     assert "07.10.2026" in client.get(f"/mvb/t/{trips[0].access_token}").get_data(as_text=True)
 
     # слот оформленной заявки можно перенести, пока короба не уехали на СЦ
@@ -1297,7 +1300,7 @@ def test_menu_by_role(db, client):
     roles = {
         "seller": (seller, ["Мои заявки"], ["Заявки в работе", "Приемка", "Скан забора", "Настройки"]),
         "driver": (_user("driver", "mvb_driver"), ["Заявки на забор"], ["Скан забора", "Заявки в работе", "Приемка", "Паллеты"]),
-        "operator": (_user("operator", "mvb_staff"), ["Заявки в работе", "Клиенты", "Настройки", "Прайс", "Машины для СЦ", "Пользователи", "Рейсы"], ["Приемка", "Скан забора", "Заявки на забор", "Паллеты"]),
+        "operator": (_user("operator", "mvb_staff"), ["Заявки в работе", "Клиенты", "Настройки", "Прайс", "Машины для СЦ", "Пользователи", "Рейсы", "Паллеты", "Проверка паллеты", "График поставок"], ["Приемка", "Скан забора", "Заявки на забор"]),
         "keeper": (_user("keeper", "mvb_storekeeper"), ["Приемка", "Паллеты", "Погрузка"], ["Заявки в работе", "Скан забора", "Настройки", "Клиенты", "Рейсы"]),
     }
     for name, (user, visible, hidden) in roles.items():
@@ -1787,7 +1790,8 @@ def test_client_sees_driver_data_for_pass(db, client):
     _login(client, seller)
     page = client.get(f"/mvb/orders/{order.id}").get_data(as_text=True)
     assert "Здесь появятся данные водителя" not in page
-    assert "Иванов Иван" in page and "А777АА09" in page and "Газель" in page and "+79991112233" in page
+    assert "Иванов Иван" in page and "А777АА09" in page and "Газель" in page
+    assert "+79991112233" not in page
 
 
 def test_mvb_guide_for_every_role(db, client):
@@ -2213,6 +2217,87 @@ def test_dispatch_pallets_to_trip_and_loading_list(db, client):
     db.session.refresh(trip)
     assert trip.departed_at is not None and stop.result == "delivered"
     assert all(b.status == "delivered" for b in p1.boxes)
+
+
+def test_operator_sees_and_checks_pallet_contents(db, client):
+    admin = _user("admin_check", "mvb_admin")
+    order = _received_order(client, _user("c_check", "mvb_client", _mvb_client()), admin, box_count="2")
+    _palletize_loose()
+    pallet = MvbPallet.query.order_by(MvbPallet.id).first()
+    pallet_boxes = list(pallet.boxes)
+
+    operator = _user("operator_check", "mvb_staff")
+    _login(client, operator)
+    page = client.get("/mvb/orders").get_data(as_text=True)
+    assert "Паллеты" in page and "Проверка паллеты" in page
+    assert client.get("/mvb/pallets").status_code == 200
+    page = client.post("/mvb/pallet-check", data={"code": pallet.number}).get_data(as_text=True)
+    assert pallet.number in page and order.number in page
+    assert all(box.barcode in page for box in pallet_boxes)
+
+
+def test_cannot_load_pallet_from_another_trip(db, client):
+    admin = _user("admin_foreign", "mvb_admin")
+    first = _received_order(client, _user("c_foreign1", "mvb_client", _mvb_client()), admin, box_count="1")
+    second = _received_order(client, _user("c_foreign2", "mvb_client", _mvb_client("ИП Второй")), admin, box_count="1")
+    _palletize_loose()
+    p1, p2 = MvbPallet.query.order_by(MvbPallet.id).all()
+    client.post("/mvb/trips/new", data={"pallet_id": [str(p1.id)]})
+    trip1 = MvbTrip.query.order_by(MvbTrip.id).first()
+    client.post("/mvb/trips/new", data={"pallet_id": [str(p2.id)]})
+    trip2 = MvbTrip.query.order_by(MvbTrip.id.desc()).first()
+    client.post(f"/mvb/trips/{trip1.id}/plan", data={"vehicle_id": str(_vehicle(10).id)})
+
+    response = client.post(f"/mvb/trips/{trip1.id}/scan", data={"barcode": p2.number})
+    data = response.get_json()
+    assert response.status_code == 409 and not data["ok"] and trip2.number in data["message"]
+    db.session.refresh(second.boxes[0])
+    assert second.boxes[0].status == "received" and second.boxes[0].trip_id is None
+    assert first.boxes[0].trip_id is None
+
+
+def test_admin_bulk_deletes_selected_orders(db, client):
+    admin = _user("admin_bulk", "mvb_admin")
+    seller = _user("seller_bulk", "mvb_client", _mvb_client())
+    _login(client, seller)
+    _create_order(client)
+    _create_order(client, destination="Электросталь")
+    ids = [o.id for o in MvbOrder.query.order_by(MvbOrder.id).all()]
+
+    _login(client, admin)
+    page = client.get("/mvb/orders").get_data(as_text=True)
+    assert "Удалить выбранные" in page and 'name="order_id"' in page
+    client.post("/mvb/orders/delete-selected", data={"order_id": [str(i) for i in ids]})
+    assert MvbOrder.query.count() == 0
+
+
+def test_delivery_schedule_shows_nearest_dates_and_validates_slot(db, client):
+    admin = _user("admin_schedule", "mvb_admin")
+    destination = MvbDestination(marketplace="wb", city="Коледино", is_active=True)
+    db.session.add(destination)
+    db.session.commit()
+    _login(client, admin)
+    # Отправка в понедельник, выгрузка в четверг.
+    response = client.post("/mvb/delivery-schedule", data={
+        "destination_id": str(destination.id), "ship_day": "0", "delivery_0": "3",
+    })
+    assert response.status_code == 302
+    db.session.refresh(destination)
+    assert '"0": 3' in destination.schedule_json
+
+    seller = _user("seller_schedule", "mvb_client", _mvb_client())
+    _login(client, seller)
+    page = client.get("/mvb/orders/new").get_data(as_text=True)
+    today = (datetime.utcnow() + timedelta(hours=3)).date()
+    monday = today + timedelta(days=(0 - today.weekday()) % 7)
+    thursday = monday + timedelta(days=3)
+    assert thursday.strftime("%d.%m") in page and "Ближайшая выгрузка по графику" in page
+
+    wrong = thursday + timedelta(days=1)
+    page = _create_order(client, slot_date=wrong.isoformat()).get_data(as_text=True)
+    assert "по графику эта дата недоступна" in page.lower() and MvbOrder.query.count() == 0
+    _create_order(client, slot_date=thursday.isoformat())
+    assert MvbOrder.query.count() == 1
 
 
 def test_client_legal_entities_under_one_login(db, client):

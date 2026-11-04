@@ -91,10 +91,16 @@
   </div>
   {% endif %}
 </form>
+{% if mvb_can_manage and orders %}
+<form id="bulk-delete-orders" method="post" action="{{ url_for('mvb.orders_delete_selected') }}" class="mb-3" onsubmit="return confirm('Удалить выбранные заявки вместе с коробами и историей без возможности восстановления?')">
+  <button class="btn btn-sm btn-danger">🗑 Удалить выбранные</button>
+</form>
+{% endif %}
 {# Телефон: карточки вместо таблицы, без прокрутки вбок #}
 <div class="d-md-none">
   {% for o in orders %}
   <div class="card mb-2">
+    {% if mvb_can_manage %}<div class="px-3 pt-2"><label class="small"><input form="bulk-delete-orders" class="form-check-input me-1" type="checkbox" name="order_id" value="{{ o.id }}"> выбрать для удаления</label></div>{% endif %}
     <a class="card-body text-reset text-decoration-none pb-2" href="{{ url_for('mvb.order_detail', order_id=o.id) }}">
       <div class="d-flex justify-content-between gap-2">
         <b class="text-primary">{{ o.number }}</b>
@@ -128,12 +134,14 @@
 <div class="table-responsive d-none d-md-block">
 <table class="table table-hover align-middle">
   <thead><tr>
+    {% if mvb_can_manage %}<th><input class="form-check-input" type="checkbox" title="Выбрать все" onchange="document.querySelectorAll('input[form=bulk-delete-orders][name=order_id]').forEach(x => x.checked=this.checked)"></th>{% endif %}
     <th>Номер</th>{% if not mvb_is_client %}<th>Клиент</th>{% endif %}<th>Куда</th><th>Слот на СЦ</th><th>Способ</th>
     <th>Дата забора</th><th class="text-end">Коробов</th><th class="text-end">Стоимость, ₽</th><th>Статус</th>{% if drivers %}<th>Водитель</th>{% endif %}
   </tr></thead>
   <tbody>
   {% for o in orders %}
     <tr>
+      {% if mvb_can_manage %}<td><input form="bulk-delete-orders" class="form-check-input" type="checkbox" name="order_id" value="{{ o.id }}"></td>{% endif %}
       <td><a href="{{ url_for('mvb.order_detail', order_id=o.id) }}">{{ o.number }}</a></td>
       {% if not mvb_is_client %}<td>{{ o.client.name }}</td>{% endif %}
       <td>{{ o.directions_label }}</td>
@@ -159,7 +167,7 @@
       {% endif %}
     </tr>
   {% else %}
-    <tr><td colspan="10" class="text-muted text-center py-4">Заявок пока нет</td></tr>
+    <tr><td colspan="11" class="text-muted text-center py-4">Заявок пока нет</td></tr>
   {% endfor %}
   </tbody>
 </table>

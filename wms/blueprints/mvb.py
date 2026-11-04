@@ -11,6 +11,7 @@
 (кроме администраторов) — наоборот, сюда не попадают.
 """
 
+import json
 import math
 import secrets
 from datetime import date, datetime, timedelta
@@ -41,6 +42,66 @@ MVB_PUBLIC_ENDPOINTS = {
 }
 
 MAX_BOXES_PER_ORDER = 500
+WEEKDAYS_RU = ("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье")
+
+
+def _destination_schedule(dest):
+    try:
+        raw = json.loads(dest.schedule_json or "{}")
+    except (TypeError, ValueError):
+        return {}
+    result = {}
+    for ship, delivery in raw.items():
+        try:
+            ship, delivery = int(ship), int(delivery)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= ship <= 6 and 0 <= delivery <= 6:
+            result[ship] = delivery
+    return result
+
+
+def _nearest_delivery_dates(dest, count=8):
+    """Ближайшие календарные даты выгрузки по графику направления."""
+    schedule = _destination_schedule(dest)
+    if not schedule:
+        return []
+    current = (datetime.utcnow() + MOSCOW_OFFSET).date()
+    candidates = set()
+    for offset in range(0, 70):
+        ship_date = current + timedelta(days=offset)
+        if ship_date.weekday() in schedule:
+            delivery_day = schedule[ship_date.weekday()]
+            transit_days = (delivery_day - ship_date.weekday()) % 7
+            candidates.add(ship_date + timedelta(days=transit_days))
+    return sorted(candidates)[:count]
+
+
+def _slot_is_available(dest, slot_date):
+    """Дата выгрузки достижима одной из еще не прошедших отправок."""
+    schedule = _destination_schedule(dest)
+    if not schedule:
+        return True
+    today = (datetime.utcnow() + MOSCOW_OFFSET).date()
+    for ship_day, delivery_day in schedule.items():
+        if slot_date.weekday() != delivery_day:
+            continue
+        transit_days = (delivery_day - ship_day) % 7
+        if slot_date - timedelta(days=transit_days) >= today:
+            return True
+    return False
+
+
+def _client_schedule_dates():
+    result = {}
+    for dest in MvbDestination.active():
+        dates = _nearest_delivery_dates(dest)
+        if dates:
+            result[f"{dest.marketplace}|{dest.value.lower()}"] = [
+                {"value": d.isoformat(), "label": f"{d.strftime('%d.%m')} · {WEEKDAYS_RU[d.weekday()].lower()}"}
+                for d in dates
+            ]
+    return result
 
 # Режимы поштучного сканирования до склада: из каких статусов короб можно
 # перевести в какой и каким ролям это разрешено. Администраторы могут всё.
@@ -191,7 +252,7 @@ def _badge_counts():
         ),
         "mvb_pickup_count": _pickup_badge_count() if _is_driver() else 0,
         "mvb_handover_count": _awaiting_receipt_query().count() if keeper else 0,
-        "mvb_unpalletized_count": _unpalletized_query().count() if keeper else 0,
+        "mvb_unpalletized_count": _unpalletized_query().count() if (operator or keeper) else 0,
         "mvb_pwreset_count": _pwreset_query().count() if operator else 0,
     }
 
@@ -258,6 +319,7 @@ def _inject():
         }),
         "MVB_TRIP_STATUSES": MVB_TRIP_STATUSES,
         "mvb_destinations": MvbDestination.active() if current_user.is_authenticated else [],
+        "mvb_schedule_dates": _client_schedule_dates() if current_user.is_authenticated else {},
         "mvb_pickup_zones": MvbPickupZone.active() if current_user.is_authenticated else [],
     }
 
@@ -557,6 +619,7 @@ def _form_lines():
             return None, prefix + ("выберите фулфилмент" if marketplace == "ff" else "выберите город (СЦ)")
         if cities is None:
             cities = MvbDestination.active()
+        matched_destination = None
         if cities:
             # Пункты назначения заданы в прайсе — выбираем только из них.
             match = next(
@@ -565,10 +628,15 @@ def _form_lines():
             if match is None:
                 return None, prefix + f"«{destination}» нет в списке пунктов назначения ({MVB_MARKETPLACES[marketplace]})"
             destination = match.value
+            matched_destination = match
         try:
             slot_date = date.fromisoformat((slot or "").strip())
         except ValueError:
             return None, prefix + "укажите дату слота на СЦ"
+        schedule = _destination_schedule(matched_destination) if matched_destination else {}
+        if schedule and not _slot_is_available(matched_destination, slot_date):
+            nearest = ", ".join(d.strftime("%d.%m.%Y") for d in _nearest_delivery_dates(matched_destination, 5))
+            return None, prefix + f"по графику эта дата недоступна; ближайшая выгрузка: {nearest}"
         try:
             box_count = int(boxes)
         except (TypeError, ValueError):
@@ -705,10 +773,17 @@ def order_slot(order_id):
         flash("Слот уже не изменить — короба отправлены на СЦ", "warning")
         return redirect(url_for("mvb.order_detail", order_id=order.id))
     try:
-        line.slot_date = date.fromisoformat(request.form.get("slot_date", "").strip())
+        new_slot = date.fromisoformat(request.form.get("slot_date", "").strip())
     except ValueError:
         flash("Укажите дату слота на СЦ", "danger")
         return redirect(url_for("mvb.order_detail", order_id=order.id))
+    destination = MvbDestination.find(line.marketplace, line.destination)
+    schedule = _destination_schedule(destination) if destination else {}
+    if schedule and not _slot_is_available(destination, new_slot):
+        nearest = ", ".join(d.strftime("%d.%m.%Y") for d in _nearest_delivery_dates(destination, 5))
+        flash(f"По графику эта дата недоступна. Ближайшая выгрузка: {nearest}", "danger")
+        return redirect(url_for("mvb.order_detail", order_id=order.id))
+    line.slot_date = new_slot
     order.sync_from_lines()
     db.session.commit()
     flash(f"{line.short_label()}: слот на СЦ {line.slot_date.strftime('%d.%m.%Y')}", "success")
@@ -787,12 +862,33 @@ def order_delete(order_id):
         return redirect(url_for("mvb.order_detail", order_id=order_id))
     order = db.session.get(MvbOrder, order_id) or abort(404)
     number = order.number
+    _delete_order(order)
+    db.session.commit()
+    flash(f"Заявка {number} удалена", "success")
+    return redirect(url_for("mvb.orders"))
+
+
+def _delete_order(order):
+    """Удаляет заявку и пересчитывает палетирование соседних заявок."""
     others = _orders_on_pallets({b.pallet_id for b in order.boxes}) - {order}
     db.session.delete(order)
     db.session.flush()
     _recalc_pallet_costs(others)
+
+
+@bp.route("/orders/delete-selected", methods=["POST"])
+def orders_delete_selected():
+    if not _require_manage():
+        return redirect(url_for("mvb.orders"))
+    ids = set(request.form.getlist("order_id", type=int))
+    items = MvbOrder.query.filter(MvbOrder.id.in_(ids)).all() if ids else []
+    if not items:
+        flash("Отметьте заявки для удаления", "warning")
+        return redirect(url_for("mvb.orders"))
+    for order in items:
+        _delete_order(order)
     db.session.commit()
-    flash(f"Заявка {number} удалена", "success")
+    flash(f"Удалено заявок: {len(items)}", "success")
     return redirect(url_for("mvb.orders"))
 
 
@@ -1493,8 +1589,8 @@ def vehicles():
             capacity = -1
         driver_phone = request.form.get("driver_phone", "").strip()
         driver_name = request.form.get("driver_name", "").strip()
-        if not plate or capacity < 0 or not driver_phone or not driver_name:
-            flash("Укажите госномер, вместимость (число коробов), ФИО и телефон водителя", "danger")
+        if not plate or capacity < 0 or not driver_name:
+            flash("Укажите госномер, вместимость (число коробов) и ФИО водителя", "danger")
             return redirect(url_for("mvb.vehicles"))
         vehicle.plate = plate
         vehicle.driver_name = driver_name
@@ -1751,6 +1847,14 @@ def pallet_scan(pallet_id):
         return jsonify(ok=False, message=f"Короб в статусе «{box.status_label}» — на паллету только принятые на складе"), 409
     if box.line is None:
         return jsonify(ok=False, message=f"У короба {box.barcode} нет направления"), 409
+    if pallet.planned_trip_id and box.line.planned_trip_id and pallet.planned_trip_id != box.line.planned_trip_id:
+        return jsonify(
+            ok=False,
+            message=(f"Короб {box.barcode} относится к рейсу {box.line.planned_trip.number}, "
+                     f"а паллета {pallet.number} — к рейсу {pallet.planned_trip.number}"),
+        ), 409
+    if pallet.planned_trip_id is None and box.line.planned_trip_id:
+        pallet.planned_trip = box.line.planned_trip
     assigned = False
     if not pallet.boxes or not pallet.marketplace:
         # Пустая паллета (новый стикер) подписывается направлением первого
@@ -1850,15 +1954,50 @@ def pallet_delete(pallet_id):
     if not _require_manage():
         return redirect(url_for("mvb.pallet_detail", pallet_id=pallet_id))
     pallet = db.session.get(MvbPallet, pallet_id) or abort(404)
+    number = pallet.number
+    _delete_pallet(pallet)
+    db.session.commit()
+    flash(f"Паллета {number} удалена", "success")
+    return redirect(url_for("mvb.pallets"))
+
+
+def _delete_pallet(pallet):
     affected = _orders_on_pallets([pallet.id])
     for box in list(pallet.boxes):
         box.pallet_id = None
     _recalc_pallet_costs(affected)
-    number = pallet.number
     db.session.delete(pallet)
+
+
+@bp.route("/pallets/delete-selected", methods=["POST"])
+def pallets_delete_selected():
+    if not _require_manage():
+        return redirect(url_for("mvb.pallets"))
+    ids = set(request.form.getlist("pallet_id", type=int))
+    items = MvbPallet.query.filter(MvbPallet.id.in_(ids)).all() if ids else []
+    if not items:
+        flash("Отметьте паллеты для удаления", "warning")
+        return redirect(url_for("mvb.pallets"))
+    for pallet in items:
+        _delete_pallet(pallet)
     db.session.commit()
-    flash(f"Паллета {number} удалена", "success")
+    flash(f"Удалено паллет: {len(items)}", "success")
     return redirect(url_for("mvb.pallets"))
+
+
+@bp.route("/pallet-check", methods=["GET", "POST"])
+def pallet_check():
+    """Отдельная read-only проверка паллеты и всех коробов внутри."""
+    if not _require_staff():
+        return redirect(url_for("mvb.index"))
+    code = (request.form.get("code") if request.method == "POST" else request.args.get("code", "")) or ""
+    code = code.strip()
+    pallet = None
+    if code:
+        pallet = MvbPallet.query.filter(db.func.upper(MvbPallet.number) == code.upper()).first()
+        if pallet is None:
+            flash(f"Паллета {code} не найдена", "danger")
+    return render_template("mvb/pallet_check.html", pallet=pallet, code=code)
 
 
 @bp.route("/pallets/<int:pallet_id>/label.pdf")
@@ -1955,7 +2094,8 @@ def _group_key(line):
 def _selected_match(selected, line):
     """Отмечена ли группа направления заявки: по полному ключу или по
     направлению целиком (все слоты)."""
-    return _group_key(line) in selected or _direction_key(line.marketplace, line.destination) in selected
+    normalized = {value.casefold() for value in selected}
+    return _group_key(line).casefold() in normalized or _direction_key(line.marketplace, line.destination).casefold() in normalized
 
 
 def _slot_sort(slot_date):
@@ -2137,11 +2277,12 @@ def trip_new():
     if request.form.getlist("pallet_id"):
         return _trip_from_pallets(request.form.getlist("pallet_id", type=int))
     selected = set(request.form.getlist("dir"))
-    groups = [g for g in _ready_groups() if g["key"] in selected or g["direction"] in selected]
+    selected_normalized = {value.casefold() for value in selected}
+    groups = [g for g in _ready_groups() if g["key"].casefold() in selected_normalized or g["direction"].casefold() in selected_normalized]
     # Направление, для которого коробов уже нет (успели погрузить), все
     # равно можно добавить точкой — без плана.
-    known = {g["key"] for g in groups} | {g["direction"] for g in groups}
-    for key in selected - known:
+    known = {g["key"].casefold() for g in groups} | {g["direction"].casefold() for g in groups}
+    for key in (value for value in selected if value.casefold() not in known):
         marketplace, _, rest = key.partition("|")
         destination = rest.split("|")[0]
         if marketplace in MVB_MARKETPLACES:
@@ -2199,6 +2340,14 @@ def trip_new():
     for group in groups:
         if group["boxes"] == 0:
             _add_stop(first, group["marketplace"], group["destination"])
+    # Старый сценарий создания рейса по направлениям тоже закрепляет за
+    # рейсом целые паллеты. Паллета назначается, только если все ее готовые
+    # короба попали в один и тот же рейс — делить паллету между авто нельзя.
+    for pallet in MvbPallet.query.filter(MvbPallet.planned_trip_id.is_(None)).all():
+        ready_boxes = [b for b in pallet.boxes if b.status == "received" and b.trip_id is None and b.line is not None]
+        planned = {b.line.planned_trip for b in ready_boxes if b.line.planned_trip is not None}
+        if ready_boxes and len(planned) == 1 and all(b.line.planned_trip in planned for b in ready_boxes):
+            pallet.planned_trip = planned.pop()
     db.session.commit()
     if oversized:
         flash(f"Заявки больше вместимости машины едут отдельной машиной целиком: {', '.join(oversized)}", "warning")
@@ -2438,9 +2587,18 @@ def trip_delete(trip_id):
     if not _require_manage():
         return redirect(url_for("mvb.trip_detail", trip_id=trip_id))
     trip = db.session.get(MvbTrip, trip_id) or abort(404)
+    number = trip.number
+    _delete_trip(trip)
+    db.session.commit()
+    flash(f"Рейс {number} удален", "success")
+    return redirect(url_for("mvb.trips"))
+
+
+def _delete_trip(trip):
     for line in list(trip.planned_lines):
         line.planned_trip = None
     MvbOrder.query.filter_by(planned_trip_id=trip.id).update({"planned_trip_id": None})
+    MvbPallet.query.filter_by(planned_trip_id=trip.id).update({"planned_trip_id": None})
     for box in list(trip.boxes):
         if box.status in ("loaded", "shipped"):
             box.status = "received"
@@ -2448,10 +2606,22 @@ def trip_delete(trip_id):
             box.shipped_at = None
         box.trip_id = None
         box.trip_stop_id = None
-    number = trip.number
     db.session.delete(trip)
+
+
+@bp.route("/trips/delete-selected", methods=["POST"])
+def trips_delete_selected():
+    if not _require_manage():
+        return redirect(url_for("mvb.trips"))
+    ids = set(request.form.getlist("trip_id", type=int))
+    items = MvbTrip.query.filter(MvbTrip.id.in_(ids)).all() if ids else []
+    if not items:
+        flash("Отметьте рейсы для удаления", "warning")
+        return redirect(url_for("mvb.trips"))
+    for trip in items:
+        _delete_trip(trip)
     db.session.commit()
-    flash(f"Рейс {number} удален", "success")
+    flash(f"Удалено рейсов: {len(items)}", "success")
     return redirect(url_for("mvb.trips"))
 
 
@@ -2544,6 +2714,12 @@ def trip_scan(trip_id):
         pallet = box.pallet
         boxes = [b for b in pallet.boxes if b.status == "received" and b.trip_id is None]
         order, line = box.order, box.line
+    if pallet.planned_trip_id != trip.id:
+        planned = f"рейс {pallet.planned_trip.number}" if pallet.planned_trip else "ни один рейс"
+        return jsonify(
+            ok=False,
+            message=f"Паллета {pallet.number} назначена в {planned}, а не в рейс {trip.number}",
+        ), 409
     stops = {}
     for b in boxes:
         b_stop = trip.stop_for(b.line.marketplace, b.line.destination) if b.line is not None else None
@@ -2579,9 +2755,7 @@ def trip_scan(trip_id):
         warnings.append(f"на точку «{stop.label()}» по плану {stop.planned_boxes} кор., погружено {len(stop.boxes)}")
     if trip.slot_date and line.slot_date and line.slot_date != trip.slot_date:
         warnings.append(f"слот заявки {line.slot_date.strftime('%d.%m')}, а рейса {trip.slot_date.strftime('%d.%m')}")
-    if pallet is not None and pallet.planned_trip_id and pallet.planned_trip_id != trip.id:
-        warnings.append(f"паллета {pallet.number} запланирована в рейс {pallet.planned_trip.number}")
-    elif line.planned_trip_id and line.planned_trip_id != trip.id:
+    if line.planned_trip_id and line.planned_trip_id != trip.id:
         warnings.append(f"заявка {order.number} ({line.short_label()}) запланирована в рейс {line.planned_trip.number}")
     warning = ("Внимание: " + "; ".join(warnings)) if warnings else None
     return jsonify(ok=True, already=False, message=message, count=count, warning=warning, loaded=len(trip.boxes),
@@ -3014,6 +3188,38 @@ def order_costs(order_id):
 def guide():
     """Обучение МВБ по ролям — для всех вошедших пользователей МВБ."""
     return render_template("mvb/guide.html")
+
+
+@bp.route("/delivery-schedule", methods=["GET", "POST"])
+def delivery_schedule():
+    """График отправки и выгрузки на каждое направление для оператора."""
+    if not _require_operator():
+        return redirect(url_for("mvb.index"))
+    if request.method == "POST":
+        dest = db.session.get(MvbDestination, request.form.get("destination_id", type=int)) or abort(404)
+        schedule = {}
+        for raw_ship in request.form.getlist("ship_day"):
+            try:
+                ship = int(raw_ship)
+                delivery = int(request.form.get(f"delivery_{ship}", ""))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= ship <= 6 and 0 <= delivery <= 6:
+                schedule[str(ship)] = delivery
+        dest.schedule_json = json.dumps(schedule, ensure_ascii=False) if schedule else None
+        db.session.commit()
+        flash(f"График сохранен: {dest.label()}", "success")
+        return redirect(url_for("mvb.delivery_schedule", destination_id=dest.id))
+    destinations = MvbDestination.query.order_by(
+        MvbDestination.marketplace, MvbDestination.city, MvbDestination.ff_name,
+    ).all()
+    selected_id = request.args.get("destination_id", type=int)
+    selected = db.session.get(MvbDestination, selected_id) if selected_id else (destinations[0] if destinations else None)
+    return render_template(
+        "mvb/delivery_schedule.html", destinations=destinations, selected=selected,
+        schedule=_destination_schedule(selected) if selected else {}, weekdays=WEEKDAYS_RU,
+        nearest=_nearest_delivery_dates(selected) if selected else [],
+    )
 
 
 @bp.route("/prices", methods=["GET", "POST"])

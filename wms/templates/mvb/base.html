@@ -34,7 +34,10 @@
         {% endif %}
         {% if mvb_is_storekeeper %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('mvb.scan', mode='receive') }}">📷 Приемка <span class="badge bg-warning text-dark{{ '' if mvb_handover_count else ' d-none' }}" data-mvb-badge="handover" title="Коробов ждут приемки">{{ mvb_handover_count }}</span></a></li>
+        {% endif %}
+        {% if mvb_is_staff %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('mvb.pallets') }}">Паллеты <span class="badge bg-danger{{ '' if mvb_unpalletized_count else ' d-none' }}" data-mvb-badge="unpalletized" title="Короба на складе без паллеты">{{ mvb_unpalletized_count }}</span></a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('mvb.pallet_check') }}">🔎 Проверка паллеты</a></li>
         {% endif %}
         {% if mvb_is_operator %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('mvb.dispatch') }}">К отправке</a></li>
@@ -49,6 +52,7 @@
           <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">⚙ Настройки <span class="badge bg-warning text-dark{{ '' if mvb_pwreset_count else ' d-none' }}" data-mvb-badge="pwreset" title="Просят восстановить пароль">{{ mvb_pwreset_count }}</span></a>
           <ul class="dropdown-menu">
             <li><a class="dropdown-item" href="{{ url_for('mvb.prices') }}">Прайс</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('mvb.delivery_schedule') }}">График поставок</a></li>
             <li><a class="dropdown-item" href="{{ url_for('mvb.drivers') }}">Водители</a></li>
             <li><a class="dropdown-item" href="{{ url_for('mvb.vehicles') }}">Машины для СЦ</a></li>
             <li><a class="dropdown-item" href="{{ url_for('mvb.admin_users') }}">Пользователи <span class="badge bg-warning text-dark{{ '' if mvb_pwreset_count else ' d-none' }}" data-mvb-badge="pwreset">{{ mvb_pwreset_count }}</span></a></li>

@@ -69,6 +69,7 @@
         <div class="col-7 col-md-6">
           <label class="form-label small mb-0">Дата слота *</label>
           <input name="line_slot" type="date" class="form-control" value="{{ r.slot or '' }}" required>
+          <div class="js-slot-suggestions d-flex flex-wrap gap-1 mt-1"></div>
         </div>
         <div class="col-5 col-md-6">
           <label class="form-label small mb-0">Коробов *</label>
@@ -172,6 +173,29 @@
   // Пункты назначения из прайса: куда → город → (для ФФ) название.
   {% set dd = [] %}{% for d in mvb_destinations %}{% set _ = dd.append({'mp': d.marketplace, 'city': d.city, 'value': d.value}) %}{% endfor %}
   const DESTS = {{ dd|tojson }};
+  const DELIVERY_DATES = {{ mvb_schedule_dates|tojson }};
+  function renderSchedule(row) {
+    const mp = row.querySelector(".js-mp");
+    const dest = row.querySelector(".js-dest") || row.querySelector("input[name=line_destination]");
+    const slot = row.querySelector("input[name=line_slot]");
+    const wrap = row.querySelector(".js-slot-suggestions");
+    if (!mp || !dest || !slot || !wrap) return;
+    const dates = DELIVERY_DATES[`${mp.value}|${dest.value.trim().toLowerCase()}`] || [];
+    wrap.innerHTML = "";
+    if (!dates.length) return;
+    const hint = document.createElement("span");
+    hint.className = "small text-muted w-100";
+    hint.textContent = "Ближайшая выгрузка по графику:";
+    wrap.appendChild(hint);
+    dates.slice(0, 5).forEach(item => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm " + (slot.value === item.value ? "btn-primary" : "btn-outline-primary");
+      button.textContent = item.label;
+      button.addEventListener("click", () => { slot.value = item.value; renderSchedule(row); });
+      wrap.appendChild(button);
+    });
+  }
   function option(value, text, selected) {
     const o = document.createElement("option");
     o.value = value; o.textContent = text; o.selected = !!selected;
@@ -188,6 +212,7 @@
     let activeIndex = -1;
     function sync() {
       dest.value = mp.value === "ff" ? ff.value : city.value;
+      renderSchedule(row);
     }
     function fillFf(selected) {
       ff.innerHTML = "";
@@ -259,6 +284,7 @@
     ff.addEventListener("change", sync);
     countSelect.addEventListener("change", () => { ff.required = mp.value === "ff" && !row.classList.contains("d-none"); });
     fillCities(initial ? initial.city : null, initial ? initial.value : null);
+    row.querySelector("input[name=line_slot]").addEventListener("change", () => renderSchedule(row));
   });
   if (clientSelect) {
     // Адрес забора берем у выбранного юрлица, если его не правили руками.

@@ -2,6 +2,7 @@
 {% block title %}Паллеты{% endblock %}
 {% block content %}
 <h3 class="mb-3">Паллеты</h3>
+<div class="mb-3"><a class="btn btn-outline-primary" href="{{ url_for('mvb.pallet_check') }}">🔎 Проверить содержимое паллеты</a></div>
 <form method="get" class="card p-3 mb-3 border-primary">
   <h5 class="mb-1">📷 Скан паллеты</h5>
   <div class="small text-muted mb-2">Отсканируйте стикер паллеты — откроется паллета, сразу сканируйте в нее короба.</div>
@@ -36,13 +37,19 @@
     </form>
   </div>
 </div>
+{% if mvb_can_manage and pallets %}
+<form id="bulk-delete-pallets" method="post" action="{{ url_for('mvb.pallets_delete_selected') }}" class="mb-3" onsubmit="return confirm('Удалить выбранные паллеты? Короба останутся на складе без паллет.')">
+  <button class="btn btn-sm btn-danger">🗑 Удалить выбранные</button>
+</form>
+{% endif %}
 <div class="table-responsive">
 <table class="table table-hover align-middle">
-  <thead><tr><th>Паллета</th><th>Направление</th><th class="text-end">Коробов</th><th>Где</th><th>Создана</th><th></th></tr></thead>
+  <thead><tr>{% if mvb_can_manage %}<th><input class="form-check-input" type="checkbox" title="Выбрать все" onchange="document.querySelectorAll('input[form=bulk-delete-pallets][name=pallet_id]').forEach(x => x.checked=this.checked)"></th>{% endif %}<th>Паллета</th><th>Направление</th><th class="text-end">Коробов</th><th>Где</th><th>Создана</th><th></th></tr></thead>
   <tbody>
   {% for p in pallets %}
     {% set trip_box = p.boxes|selectattr('trip')|first %}
     <tr>
+      {% if mvb_can_manage %}<td><input form="bulk-delete-pallets" class="form-check-input" type="checkbox" name="pallet_id" value="{{ p.id }}"></td>{% endif %}
       <td><a href="{{ url_for('mvb.pallet_detail', pallet_id=p.id) }}">{{ p.number }}</a></td>
       <td>{{ p.marketplace_label }}{% if p.destination %} · {{ p.destination }}{% endif %}</td>
       <td class="text-end">{{ p.boxes|length }}</td>
@@ -51,7 +58,7 @@
       <td><a class="btn btn-sm btn-outline-success" target="_blank" href="{{ url_for('mvb.pallet_label_pdf', pallet_id=p.id) }}" title="Этикетка паллеты">🖨</a></td>
     </tr>
   {% else %}
-    <tr><td colspan="6" class="text-muted">Паллет пока нет</td></tr>
+    <tr><td colspan="7" class="text-muted">Паллет пока нет</td></tr>
   {% endfor %}
   </tbody>
 </table>

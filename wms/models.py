@@ -2382,6 +2382,10 @@ class MvbDestination(db.Model):
     city = db.Column(db.String(120), nullable=False)
     ff_name = db.Column(db.String(120))
     address = db.Column(db.String(300))
+    # JSON-объект: день отправки (0=пн … 6=вс) → день выгрузки.
+    # Хранится на пункте назначения, потому что график задается отдельно
+    # для каждого маркетплейса/СЦ.
+    schedule_json = db.Column(db.Text)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
 
     @property

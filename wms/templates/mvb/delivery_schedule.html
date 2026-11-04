@@ -1,0 +1,52 @@
+{% extends "mvb/base.html" %}
+{% block title %}График поставок{% endblock %}
+{% block content %}
+<h3 class="mb-1">График поставок</h3>
+<p class="text-muted">Для каждого направления отметьте дни отправки и соответствующие дни выгрузки на СЦ. По дням выгрузки клиенту предлагаются ближайшие даты слота.</p>
+{% if destinations %}
+<form method="get" class="mb-3" style="max-width:520px">
+  <label class="form-label">Направление</label>
+  <select name="destination_id" class="form-select" onchange="this.form.submit()">
+    {% for d in destinations %}<option value="{{ d.id }}" {{ 'selected' if selected and selected.id == d.id }}>{{ d.label() }}</option>{% endfor %}
+  </select>
+</form>
+{% if selected %}
+<form method="post" class="card p-3" style="max-width:760px">
+  <input type="hidden" name="destination_id" value="{{ selected.id }}">
+  <h5>{{ selected.label() }}</h5>
+  <div class="table-responsive">
+  <table class="table align-middle">
+    <thead><tr><th style="width:70px">Работает</th><th>Отправка</th><th>Выгрузка</th></tr></thead>
+    <tbody>
+    {% for day in range(7) %}
+      <tr>
+        <td><input class="form-check-input js-schedule-on" type="checkbox" name="ship_day" value="{{ day }}" data-day="{{ day }}" {{ 'checked' if day in schedule }}></td>
+        <td>{{ weekdays[day] }}</td>
+        <td><select name="delivery_{{ day }}" class="form-select form-select-sm js-delivery" data-day="{{ day }}" style="max-width:220px" {{ 'disabled' if day not in schedule }}>
+          {% for delivery in range(7) %}<option value="{{ delivery }}" {{ 'selected' if schedule.get(day, day) == delivery }}>{{ weekdays[delivery] }}</option>{% endfor %}
+        </select></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <button class="btn btn-success">Сохранить график</button>
+</form>
+{% if nearest %}
+<div class="alert alert-info mt-3" style="max-width:760px"><b>Ближайшие даты выгрузки:</b> {% for d in nearest %}{{ d.strftime('%d.%m.%Y') }}{{ ', ' if not loop.last }}{% endfor %}</div>
+{% endif %}
+{% endif %}
+{% else %}
+<div class="alert alert-warning">Сначала добавьте пункты назначения в разделе «Прайс».</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll(".js-schedule-on").forEach((checkbox) => {
+  checkbox.addEventListener("change", () => {
+    const select = document.querySelector(`.js-delivery[data-day="${checkbox.dataset.day}"]`);
+    select.disabled = !checkbox.checked;
+  });
+});
+</script>
+{% endblock %}

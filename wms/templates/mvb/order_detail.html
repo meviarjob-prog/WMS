@@ -56,9 +56,8 @@
     <div class="{{ 'border-top pt-2 mt-2' if not loop.first }}">
       {% if order.lines|length > 1 %}<div class="fw-bold mb-1">{{ l.short_label() }}{% if l.slot_date %} · слот {{ l.slot_date.strftime('%d.%m.%Y') }}{% endif %}</div>{% endif %}
       {% if t and t.pass_ready() %}
-        {% set pass_text %}Водитель: {{ t.driver_label() }}{% if t.driver_phone %}, тел. {{ t.driver_phone }}{% endif %}; авто: {{ t.transport_label() }}{% if t.slot_date %}; дата поставки: {{ t.slot_date.strftime('%d.%m.%Y') }}{% endif %}{% endset %}
+        {% set pass_text %}Водитель: {{ t.driver_label() }}; авто: {{ t.transport_label() }}{% if t.slot_date %}; дата поставки: {{ t.slot_date.strftime('%d.%m.%Y') }}{% endif %}{% endset %}
         <div class="fs-5">Водитель: <b>{{ t.driver_label() }}</b></div>
-        {% if t.driver_phone %}<div>Телефон: <b>{{ t.driver_phone }}</b></div>{% endif %}
         {% if t.car_plate %}<div class="fs-5">Госномер: <b>{{ t.car_plate }}</b></div>{% endif %}
         {% if t.car_model %}<div>Модель авто: <b>{{ t.car_model }}</b></div>{% endif %}
         {% if not t.car_plate %}<div>Авто: <b>{{ t.transport_label() }}</b></div>{% endif %}
