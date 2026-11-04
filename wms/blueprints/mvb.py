@@ -3198,27 +3198,32 @@ def delivery_schedule():
     if request.method == "POST":
         dest = db.session.get(MvbDestination, request.form.get("destination_id", type=int)) or abort(404)
         schedule = {}
-        for raw_ship in request.form.getlist("ship_day"):
+        raw_ship = request.form.get("ship_day", "")
+        if raw_ship != "":
             try:
                 ship = int(raw_ship)
-                delivery = int(request.form.get(f"delivery_{ship}", ""))
+                # delivery_<день> оставлен для совместимости с формой
+                # предыдущей версии графика.
+                delivery = int(request.form.get("delivery_day", request.form.get(f"delivery_{ship}", "")))
             except (TypeError, ValueError):
-                continue
+                ship = delivery = -1
             if 0 <= ship <= 6 and 0 <= delivery <= 6:
                 schedule[str(ship)] = delivery
         dest.schedule_json = json.dumps(schedule, ensure_ascii=False) if schedule else None
         db.session.commit()
         flash(f"График сохранен: {dest.label()}", "success")
-        return redirect(url_for("mvb.delivery_schedule", destination_id=dest.id))
+        return redirect(url_for("mvb.delivery_schedule"))
     destinations = MvbDestination.query.order_by(
         MvbDestination.marketplace, MvbDestination.city, MvbDestination.ff_name,
     ).all()
-    selected_id = request.args.get("destination_id", type=int)
-    selected = db.session.get(MvbDestination, selected_id) if selected_id else (destinations[0] if destinations else None)
+    rows = []
+    for dest in destinations:
+        schedule = _destination_schedule(dest)
+        pair = next(iter(sorted(schedule.items()))) if schedule else (None, None)
+        rows.append({"destination": dest, "ship_day": pair[0], "delivery_day": pair[1],
+                     "nearest": _nearest_delivery_dates(dest, 3)})
     return render_template(
-        "mvb/delivery_schedule.html", destinations=destinations, selected=selected,
-        schedule=_destination_schedule(selected) if selected else {}, weekdays=WEEKDAYS_RU,
-        nearest=_nearest_delivery_dates(selected) if selected else [],
+        "mvb/delivery_schedule.html", rows=rows, weekdays=WEEKDAYS_RU,
     )
 
 

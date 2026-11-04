@@ -2279,11 +2279,13 @@ def test_delivery_schedule_shows_nearest_dates_and_validates_slot(db, client):
     _login(client, admin)
     # Отправка в понедельник, выгрузка в четверг.
     response = client.post("/mvb/delivery-schedule", data={
-        "destination_id": str(destination.id), "ship_day": "0", "delivery_0": "3",
+        "destination_id": str(destination.id), "ship_day": "0", "delivery_day": "3",
     })
     assert response.status_code == 302
     db.session.refresh(destination)
     assert '"0": 3' in destination.schedule_json
+    schedule_page = client.get("/mvb/delivery-schedule").get_data(as_text=True)
+    assert "Коледино" in schedule_page and 'name="ship_day"' in schedule_page and 'name="delivery_day"' in schedule_page
 
     seller = _user("seller_schedule", "mvb_client", _mvb_client())
     _login(client, seller)
