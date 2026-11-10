@@ -7,7 +7,7 @@
 <div class="text-muted mb-4">
   Склад: {{ box.warehouse.name if box.warehouse else '—' }}
   {% if box.cell %}
-    · Ячейка: <a href="{{ url_for('warehouses.cell_detail', cell_id=box.cell.id) }}">{{ box.cell.code }}</a>
+    · Ячейка: {% if not current_user.is_fulfillment_only() %}<a href="{{ url_for('warehouses.cell_detail', cell_id=box.cell.id) }}">{{ box.cell.code }}</a>{% else %}{{ box.cell.code }}{% endif %}
   {% elif box.zone %}
     · Ряд: {{ box.zone.code }} (без ячейки)
   {% else %}

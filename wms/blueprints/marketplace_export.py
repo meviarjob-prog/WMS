@@ -32,6 +32,7 @@
 заполняется вручную при необходимости, как и предусмотрено самими
 шаблонами."""
 
+import json
 import re
 
 from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
@@ -39,7 +40,7 @@ from flask_login import current_user
 from openpyxl import load_workbook
 
 from ..extensions import db
-from ..models import MovementDocument, MovementLine, OzonArticleMapping
+from ..models import MovementCargoPlace, MovementDocument, MovementLine, OzonArticleMapping
 from ..utils.excel_io import (
     export_ozon_package_composition,
     export_ozon_supply_request,
@@ -134,6 +135,22 @@ def ozon_mapping():
     )
 
 
+@bp.route("/ozon-mapping/clear", methods=["POST"])
+def ozon_mapping_clear():
+    """Полная очистка сопоставления (см. чат: "для перезаливки") — загрузка
+    файла только ДОБАВЛЯЕТ/обновляет строки по штрихкоду, но никогда не
+    удаляет те, которых в новом файле уже нет, поэтому при смене
+    артикулов в личном кабинете Ozon старые записи иначе копятся вечно и
+    могут молча подставляться вместо актуальных."""
+    if not current_user.is_admin:
+        flash("Очищать сопоставление артикулов Ozon может только администратор", "danger")
+        return redirect(url_for("marketplace_export.ozon_mapping"))
+    deleted = OzonArticleMapping.query.delete()
+    db.session.commit()
+    flash(f"Сопоставление артикулов Ozon очищено: удалено {deleted} штрихкодов", "success")
+    return redirect(url_for("marketplace_export.ozon_mapping"))
+
+
 @bp.route("/movement/<int:doc_id>/ozon", methods=["GET", "POST"])
 def ozon_package_composition(doc_id):
     doc = _get_viewable_movement(doc_id)
@@ -151,6 +168,33 @@ def ozon_package_composition(doc_id):
             return render_template(
                 "marketplace_export/ozon_export.html", doc=doc, lines=lines, cargo_barcodes_raw=raw
             )
+
+        if len(set(cargo_barcodes)) != len(cargo_barcodes):
+            flash("Штрихкоды ГМ повторяются — у каждого короба должен быть свой", "danger")
+            return render_template(
+                "marketplace_export/ozon_export.html", doc=doc, lines=lines, cargo_barcodes_raw=raw
+            )
+
+        # Запоминаем сопоставление ГМ ↔ короб ↔ состав (для акта приёмки Ozon);
+        # повторная выгрузка заменяет прежнее.
+        MovementCargoPlace.query.filter_by(document_id=doc.id).delete()
+        for line, cargo_barcode in zip(lines, cargo_barcodes):
+            db.session.add(
+                MovementCargoPlace(
+                    document_id=doc.id,
+                    box_id=line.box_id,
+                    box_number=line.box.box_number,
+                    cargo_barcode=cargo_barcode,
+                    items_json=json.dumps(
+                        [
+                            {"barcode": it.nomenclature.barcode, "qty": it.qty}
+                            for it in line.box.items
+                        ],
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+        db.session.commit()
 
         rows = []
         unmapped = set()

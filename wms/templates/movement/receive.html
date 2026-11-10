@@ -14,18 +14,84 @@
   оно есть) сохранится для учета. После подтверждения перемещение получает статус «Отгружено».
 </div>
 
+<div class="card p-3 mb-3 border-primary">
+  <h5>Приёмка по акту маркетплейса</h5>
+  <p class="text-muted small mb-2">
+    Загрузите акт приёмки: для WB — скачанный архив с актом целиком (.zip, распаковывать не нужно) или
+    файл «act-income-….xlsx»; для Ozon — акт по грузоместам (.xlsx). Номера коробов и количества сверятся с отправленным: короба
+    приведутся к принятому количеству, а короба, которых нет в акте, вернутся на склад-отправитель.
+    Перед записью будет экран сверки — ничего не изменится, пока вы не подтвердите.
+  </p>
+  <form method="post" enctype="multipart/form-data" action="{{ url_for('movement.receive_act', doc_id=doc.id) }}"
+        class="d-flex gap-2 flex-wrap">
+    <input type="file" name="act_file" accept=".xlsx,.zip" class="form-control" style="max-width:420px" required>
+    <button type="submit" class="btn btn-primary">📄 Загрузить и сверить</button>
+  </form>
+</div>
+
+{% if doc.to_warehouse.marketplace == 'ozon' %}
+<div class="card p-3 mb-3 border-secondary">
+  <h5>Автоприёмка по Ozon API</h5>
+  <p class="text-muted small mb-2">
+    Проверяет через API Ozon, сколько фактически принято по каждому товару во всей поставке —
+    без разбивки по коробам (этого Ozon через API не отдаёт). Если совпало полностью с отправленным,
+    перемещение сразу примется как есть; если есть расхождение — ничего не изменится, нужно будет
+    принять вручную или актом файлом (выше).
+  </p>
+  <form method="post" action="{{ url_for('movement.receive_via_ozon_api', doc_id=doc.id) }}">
+    <button type="submit" class="btn btn-outline-secondary">🔌 Свериться и принять по API</button>
+  </form>
+</div>
+{% elif doc.to_warehouse.marketplace == 'wb' %}
+<div class="card p-3 mb-3 border-secondary">
+  <h5>Автоприёмка по WB API</h5>
+  <p class="text-muted small mb-2">
+    Проверяет через API WB (поставка с номером заявки {{ doc.marketplace_request_number or '—' }}), сколько принято
+    по каждому товару. Если совпало с отправленным — перемещение сразу примется. Если есть расхождение — WB
+    отдаёт его по каждому коробу: откроется сверка, как при загрузке акта (какие короба вернутся, где поправится
+    количество), с кнопкой подтверждения. Работает, когда WB уже закончил приёмку (статус «Принято»).
+  </p>
+  <form method="post" action="{{ url_for('movement.receive_via_ozon_api', doc_id=doc.id) }}">
+    <button type="submit" class="btn btn-outline-secondary">🔌 Свериться и принять по API</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="text-muted small mb-2">Или введите принятое количество вручную по товарам:</div>
 <form method="post" action="{{ url_for('movement.receive', doc_id=doc.id) }}">
   <div class="card p-3">
-    <table class="table table-sm align-middle">
-      <thead><tr><th>Товар</th><th>Отправлено</th><th style="width:160px">Принято по факту</th></tr></thead>
+    <table class="table table-sm align-middle" id="receiveTable">
+      <thead><tr><th>Товар</th><th>Штрихкод</th><th>Отправлено</th>{% if show_ozon %}<th class="text-end">По данным Ozon</th><th class="text-end">Разница</th>{% endif %}<th style="width:160px">Принято по факту</th></tr></thead>
       <tbody>
       {% for row in rows %}
-        <tr>
+        {% set delta = (row.ozon_qty - row.expected_qty) if show_ozon else 0 %}
+        <tr class="{{ 'table-danger' if delta < 0 else ('table-warning' if delta > 0 else '') }}">
           <td>{{ row.nomenclature.name }} <span class="text-muted">({{ row.nomenclature.sku }})</span></td>
-          <td>{{ row.expected_qty | round(3) }} {{ row.nomenclature.unit }}</td>
+          <td class="text-nowrap">{{ row.nomenclature.barcode }}{% if row.nomenclature.barcode2 %}<br><span class="text-muted small">{{ row.nomenclature.barcode2 }}</span>{% endif %}</td>
+          <td>{{ row.expected_qty | qty }} {{ row.nomenclature.unit }}</td>
+          {% if show_ozon %}
+          <td class="text-end">{{ row.ozon_qty | qty }}</td>
+          <td class="text-end fw-bold">{% if delta > 0 %}+{{ delta | qty }}{% elif delta < 0 %}{{ delta | qty }}{% else %}<span class="text-muted fw-normal">0</span>{% endif %}</td>
+          {% endif %}
           <td>
             <input type="number" step="0.001" min="0" name="qty_{{ row.nomenclature.id }}"
-                   class="form-control form-control-sm" value="{{ row.expected_qty | round(3) }}">
+                   class="form-control form-control-sm" value="{{ row.received_qty | qty }}">
+          </td>
+        </tr>
+      {% endfor %}
+      {% for row in extra_rows or [] %}
+        <tr class="table-warning">
+          <td>{{ row.nomenclature.name }} <span class="text-muted">({{ row.nomenclature.sku }})</span>
+            <span class="badge bg-warning text-dark">не было в заявке</span>
+            <div class="small text-muted">не отправляли — Ozon принял сверх поставки; запишется излишком</div>
+            <input type="hidden" name="extra_nomenclature_id" value="{{ row.nomenclature.id }}"></td>
+          <td class="text-nowrap">{{ row.nomenclature.barcode }}</td>
+          <td>0 {{ row.nomenclature.unit }}</td>
+          <td class="text-end">{{ row.ozon_qty | qty }}</td>
+          <td class="text-end fw-bold">+{{ row.ozon_qty | qty }}</td>
+          <td>
+            <input type="number" step="0.001" min="0" name="qty_{{ row.nomenclature.id }}"
+                   class="form-control form-control-sm" value="{{ row.ozon_qty | qty }}">
           </td>
         </tr>
       {% endfor %}
@@ -34,4 +100,88 @@
     <button type="submit" class="btn btn-warning">📥 Подтвердить приемку</button>
   </div>
 </form>
+
+<div class="card p-3 mt-3">
+  <h5>Добавить товар, которого не было в отправке</h5>
+  <p class="text-muted small mb-2">
+    Если по факту на складе оказался товар, которого вообще не было в коробах этого перемещения
+    (прислали излишком не из заявленного) — найдите его здесь и впишите количество. Строка
+    добавится в таблицу выше как чистый излишек и попадет в общую форму приемки.
+  </p>
+  <div class="row g-2 align-items-end">
+    <div class="col-md-7">
+      <div class="autocomplete-box d-flex gap-2" data-autocomplete-nomenclature>
+        <input type="text" id="extraItemInput" class="form-control ac-input" placeholder="Штрихкод, артикул или наименование..." autocomplete="off">
+        <input type="hidden" class="ac-value">
+        <div class="autocomplete-list"></div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <input type="number" step="0.001" min="0.001" id="extraItemQty" class="form-control" placeholder="Кол-во" value="1">
+    </div>
+    <div class="col-md-2">
+      <button type="button" class="btn btn-outline-primary w-100" id="addExtraItemBtn">+ Добавить строку</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.getElementById("addExtraItemBtn").addEventListener("click", function () {
+    var input = document.getElementById("extraItemInput");
+    var hidden = input.closest(".autocomplete-box").querySelector(".ac-value");
+    var qtyInput = document.getElementById("extraItemQty");
+    var id = hidden.value;
+    if (!id) {
+      alert("Выберите товар из списка подсказок");
+      return;
+    }
+    var qty = parseFloat(qtyInput.value);
+    if (!qty || qty <= 0) {
+      alert("Укажите количество больше нуля");
+      return;
+    }
+    if (document.querySelector('#receiveTable input[name="qty_' + id + '"]')) {
+      alert("Этот товар уже есть в таблице выше");
+      return;
+    }
+    var name = input.dataset.selectedName || input.value;
+    var unit = input.dataset.selectedUnit || "";
+    var tbody = document.querySelector("#receiveTable tbody");
+    var tr = document.createElement("tr");
+    var tdName = document.createElement("td");
+    tdName.textContent = name + " ";
+    var badge = document.createElement("span");
+    badge.className = "badge bg-info text-dark";
+    badge.textContent = "излишек, не заявлен";
+    tdName.appendChild(badge);
+    var extraInput = document.createElement("input");
+    extraInput.type = "hidden";
+    extraInput.name = "extra_nomenclature_id";
+    extraInput.value = id;
+    tdName.appendChild(extraInput);
+    var tdBarcode = document.createElement("td");
+    tdBarcode.className = "text-nowrap";
+    tdBarcode.textContent = input.dataset.selectedBarcode || "";
+    var tdExpected = document.createElement("td");
+    tdExpected.textContent = "0 " + unit;
+    var tdQty = document.createElement("td");
+    var qtyField = document.createElement("input");
+    qtyField.type = "number";
+    qtyField.step = "0.001";
+    qtyField.min = "0.001";
+    qtyField.name = "qty_" + id;
+    qtyField.className = "form-control form-control-sm";
+    qtyField.value = qty;
+    tdQty.appendChild(qtyField);
+    tr.appendChild(tdName);
+    tr.appendChild(tdBarcode);
+    tr.appendChild(tdExpected);
+    tr.appendChild(tdQty);
+    tbody.appendChild(tr);
+    input.value = "";
+    hidden.value = "";
+    qtyInput.value = "1";
+  });
+</script>
 {% endblock %}

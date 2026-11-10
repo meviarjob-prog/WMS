@@ -1,0 +1,35 @@
+{% extends "mvb/base.html" %}
+{% block title %}Погрузка{% endblock %}
+{% block content %}
+<h3 class="mb-3">📦 Погрузка</h3>
+{% if trips %}
+<form method="post" class="card p-3 mb-3" style="max-width:560px">
+  <label class="form-label">Авто (госномер)</label>
+  <select name="trip_id" class="form-select form-select-lg mb-3" required>
+    <option value="">— выберите авто —</option>
+    {% for t in trips %}
+      <option value="{{ t.id }}">{{ t.car_plate or t.transport_label() or t.number }}{% if t.car_model %} · {{ t.car_model }}{% endif %} — {{ t.route_label() }}{% if t.status == 'loading' %} (идет погрузка){% endif %}</option>
+    {% endfor %}
+  </select>
+  <button class="btn btn-success btn-lg w-100">Начать погрузку</button>
+</form>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Госномер</th><th>Маршрут</th><th>Погрузка (план)</th><th class="text-end">Коробов план / погружено</th><th>Статус</th></tr></thead>
+  <tbody>
+  {% for t in trips %}
+    <tr>
+      <td class="text-nowrap"><b>{{ t.car_plate or t.transport_label() }}</b>{% if t.car_model %}<div class="small text-muted">{{ t.car_model }}</div>{% endif %}</td>
+      <td>{{ t.route_label() }}</td>
+      <td class="text-nowrap">{{ (t.planned_load_start_at|msk).strftime('%d.%m %H:%M') if t.planned_load_start_at else '—' }}{% if t.planned_load_end_at %}–{{ (t.planned_load_end_at|msk).strftime('%H:%M') }}{% endif %}</td>
+      <td class="text-end">{{ t.planned_boxes or '—' }} / {{ t.boxes|length }}</td>
+      <td>{{ t.status_label }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="alert alert-light">Нет авто, назначенных на рейс. Оператор назначает авто в разделе «Рейсы».</div>
+{% endif %}
+{% endblock %}

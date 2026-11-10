@@ -6,19 +6,24 @@
   <h3 class="mb-0">Приемка товара</h3>
   <div class="d-flex flex-wrap gap-2">
     <a class="btn btn-outline-secondary" href="{{ url_for('receiving.returns_list') }}">↩ Возвраты поставщику</a>
+    {% if current_user.is_admin %}<a class="btn btn-outline-danger" href="{{ url_for('receiving.doubled_receipts') }}">⚠ Задвоенные приемки</a>{% endif %}
     <a class="btn btn-outline-primary" href="{{ url_for('receiving.import_invoice_form') }}">📄 Загрузить накладную</a>
     <a class="btn btn-primary" href="{{ url_for('receiving.new_document') }}">➕ Новая приемка</a>
   </div>
 </div>
 
-<form method="get" class="d-flex flex-wrap align-items-center gap-3 mb-3">
+<form method="get" id="listFilters" class="d-flex flex-wrap align-items-center gap-3 mb-3">
   <div class="form-check">
     <input type="checkbox" name="unfinished" class="form-check-input" id="filterUnfinished" onchange="this.form.submit()" {% if unfinished_only %}checked{% endif %}>
     <label class="form-check-label" for="filterUnfinished">Показывать только незавершенные</label>
   </div>
   <div class="form-check">
-    <input type="checkbox" name="invoice_only" class="form-check-input" id="filterInvoiceOnly" onchange="this.form.submit()" {% if invoice_only %}checked{% endif %}>
+    <input type="checkbox" name="invoice_only" class="form-check-input" id="filterInvoiceOnly" onchange="if(this.checked){document.getElementById('filterNoInvoice').checked=false}this.form.submit()" {% if invoice_only %}checked{% endif %}>
     <label class="form-check-label" for="filterInvoiceOnly">Приемка по накладным</label>
+  </div>
+  <div class="form-check">
+    <input type="checkbox" name="no_invoice" class="form-check-input" id="filterNoInvoice" onchange="if(this.checked){document.getElementById('filterInvoiceOnly').checked=false}this.form.submit()" {% if no_invoice %}checked{% endif %}>
+    <label class="form-check-label" for="filterNoInvoice">Приемки без накладных</label>
   </div>
   <select name="warehouse_id" class="form-select form-select-sm" style="max-width:220px" onchange="this.form.submit()">
     <option value="">Все склады</option>
@@ -30,12 +35,50 @@
     <input type="text" name="q" class="form-control form-control-sm" style="max-width:320px"
            placeholder="Поиск: номер, поставщик, № заказа, склад, автор — можно несколько слов" value="{{ q }}">
     <button type="submit" class="btn btn-sm btn-outline-primary">Найти</button>
+    {% if q or no_invoice or invoice_only or unfinished_only or warehouse_id or filters.values() | select | list %}
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('receiving.list_documents') }}">Сбросить</a>
+    {% endif %}
   </div>
 </form>
 
 <div class="card p-3 receiving-list-card">
   <table class="table d-none d-md-table">
-    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Поставщик</th><th>№ заказа</th><th>Автор</th><th>Статус</th><th>Кол-во</th><th>Возвраты</th><th class="text-center">Провер. в 1С</th><th></th></tr></thead>
+    <thead><tr><th>Номер</th><th>Дата</th><th>Склад</th><th>Поставщик</th><th>№ заказа</th><th>Автор</th><th>Статус</th><th>Кол-во</th><th>Возвраты</th><th class="text-center">Провер. в 1С</th><th></th></tr>
+      <!-- Поиск по каждой колонке: поля привязаны к форме выше (атрибут form),
+           Enter или смена списка применяют фильтр -->
+      <tr class="column-filters">
+        <th><input type="text" name="f_number" form="listFilters" class="form-control form-control-sm" placeholder="Номер" value="{{ filters.f_number }}"></th>
+        <th><input type="date" name="f_date" form="listFilters" class="form-control form-control-sm" value="{{ filters.f_date }}" onchange="this.form.submit()"></th>
+        <th><input type="text" name="f_warehouse" form="listFilters" class="form-control form-control-sm" placeholder="Склад" value="{{ filters.f_warehouse }}"></th>
+        <th><input type="text" name="f_supplier" form="listFilters" class="form-control form-control-sm" placeholder="Поставщик" value="{{ filters.f_supplier }}"></th>
+        <th><input type="text" name="f_order" form="listFilters" class="form-control form-control-sm" placeholder="№ заказа" value="{{ filters.f_order }}"></th>
+        <th><input type="text" name="f_author" form="listFilters" class="form-control form-control-sm" placeholder="Автор" value="{{ filters.f_author }}"></th>
+        <th>
+          <select name="f_status" form="listFilters" class="form-select form-select-sm" onchange="this.form.submit()">
+            <option value="">Все</option>
+            {% for code, label in [('draft','Черновик'),('recounting','Пересчет'),('sorting','Разбраковка'),('completed','Завершено')] %}
+            <option value="{{ code }}" {% if filters.f_status == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </th>
+        <th><input type="text" name="f_qty" form="listFilters" class="form-control form-control-sm" placeholder="Кол-во" value="{{ filters.f_qty }}" style="min-width:70px"></th>
+        <th>
+          <select name="f_returns" form="listFilters" class="form-select form-select-sm" onchange="this.form.submit()">
+            <option value="">Все</option>
+            <option value="yes" {% if filters.f_returns == 'yes' %}selected{% endif %}>Есть</option>
+            <option value="no" {% if filters.f_returns == 'no' %}selected{% endif %}>Нет</option>
+          </select>
+        </th>
+        <th>
+          <select name="f_checked" form="listFilters" class="form-select form-select-sm" onchange="this.form.submit()">
+            <option value="">Все</option>
+            <option value="yes" {% if filters.f_checked == 'yes' %}selected{% endif %}>Да</option>
+            <option value="no" {% if filters.f_checked == 'no' %}selected{% endif %}>Нет</option>
+          </select>
+        </th>
+        <th></th>
+      </tr>
+    </thead>
     <tbody>
     {% for d in documents %}
       {% set returns_count = returns_count_by_doc.get(d.id, 0) %}

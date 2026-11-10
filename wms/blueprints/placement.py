@@ -33,6 +33,7 @@ from ..utils.excel_io import export_placement_to_excel, timestamp_for_filename
 from ..utils.document_access import ensure_view_document_access, owned_query
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
+from ..utils.work_log import log_pack
 
 bp = Blueprint("placement", __name__)
 
@@ -606,6 +607,7 @@ def _scan_item_into_box(doc, box, item, qty):
     # и истории, отдельный шаг "упаковать в короб" в этом потоке не нужен.
     line = PlacementLine(document_id=doc.id, nomenclature_id=item.id, qty=qty, box_id=box.id)
     db.session.add(line)
+    log_pack(current_user, box, item.id, qty)
     db.session.commit()
     return line, None
 
@@ -795,6 +797,7 @@ def pack_line(doc_id, line_id):
         )
         db.session.add(packed_line)
 
+    log_pack(current_user, box, line.nomenclature_id, qty)
     db.session.commit()
     flash(f"Товар упакован в короб {box.box_number}", "success")
     return redirect(url_for("placement.detail", doc_id=doc.id))

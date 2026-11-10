@@ -24,6 +24,11 @@ def _env_bool(name, default=False):
 
 
 class Config:
+    # Демо-режим для презентаций (см. run_demo.py и docs/DEMO.md): отдельная
+    # база с вымышленными данными и заметный баннер в интерфейсе. Включается
+    # только переменной WMS_DEMO=1 — на боевом сервере она не выставляется.
+    DEMO_MODE = _env_bool("WMS_DEMO")
+
     SECRET_KEY = os.environ.get("WMS_SECRET_KEY", "dev-secret-key-change-me")
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         "WMS_DATABASE_URL", "sqlite:///" + os.path.join(INSTANCE_DIR, "wms.db")

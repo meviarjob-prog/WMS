@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Результат проверки{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('receipt_audit.index') }}">&larr; Проверка непринятых</a></p>
+<h3 class="mb-3">Результат проверки</h3>
+
+<div class="d-flex flex-wrap gap-2 mb-3">
+  <span class="badge bg-success fs-6">Совпало: {{ counts.match }}</span>
+  <span class="badge bg-primary fs-6">Исправим автоматически: {{ counts.auto_fix }}</span>
+  <span class="badge bg-danger fs-6">Ручная проверка: {{ counts.manual }}</span>
+  <span class="badge bg-secondary fs-6">Без отчёта: {{ no_data | length }}</span>
+  {% if orphans %}<span class="badge bg-warning text-dark fs-6">Отчёт не опознан: {{ orphans | length }}</span>{% endif %}
+</div>
+
+{% if results | selectattr('status', 'in', ['match','auto_fix']) | list %}
+<form method="post" action="{{ url_for('receipt_audit.apply') }}" class="card p-3 mb-4 border-primary"
+      onsubmit="return confirm('Применить? Совпавшие перемещения будут проведены, у несовпавших короба вернутся на склад или количество поправится. Ручные не затрагиваются.');">
+  <input type="hidden" name="plan" value="{{ plan_json }}">
+  <div class="d-flex flex-wrap align-items-center gap-3">
+    <button type="submit" class="btn btn-primary">✅ Применить ({{ counts.match + counts.auto_fix }})</button>
+    <span class="text-muted small">Проведём {{ counts.match }} совпавших и исправим {{ counts.auto_fix }}. Ручные ({{ counts.manual }}) останутся как есть.</span>
+  </div>
+</form>
+{% endif %}
+
+<div class="card p-3 mb-4">
+  <div class="table-responsive">
+  <table class="table table-sm align-top mb-0">
+    <thead><tr><th>Перемещение</th><th>Результат</th><th>Что будет / причина</th><th>Файл</th></tr></thead>
+    <tbody>
+    {% for r in results %}
+      <tr class="{{ 'table-danger' if r.status == 'manual' else '' }}">
+        <td><a href="{{ url_for('movement.detail', doc_id=r.doc.id) }}">{{ r.doc.number }}</a><div class="small text-muted">{{ r.doc.to_warehouse.name }} · заявка {{ r.doc.marketplace_request_number or '—' }}</div></td>
+        <td>
+          {% if r.status == 'match' %}<span class="badge bg-success">совпало</span>
+          {% elif r.status == 'auto_fix' %}<span class="badge bg-primary">исправим</span>
+          {% else %}<span class="badge bg-danger">вручную</span>{% endif %}
+        </td>
+        <td class="small">
+          {% if r.status == 'match' %}Провести как принятое: {{ r.rec.matched_qty | round(0) | int }} шт.
+          {% elif r.status == 'auto_fix' %}
+            {% if r.missing_boxes %}Вернуть на склад-отправитель коробов: <b>{{ r.missing_boxes | length }}</b> ({{ r.missing_boxes | join(', ') }}).<br>{% endif %}
+            {% if r.short_rows %}Поправить количество в коробах ({{ r.short_rows | length }}):
+              {% for box, name, sent, got in r.short_rows[:6] %}{{ box }}: {{ name }} {{ sent | round(0) | int }} → {{ got | round(0) | int }}{% if not loop.last %}; {% endif %}{% endfor %}{% if r.short_rows | length > 6 %} и др.{% endif %}<br>{% endif %}
+            {% if r.surplus_rows %}Принять излишек и добавить в короб ({{ r.surplus_rows | length }}):
+              {% for box, name, sent, got in r.surplus_rows[:6] %}{{ box }}: {{ name }} {{ sent | round(0) | int }} → {{ got | round(0) | int }}{% if not loop.last %}; {% endif %}{% endfor %}{% if r.surplus_rows | length > 6 %} и др.{% endif %}<br>{% endif %}
+            Принято {{ r.rec.matched_qty | round(0) | int }} из {{ r.rec.sent_qty | round(0) | int }} шт.
+          {% endif %}
+          {% set diff_rows = r.item_rows | default([]) %}
+          {% if r.status != 'match' and diff_rows %}
+            {% include "movement/_qty_diff_table.html" %}
+          {% endif %}
+          {% for reason in r.reasons %}<div class="text-danger">⚠ {{ reason }}</div>{% endfor %}
+        </td>
+        <td class="small text-muted">{{ r.file }}<br>{{ r.how }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="text-muted">Ни один отчёт не удалось сопоставить с перемещением</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{% if orphans %}
+<div class="alert alert-warning small">
+  <b>Отчёты, для которых не нашлось перемещения:</b> {% for o in orphans %}{{ o.name }}{% if not loop.last %}, {% endif %}{% endfor %}.
+  Проверьте, что перемещение завершено, передано транспорту, а грузоместа выгружались («Состав ГМ») либо номер поставки в имени файла совпадает с № заявки.
+</div>
+{% endif %}
+{% if no_data %}
+<div class="card p-3">
+  <h6>Без отчёта ({{ no_data | length }})</h6>
+  <div class="small text-muted mb-1">Для этих непринятых перемещений отчёт не загружен — они не проверялись.</div>
+  <div class="small">{% for d in no_data %}<a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</div>
+</div>
+{% endif %}
+{% endblock %}

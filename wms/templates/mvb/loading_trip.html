@@ -1,0 +1,49 @@
+{% extends "mvb/base.html" %}
+{% block title %}Погрузка {{ trip.car_plate or trip.number }}{% endblock %}
+{% block content %}
+<div class="mb-3">
+  <h3 class="mb-1">📦 Погрузка: {{ trip.transport_label() or trip.number }}</h3>
+  <div class="text-muted">{{ trip.number }} · {{ trip.route_label() }}{% if trip.driver_label() %} · {{ trip.driver_label() }}{% endif %}</div>
+  <div class="fs-5 mt-1">Погружено: <b id="loadedCount">{{ trip.boxes|length }}</b>{% if trip.planned_boxes %} из {{ trip.planned_boxes }}{% endif %} кор.</div>
+</div>
+<p class="text-muted">Грузим только паллетами: сканируйте этикетку паллеты (или любой короб на ней) — паллета целиком попадает на свою точку маршрута. Короб без паллеты не грузится.</p>
+{% set scan_url = url_for('mvb.trip_scan', trip_id=trip.id) %}
+{% set scan_placeholder = 'Штрихкод паллеты' %}
+{% include "mvb/_scan_widget.html" %}
+<h6>Паллеты этого авто: погружено <span id="palLoaded">{{ pallet_rows|selectattr('loaded')|list|length }}</span> из {{ pallet_rows|length }}</h6>
+<ul class="list-group mb-3" style="max-width:560px">
+  {% for r in pallet_rows %}
+  <li class="list-group-item d-flex justify-content-between {{ 'list-group-item-success' if r.loaded }}" data-pallet="{{ r.pallet.number|upper }}">
+    <span><b>{{ r.pallet.number }}</b> · {{ r.pallet.marketplace_label }}{% if r.pallet.destination %} · {{ r.pallet.destination }}{% endif %}</span>
+    <span><span class="js-state">{{ '✓ погружена' if r.loaded else 'сканируйте' }}</span> · {{ r.boxes }} кор.</span>
+  </li>
+  {% else %}
+  <li class="list-group-item text-muted">Паллеты в рейс не запланированы — сканируйте паллеты этого направления</li>
+  {% endfor %}
+</ul>
+<form method="post" action="{{ url_for('mvb.trip_action', trip_id=trip.id, action='depart') }}" style="max-width:560px"
+      onsubmit="return confirm('Завершить погрузку и отправить рейс?')">
+  <input type="hidden" name="back" value="loading">
+  <button class="btn btn-success btn-lg w-100">✓ Завершить погрузку</button>
+</form>
+<h6 class="mt-4">По точкам</h6>
+<ul class="list-group" style="max-width:560px">
+  {% for stop in trip.stops %}
+  <li class="list-group-item d-flex justify-content-between"><span>{{ stop.label() }}</span><span>{{ stop.boxes|length }}{% if stop.planned_boxes %} / {{ stop.planned_boxes }}{% endif %} кор.</span></li>
+  {% endfor %}
+</ul>
+<script>
+document.addEventListener("mvb:scanned", (e) => {
+  if (e.detail.ok && e.detail.loaded !== undefined) document.getElementById("loadedCount").textContent = e.detail.loaded;
+  if (e.detail.ok && e.detail.pallet) {
+    const li = document.querySelector(`li[data-pallet="${CSS.escape(String(e.detail.pallet).toUpperCase())}"]`);
+    if (li && !li.classList.contains("list-group-item-success")) {
+      li.classList.add("list-group-item-success");
+      li.querySelector(".js-state").textContent = "✓ погружена";
+      const c = document.getElementById("palLoaded");
+      c.textContent = parseInt(c.textContent, 10) + 1;
+    }
+  }
+});
+</script>
+{% endblock %}

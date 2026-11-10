@@ -227,11 +227,16 @@ def list_warehouses():
     warehouses = Warehouse.query.order_by(Warehouse.code).all()
     for wh in warehouses:
         wh.in_current_plan = wh.marketplace is None or wh.id in active_city_warehouse_ids
+    # Сопоставление с 1С — и для складов-городов маркетплейсов, и для
+    # собственных складов (см. чат: для перемещений между собственными
+    # складами в 1С должен подтягиваться нужный склад). Собственные — первыми.
     fulfillment_warehouses = [wh for wh in warehouses if wh.marketplace is not None]
+    own_mapping_warehouses = [wh for wh in warehouses if wh.marketplace is None and wh.is_active]
     return render_template(
         "warehouses/list.html",
         warehouses=warehouses,
         fulfillment_warehouses=fulfillment_warehouses,
+        own_mapping_warehouses=own_mapping_warehouses,
     )
 
 
@@ -336,6 +341,8 @@ def update_fulfillment_1c_name(warehouse_id):
     db.session.commit()
     if wh.fulfillment_1c_name:
         flash(f"Склад 1С для «{wh.name}» обновлен: «{wh.fulfillment_1c_name}»", "success")
+    elif wh.marketplace is None:
+        flash(f"Склад 1С для «{wh.name}» очищен — в 1С уйдет название склада из WMS", "success")
     else:
         flash(f"Склад 1С для «{wh.name}» очищен — будет использован общий запасной склад", "success")
     return redirect(url_for("warehouses.list_warehouses"))

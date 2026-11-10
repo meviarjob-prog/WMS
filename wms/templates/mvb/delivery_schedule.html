@@ -1,0 +1,44 @@
+{% extends "mvb/base.html" %}
+{% block title %}График поставок{% endblock %}
+{% block content %}
+<h3 class="mb-1">График поставок</h3>
+<p class="text-muted">Графики из предоставленных таблиц уже заполнены. Для направления без графика выберите день отгрузки и выгрузки вручную; существующий график также можно заменить.</p>
+{% if rows %}
+<div class="table-responsive">
+<table class="table table-hover align-middle">
+  <thead><tr><th>Маркетплейс</th><th>Направление</th><th>Предустановка</th><th>День отгрузки</th><th>День выгрузки</th><th>Ближайшие выгрузки</th><th></th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    {% set d = row.destination %}
+    <tr>
+      <td>{{ MVB_MARKETPLACES[d.marketplace] }}</td>
+      <td><b>{{ d.value }}</b>{% if d.marketplace == 'ff' and d.city %}<div class="small text-muted">{{ d.city }}</div>{% endif %}</td>
+      <td class="small">{{ row.schedule_label or '—' }}</td>
+      <td><select form="schedule-{{ d.id }}" name="ship_day" class="form-select form-select-sm js-ship-day" data-delivery="#delivery-{{ d.id }}" style="min-width:155px">
+        {% if row.is_multi %}<option value="keep" selected>— по предустановке —</option>{% endif %}
+        <option value="">— не задан —</option>
+        {% for day in range(7) %}<option value="{{ day }}" {{ 'selected' if not row.is_multi and row.ship_day == day }}>{{ weekdays[day] }}</option>{% endfor %}
+      </select></td>
+      <td><select form="schedule-{{ d.id }}" id="delivery-{{ d.id }}" name="delivery_day" class="form-select form-select-sm" style="min-width:155px" {{ 'disabled' if row.is_multi }}>
+        {% for day in range(7) %}<option value="{{ day }}" {{ 'selected' if row.delivery_day == day }}>{{ weekdays[day] }}</option>{% endfor %}
+      </select></td>
+      <td class="small text-nowrap">{% for value in row.nearest %}{{ value.strftime('%d.%m') }}{{ ', ' if not loop.last }}{% else %}<span class="text-muted">не настроено</span>{% endfor %}</td>
+      <td><form id="schedule-{{ d.id }}" method="post"><input type="hidden" name="destination_id" value="{{ d.id }}"><button class="btn btn-sm btn-outline-primary">Сохранить</button></form></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="alert alert-warning">Сначала добавьте пункты назначения в разделе «Прайс».</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll(".js-ship-day").forEach((select) => {
+  select.addEventListener("change", () => {
+    document.querySelector(select.dataset.delivery).disabled = select.value === "keep";
+  });
+});
+</script>
+{% endblock %}

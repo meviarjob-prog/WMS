@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Регистрация — МВБ Логистика</title>
+<link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+</head>
+<body style="min-height:100vh;background:#f0fdf4">
+<div class="container py-4" style="max-width:520px">
+  <div class="text-center mb-3">
+    <div style="font-size:2.5rem">🚚</div>
+    <h3>Регистрация клиента</h3>
+    <div class="text-muted">Доставка коробов на СЦ Wildberries и Ozon. После проверки оператором МВБ вы сможете входить и создавать заявки.</div>
+  </div>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category }} py-2">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  <form method="post" class="card p-4">
+    <div class="mb-2"><label class="form-label">Название компании *</label><input name="name" class="form-control form-control-lg" value="{{ form.name }}" required></div>
+    <div class="mb-2"><label class="form-label">Адрес забора коробов *</label><input name="address" class="form-control form-control-lg" value="{{ form.address }}" required></div>
+    <div class="mb-2"><label class="form-label">Телефон *</label><input name="phone" type="tel" class="form-control form-control-lg" value="{{ form.phone }}" placeholder="+7" required></div>
+    <div class="mb-2"><label class="form-label">Логин *</label><input name="username" class="form-control form-control-lg" value="{{ form.username }}" autocomplete="username" required></div>
+    <div class="mb-3"><label class="form-label">Пароль * <span class="text-muted small">(не короче 6 символов)</span></label><input name="password" type="password" class="form-control form-control-lg" minlength="6" autocomplete="new-password" required></div>
+    <button class="btn btn-success btn-lg w-100">Зарегистрироваться</button>
+  </form>
+  <div class="text-center mt-3">Уже зарегистрированы? <a href="{{ url_for('mvb.login') }}">Войти</a></div>
+</div>
+</body>
+</html>

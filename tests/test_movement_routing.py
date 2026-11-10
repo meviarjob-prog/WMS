@@ -401,3 +401,116 @@ def test_routing_without_priority_still_uses_planned_qty(db, client_logged_in):
     assert len(routing) == 1
     assert routing[0]["matched_qty"] == 10
     assert routing[0]["items"][0]["remaining"] == 30
+
+
+def test_routing_for_closed_plan_uses_live_stock_not_fulfilled(db, client_logged_in):
+    """К-тSmile 44-48: план закрыт (выполнено 160 при плане 100), короб с
+    остатком лежит на складе — подтягиваем потребность, а не «нет потребности»
+    (раньше цель, меньшая fulfilled, обнуляла остаток)."""
+    sender, city, item = _setup_plan(planned_qty=100, fulfilled_qty=160)
+    box = _make_box(sender, item, qty=80, box_number="BOX-000010")
+
+    routing = _compute_routing(box)
+
+    assert len(routing) == 1
+    assert routing[0]["warehouse"].id == city.id
+    # единственный город — весь упакованный остаток (80) ему
+    assert routing[0]["items"][0]["remaining"] == 80
+    assert routing[0]["matched_qty"] == 80
+
+
+def test_routing_for_closed_plan_splits_live_stock_by_plan_share(db, client_logged_in):
+    sender, city, item = _setup_plan(planned_qty=100, fulfilled_qty=100)
+    other = Warehouse(code="WH-CTY2", name="ОЗОН: Город 2", marketplace="ozon", marketplace_city="Город 2")
+    db.session.add(other)
+    db.session.commit()
+    plan = ShipmentPlan.query.first()
+    db.session.add(ShipmentPlanLine(plan_id=plan.id, warehouse_id=other.id, nomenclature_id=item.id,
+                                    barcode=item.barcode, planned_qty=300, fulfilled_qty=300))
+    db.session.commit()
+    box = _make_box(sender, item, qty=40, box_number="BOX-000011")
+
+    routing = {r["warehouse"].id: r["items"][0]["remaining"] for r in _compute_routing(box)}
+
+    assert routing == {other.id: 30, ShipmentPlanLine.query.filter_by(nomenclature_id=item.id).first().warehouse_id: 10}
+
+
+def test_routing_still_empty_when_closed_plan_and_no_stock_left(db, client_logged_in):
+    sender, city, item = _setup_plan(planned_qty=100, fulfilled_qty=100)
+    box = Box(box_number="BOX-000012", warehouse_id=city.id, status="open")   # короб не на складе-отправителе
+    db.session.add(box)
+    db.session.commit()
+    db.session.add(BoxItem(box_id=box.id, nomenclature_id=item.id, qty=5))
+    db.session.commit()
+
+    assert _compute_routing(box) == []
+
+
+def test_routing_stored_target_is_not_reduced_by_in_transit_boxes(db, client_logged_in):
+    """Цель из снимка плана — доля остатка на складе. Уже едущие (но не
+    принятые) короба из этого остатка ушли, вычитать их из цели второй раз
+    нельзя (К-тSmile: в пути 245 при цели в разы меньше → «потребности нет»)."""
+    sender, city, item = _setup_plan(planned_qty=200)
+    line = ShipmentPlanLine.query.filter_by(warehouse_id=city.id, nomenclature_id=item.id).first()
+    line.priority = 1
+    line.distributed_target_qty = 33
+    db.session.commit()
+
+    # уже едущий туда короб на 245 (документ завершен, но не принят)
+    in_transit_box = _make_box(sender, item, qty=245, box_number="BOX-000020")
+    doc = MovementDocument(number="PER-RT-1", from_warehouse_id=sender.id, to_warehouse_id=city.id,
+                           status="completed", completed_at=datetime.utcnow())
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(MovementLine(document_id=doc.id, box_id=in_transit_box.id, from_warehouse_id=sender.id))
+    db.session.commit()
+
+    box = _make_box(sender, item, qty=80, box_number="BOX-000021")
+    routing = _compute_routing(box)
+
+    assert len(routing) == 1 and routing[0]["items"][0]["remaining"] == 33
+
+
+def test_routing_stored_target_is_reduced_by_draft_boxes_still_at_sender(db, client_logged_in):
+    sender, city, item = _setup_plan(planned_qty=200)
+    line = ShipmentPlanLine.query.filter_by(warehouse_id=city.id, nomenclature_id=item.id).first()
+    line.priority = 1
+    line.distributed_target_qty = 33
+    db.session.commit()
+
+    draft_box = _make_box(sender, item, qty=30, box_number="BOX-000022")
+    doc = MovementDocument(number="PER-RT-2", from_warehouse_id=sender.id, to_warehouse_id=city.id, status="draft")
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(MovementLine(document_id=doc.id, box_id=draft_box.id, from_warehouse_id=sender.id))
+    db.session.commit()
+
+    box = _make_box(sender, item, qty=80, box_number="BOX-000023")
+    routing = _compute_routing(box)
+
+    assert routing[0]["items"][0]["remaining"] == 3
+
+
+def test_route_box_page_explains_each_city(db, client_logged_in):
+    sender, city, item = _setup_plan(planned_qty=100, fulfilled_qty=40)
+    _make_box(sender, item, qty=10, box_number="BOX-000030")
+    html = client_logged_in.get("/movement/route-box?box_number=BOX-000030").get_data(as_text=True)
+    assert "Почему так" in html and "план − выполнено − уже едет" in html
+    assert "ОЗОН: Город" in html
+
+
+def test_explanation_shows_draft_boxes_that_cover_the_need(db, client_logged_in):
+    from wms.blueprints.movement import _routing_explanation
+
+    sender, city, item = _setup_plan(planned_qty=100)
+    draft_box = _make_box(sender, item, qty=100, box_number="BOX-000031")
+    doc = MovementDocument(number="PER-RT-3", from_warehouse_id=sender.id, to_warehouse_id=city.id, status="draft")
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(MovementLine(document_id=doc.id, box_id=draft_box.id, from_warehouse_id=sender.id))
+    db.session.commit()
+    box = _make_box(sender, item, qty=20, box_number="BOX-000032")
+
+    rows = _routing_explanation(box)
+    assert rows[0]["drafts"] == 100 and rows[0]["remaining"] == 0
+    assert _compute_routing(box) == []

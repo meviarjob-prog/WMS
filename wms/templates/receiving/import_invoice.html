@@ -29,8 +29,8 @@
         <input type="file" name="file" accept=".xlsx" class="form-control" required>
       </div>
       <div class="mb-3">
-        <label class="form-label">№ заказа <span class="text-muted">(вносится вручную — в файле его нет)</span></label>
-        <input type="text" name="order_number" class="form-control">
+        <label class="form-label" for="orderNumberInput">№ заказа <span class="text-danger">*</span> <span class="text-muted">(вносится вручную — в файле его нет)</span></label>
+        <input type="text" name="order_number" id="orderNumberInput" class="form-control" required>
       </div>
       <button type="submit" class="btn btn-primary">Загрузить</button>
     </form>

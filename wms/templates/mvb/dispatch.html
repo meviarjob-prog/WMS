@@ -1,0 +1,138 @@
+{% extends "mvb/base.html" %}
+{% block title %}К отправке{% endblock %}
+{% block content %}
+<h3 class="mb-1">Готово к отправке на СЦ</h3>
+<p class="text-muted">Короба на сформированных паллетах, еще не погруженные, по направлениям, самые давние сверху (FIFO). Программа предлагает, как скомпоновать рейсы по наполненности авто, <b>не разбивая заявки</b>: каждая заявка едет целиком в одной машине, заявки с разными датами слота в одну машину не попадают; сверху — ближайшие слоты. Каждый рейс сразу получает статус «Поиск авто».</p>
+
+{% if unpalletized %}
+<div class="alert alert-warning">На складе <b>{{ unpalletized }}</b> кор. без паллеты — сюда они не попадают. Соберите их в <a href="{{ url_for('mvb.pallets') }}">паллеты</a>: в машину грузим только паллетами.</div>
+{% endif %}
+<form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-3">
+  <label class="form-label mb-0">Вместимость машины, коробов:</label>
+  <input type="number" min="1" name="capacity" value="{{ capacity or '' }}" class="form-control w-auto" style="max-width:110px" list="capList">
+  <datalist id="capList">{% for c in capacities %}<option value="{{ c }}">{% endfor %}</datalist>
+  <button class="btn btn-outline-secondary">Пересчитать</button>
+  {% if capacities %}<span class="text-muted small">в справочнике транспорта: {{ capacities|join(', ') }}</span>{% else %}<span class="text-warning small">Добавьте машины в «Водители» или «Машины для СЦ», чтобы вместимость подставлялась сама</span>{% endif %}
+</form>
+
+<form method="post" action="{{ url_for('mvb.trip_new') }}">
+<div class="card p-3 mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    {% set planned = pallet_rows|selectattr('trip')|list %}
+    <h5 class="mb-0">Паллеты на складе к отправке: {{ pallet_rows|length }}{% if planned %} <span class="text-muted fs-6">(в рейсах, ждут погрузки: {{ planned|length }})</span>{% endif %}</h5>
+    <div class="text-muted" id="palSummary">Отмечено: 0 пал., 0 кор.</div>
+  </div>
+  <div class="table-responsive">
+  <table class="table align-middle mb-2">
+    <thead><tr><th><input type="checkbox" class="form-check-input" id="palAll" title="Отметить все"></th><th>Паллета</th><th>Направление</th><th>Слот на СЦ</th><th class="text-end">Коробов</th><th>Заявки</th><th>Клиенты</th><th>Ждет с</th></tr></thead>
+    <tbody>
+    {% for r in pallet_rows %}
+      <tr class="{{ 'table-light text-muted' if r.trip }}">
+        <td>{% if not r.trip %}<input type="checkbox" class="form-check-input mvb-pal" name="pallet_id" value="{{ r.pallet.id }}" data-boxes="{{ r.boxes }}" id="pal{{ r.pallet.id }}">{% endif %}</td>
+        <td><label for="pal{{ r.pallet.id }}"><a href="{{ url_for('mvb.pallet_detail', pallet_id=r.pallet.id) }}">{{ r.pallet.number }}</a></label>
+          {% if r.trip %}<br><a class="badge bg-info text-dark text-decoration-none" href="{{ url_for('mvb.trip_detail', trip_id=r.trip.id) }}" title="Спишется со склада, когда кладовщик отсканирует паллету в машину">в рейсе {{ r.trip.number }} · ждет погрузки</a>{% endif %}</td>
+        <td>{{ r.label }}</td>
+        <td class="text-nowrap">{{ r.slot_date.strftime('%d.%m.%Y') if r.slot_date else '—' }}</td>
+        <td class="text-end fs-5">{{ r.boxes }}</td>
+        <td class="small">{{ r.orders|sort|join(', ') }}</td>
+        <td class="small">{{ r.clients|sort|join(', ') }}</td>
+        <td>{{ (r.oldest|msk).strftime('%d.%m %H:%M') if r.oldest else '' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="text-muted">Нет паллет, ожидающих отправки</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if pallet_rows|rejectattr('trip')|list %}<div><button class="btn btn-success">🚚 Создать рейс по отмеченным паллетам</button></div>{% endif %}
+  <div class="small text-muted mt-2">Паллета в рейсе остается на складе, пока кладовщик не отсканирует ее в машину на погрузке.</div>
+</div>
+</form>
+<details class="mb-3">
+<summary class="text-muted">По направлениям и автокомпоновка рейсов</summary>
+<div class="mt-2">
+{% if rows %}
+<div class="card p-3 mb-3">
+  <div class="fs-5">Всего ждут отправки: <b>{{ total }}</b> кор.{% if total_vehicles %} · нужно машин по {{ capacity }} кор.: <b>{{ total_vehicles }}</b>{% endif %}</div>
+  <div class="text-muted" id="selSummary">Отмечено: 0 кор.</div>
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('mvb.trip_new') }}">
+<input type="hidden" name="capacity" value="{{ capacity or '' }}">
+<div class="table-responsive">
+<table class="table align-middle">
+  <thead><tr><th><input type="checkbox" class="form-check-input" id="dirAll" title="Отметить все"></th><th>Направление</th><th>Слот на СЦ</th><th class="text-end">Коробов</th><th class="text-end">Заявок</th><th class="text-end">Машин</th><th>Паллеты</th><th>Клиенты</th><th>Ждет с</th><th>Рейсы</th>{% if mvb_can_manage %}<th></th>{% endif %}</tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><input type="checkbox" class="form-check-input mvb-dir" name="dir" value="{{ r.key }}" data-boxes="{{ r.boxes }}" id="dir{{ loop.index }}"></td>
+      <td><label for="dir{{ loop.index }}"><b>{{ MVB_MARKETPLACES[r.marketplace] }}</b>{% if r.destination %} · {{ r.destination }}{% endif %}</label></td>
+      <td class="text-nowrap">{% if r.slot_date %}<b>{{ r.slot_date.strftime('%d.%m.%Y') }}</b>{% else %}<span class="text-muted">не указан</span>{% endif %}</td>
+      <td class="text-end fs-5">{{ r.boxes }}</td>
+      <td class="text-end" title="{% for i in r.orders %}{{ i.order.number }}: {{ i.boxes }} кор.&#10;{% endfor %}">{{ r.orders|length }}{% if r.orders %} <span class="text-muted small">(макс. {{ r.orders|map(attribute='boxes')|max }})</span>{% endif %}</td>
+      <td class="text-end">{{ r.vehicles if r.vehicles is not none else '—' }}</td>
+      <td>{{ r.pallets|sort|join(', ') or '—' }}</td>
+      <td>{{ r.clients|sort|join(', ') }}</td>
+      <td>{{ (r.oldest|msk).strftime('%d.%m %H:%M') if r.oldest else '' }}</td>
+      <td>{% for t in r.trips %}<a href="{{ url_for('mvb.trip_detail', trip_id=t.id) }}">{{ t.number }}</a> ({{ t.status_label }}){% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
+      {% if mvb_can_manage %}<td><button class="btn btn-sm btn-outline-danger" formaction="{{ url_for('mvb.dispatch_remove') }}" name="key" value="{{ r.key }}" formnovalidate
+        title="Убрать из «К отправке»: короба снимаются с паллет и остаются на складе"
+        onclick="return confirm('Убрать строку «{{ MVB_MARKETPLACES[r.marketplace] }}{% if r.destination %} · {{ r.destination }}{% endif %}» ({{ r.boxes }} кор.) из «К отправке»? Короба снимутся с паллет и останутся на складе.')">🗑</button></td>{% endif %}
+    </tr>
+  {% else %}
+    <tr><td colspan="11" class="text-muted">Нет коробов, ожидающих отправки</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if proposal %}
+<div class="card p-3 mb-3">
+  <h6>Предложение по рейсам (все направления, машины по {{ capacity }} кор.)</h6>
+  <ol class="mb-0">
+  {% for b in proposal %}
+    <li class="{{ 'text-danger' if b.boxes > capacity else '' }}">{% if b.slot_date %}слот <b>{{ b.slot_date.strftime('%d.%m') }}</b> · {% endif %}<b>{{ b.boxes }}</b> кор.{% if b.boxes > capacity %} — заявка больше машины{% endif %}:
+      {% for i in b['items'] %}{{ i.order.number }}{% if i.order.lines|length > 1 %}/{{ i.line.seq }}{% endif %} ({{ MVB_MARKETPLACES[i.marketplace] }}{% if i.destination %} · {{ i.destination }}{% endif %}, {{ i.boxes }}){% if not loop.last %}, {% endif %}{% endfor %}</li>
+  {% endfor %}
+  </ol>
+</div>
+{% endif %}
+{% if rows %}
+<div class="d-flex flex-wrap gap-2">
+  {% if capacity %}<button class="btn btn-success" name="mode" value="fill">Скомпоновать рейсы по {{ capacity }} кор. (отмеченные)</button>{% endif %}
+  <button class="btn btn-outline-success" name="mode" value="single">Один рейс по отмеченным точкам</button>
+</div>
+{% endif %}
+</form>
+</div>
+</details>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const pals = document.querySelectorAll(".mvb-pal");
+  const sum = document.getElementById("palSummary");
+  function upd() {
+    let n = 0, b = 0;
+    pals.forEach((p) => { if (p.checked) { n += 1; b += parseInt(p.dataset.boxes, 10); } });
+    if (sum) sum.textContent = `Отмечено: ${n} пал., ${b} кор.`;
+  }
+  pals.forEach((p) => p.addEventListener("change", upd));
+  const all = document.getElementById("palAll");
+  if (all) all.addEventListener("change", () => { pals.forEach((p) => { p.checked = all.checked; }); upd(); });
+})();
+(function () {
+  const cap = {{ capacity or 0 }};
+  const boxes = document.querySelectorAll(".mvb-dir");
+  const summary = document.getElementById("selSummary");
+  function update() {
+    let n = 0;
+    boxes.forEach((b) => { if (b.checked) n += parseInt(b.dataset.boxes, 10); });
+    if (summary) summary.textContent = `Отмечено: ${n} кор.` + (cap && n ? ` · машин: не меньше ${Math.ceil(n / cap)}` : "");
+  }
+  boxes.forEach((b) => b.addEventListener("change", update));
+  const all = document.getElementById("dirAll");
+  if (all) all.addEventListener("change", () => { boxes.forEach((b) => { b.checked = all.checked; }); update(); });
+})();
+</script>
+{% endblock %}

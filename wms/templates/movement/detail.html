@@ -16,7 +16,7 @@
         <span class="status-chip status-chip-wide status-chip-onassembly status-chip-reached"
               title="На сборке: {{ (doc.created_at|msk).strftime('%d.%m.%Y %H:%M') }}">Сб</span>
         <span class="status-chip status-chip-wide status-chip-assembled{{ ' status-chip-reached' if doc.status in ('collected', 'completed') else '' }}"
-              title="Собрано{{ ': автоматически при 30 коробах' if doc.status == 'collected' else '' }}">Со</span>
+              title="Собрано{{ ': набран лимит коробов' if doc.status == 'collected' else '' }}">Со</span>
         <span class="status-chip status-chip-wide status-chip-requested{{ ' status-chip-reached' if doc.marketplace_request_created_at and doc.marketplace_request_number else '' }}"
               title="Создана заявка: {{ (doc.marketplace_request_created_at|msk).strftime('%d.%m.%Y %H:%M') if doc.marketplace_request_created_at else 'еще не наступило' }}">Зя</span>
         <span class="status-chip status-chip-wide status-chip-shipped{{ ' status-chip-reached' if doc.shipped_at else '' }}"
@@ -27,6 +27,21 @@
       {% endif %}
     </h3>
     <div class="text-muted">{{ doc.from_warehouse.name }} → {{ doc.to_warehouse.name }}{% if doc.created_by %} · Автор: {{ doc.created_by.display_name() }}{% endif %}</div>
+    {% if doc.marketplace_request_number %}
+    <div class="mt-1 d-flex align-items-center gap-2 flex-wrap">
+      <span>Заявка на МП: <b class="user-select-all">{{ doc.marketplace_request_number }}</b></span>
+      {% if current_user.is_admin %}
+      <details class="d-inline-block">
+        <summary class="small text-muted" style="cursor:pointer">изменить</summary>
+        <form method="post" action="{{ url_for('movement.update_marketplace_request_number', doc_id=doc.id) }}" class="d-flex gap-1 align-items-center mt-1">
+          <input type="hidden" name="return_to" value="detail">
+          <input type="text" name="marketplace_request_number" value="{{ doc.marketplace_request_number }}" class="form-control form-control-sm" style="width:170px" required>
+          <button type="submit" class="btn btn-sm btn-outline-secondary">Сохранить</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% endif %}
     {% if current_user.is_admin and doc.status in ('draft', 'collected') %}
     <form method="post" action="{{ url_for('movement.change_sender', doc_id=doc.id) }}" class="d-flex gap-1 align-items-center mt-2">
       <label class="small text-muted text-nowrap" for="senderWarehouse{{ doc.id }}">Склад-отправитель:</label>
@@ -100,7 +115,16 @@
       {% endif %}
     {% elif doc.status == 'completed' and doc.received_at %}
     <span class="badge bg-success">Принято МП {{ (doc.received_at|msk).strftime('%d.%m.%Y %H:%M') }}</span>
-    {% if doc.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ doc.total_shortage_qty() | round(3) }}</span>{% elif doc.discrepancies %}<span class="badge bg-info text-dark">Излишек при приемке</span>{% endif %}
+    {% if doc.total_shortage_qty() %}<span class="badge bg-warning text-dark">Недовоз {{ doc.total_shortage_qty() | qty }}</span>{% endif %}
+    {% if doc.total_excess_qty() %}<span class="badge bg-info text-dark">Излишек {{ doc.total_excess_qty() | qty }}</span>{% endif %}
+    {% if doc.receipt_from_act %}<span class="badge bg-primary" title="Количества в коробах приведены к акту приёмки">По акту</span>{% endif %}
+    {% if doc.receipt_returned_boxes %}<span class="badge bg-danger" title="Не приняты, возвращены на склад-отправитель: {{ doc.receipt_returned_boxes }}">Возвращено коробов: {{ doc.receipt_returned_boxes.split(',') | length }}</span>{% endif %}
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('movement.unreceive', doc_id=doc.id) }}" class="d-inline"
+          onsubmit="return confirm('Вернуть приемку {{ doc.number }} в работу? Принятое количество и расхождения сбросятся, приемку нужно будет отметить заново.');">
+      <button type="submit" class="btn btn-outline-warning">↩ Вернуть в работу</button>
+    </form>
+    {% endif %}
     {% endif %}
     {% if current_user.is_admin %}
     <form method="post" action="{{ url_for('movement.delete_document', doc_id=doc.id) }}" class="d-inline"
@@ -147,8 +171,26 @@
 </div>
 {% endif %}
 
-{% if doc.discrepancies and not doc.total_shortage_qty() %}
-<div class="alert alert-info">При приемке зафиксирован излишек товара.</div>
+{% if doc.total_excess_qty() %}
+<div class="card p-3 mb-4 border-info">
+  <h5>➕ Излишек — принято больше, чем отправлено</h5>
+  <table class="table table-sm mb-0">
+    <thead><tr><th>Штрихкод</th><th>Наименование</th><th>Отправлено</th><th>Принято на МП</th><th>Излишек</th></tr></thead>
+    <tbody>
+    {% for d in doc.discrepancies %}
+      {% if d.excess_qty() %}
+      <tr>
+        <td>{{ d.nomenclature.barcode or '—' }}</td>
+        <td>{{ d.nomenclature.name }}{% if not d.expected_qty %} <span class="badge bg-warning text-dark">не было в заявке</span>{% endif %}</td>
+        <td>{{ d.expected_qty | qty }}</td>
+        <td>{{ d.received_qty | qty }}</td>
+        <td class="text-info-emphasis fw-bold">+{{ d.excess_qty() | qty }}</td>
+      </tr>
+      {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endif %}
 
 {% if can_edit %}
