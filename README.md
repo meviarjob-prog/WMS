@@ -390,7 +390,7 @@ $env:WMS_HTTPS="1"; python run.py
 3. Внутри сервера выполните одну команду (замените e-mail на свой — он
    нужен только для уведомлений об истечении сертификата, необязателен):
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/meviarjob-prog/WMS/claude/wms-system-python-t1db0u/deploy/setup.sh | bash -s -- you@example.com
+   curl -fsSL https://raw.githubusercontent.com/meviarjob-prog/WMS/claude/project-thread-19dtys/deploy/setup.sh | WMS_BRANCH=claude/project-thread-19dtys bash -s -- you@example.com
    ```
    Скрипт сам поставит всё необходимое (nginx, Python-зависимости, systemd,
    HTTPS-сертификат) — это займёт пару минут. В конце он выведет:
@@ -421,8 +421,8 @@ $env:WMS_HTTPS="1"; python run.py
    окружения — своим доменом (можно поддомен, например `wms.вашдомен.ru`) и
    токеном с шага 1:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/meviarjob-prog/WMS/claude/wms-system-python-t1db0u/deploy/setup.sh | \
-     WMS_DOMAIN=wms.вашдомен.ru WMS_CF_API_TOKEN=вставьте_токен bash -s -- you@example.com
+   curl -fsSL https://raw.githubusercontent.com/meviarjob-prog/WMS/claude/project-thread-19dtys/deploy/setup.sh | \
+     WMS_BRANCH=claude/project-thread-19dtys WMS_DOMAIN=wms.вашдомен.ru WMS_CF_API_TOKEN=вставьте_токен bash -s -- you@example.com
    ```
    Скрипт сам создаст (или обновит) A-запись на этот домен, указывающую на
    сервер, с включённым проксированием Cloudflare, и получит бесплатный
@@ -440,8 +440,13 @@ $env:WMS_HTTPS="1"; python run.py
 ### Как обновить сервер, когда выходит новая версия
 
 Подключитесь по SSH тем же способом и выполните ту же команду ещё раз —
-скрипт безопасно перезапускать: он подтянет свежий код и перезапустит
-сервис, ничего не удаляя.
+скрипт подтянет свежий код и перезапустит сервис. База и `/etc/wms.env`
+сохранятся, но незакоммиченные изменения в коде на сервере будут перезаписаны;
+перед запуском проверьте `git -C /opt/wms status --short`.
+
+Полный регламент для сотрудника — от подготовки рабочего места и проверки
+изменений до резервной копии, выкладки и отката — находится в
+[docs/DEVELOPMENT_AND_DEPLOYMENT.md](docs/DEVELOPMENT_AND_DEPLOYMENT.md).
 
 ### Резервное копирование
 

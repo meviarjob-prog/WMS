@@ -7,12 +7,12 @@
 # По умолчанию домен вида <IP>.sslip.io — не требует покупки своего домена,
 # sslip.io просто резолвит это имя в IP сервера:
 #
-#   curl -fsSL https://raw.githubusercontent.com/meviarjob-prog/WMS/claude/wms-system-python-t1db0u/deploy/setup.sh | bash -s -- you@example.com
+#   curl -fsSL https://raw.githubusercontent.com/meviarjob-prog/WMS/claude/project-thread-19dtys/deploy/setup.sh | WMS_BRANCH=claude/project-thread-19dtys bash -s -- you@example.com
 #
 # Email необязателен (нужен только для писем от Let's Encrypt об истечении
 # сертификата, сам сертификат он не ограничивает):
 #
-#   curl -fsSL https://raw.githubusercontent.com/meviarjob-prog/WMS/claude/wms-system-python-t1db0u/deploy/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/meviarjob-prog/WMS/claude/project-thread-19dtys/deploy/setup.sh | WMS_BRANCH=claude/project-thread-19dtys bash
 #
 # Если есть свой домен, подключенный к Cloudflare (например, чтобы обойти
 # блокировку IP хостинг-провайдера у некоторых операторов) — задайте
@@ -38,7 +38,7 @@ set -euo pipefail
 REPO_URL="https://github.com/meviarjob-prog/WMS.git"
 # Ветка для установки; для тестового сервера можно задать другую:
 #   curl -fsSL .../setup.sh | WMS_BRANCH=claude/project-thread-19dtys bash
-BRANCH="${WMS_BRANCH:-claude/wms-system-python-t1db0u}"
+BRANCH="${WMS_BRANCH:-claude/project-thread-19dtys}"
 APP_DIR="/opt/wms"
 APP_USER="wms"
 SERVICE_NAME="wms"
