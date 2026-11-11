@@ -37,6 +37,7 @@ def test_one_c_modules_recalculate_return_document_total_and_confirm_row_ids():
         assert 'ИменаИтога.Добавить("СуммаДокумента")' in source
         assert 'ИменаСуммСтроки.Добавить("Всего")' in source
         assert 'ИменаСуммСтроки.Добавить("СуммаВсего")' in source
+        assert 'ИменаСуммСтроки.Добавить("СуммаСНДС")' in source
         assert 'ИменаСкидокСтроки.Добавить("СуммаРучнойСкидки")' in source
         assert 'ПолучитьСвойствоИлиПустойМассив(\n\t\t\t\tДокВозврата, "return_ids")' in source
         assert 'Тело.Вставить("supplier_return_ids_are_rows", Истина)' in source
