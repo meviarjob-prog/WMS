@@ -12,8 +12,8 @@
     <p class="text-muted small">
       Файл накладной (.xlsx) из 1С — номер накладной станет номером приемки, поставщик
       определится из файла автоматически (и добавится в справочник, если его еще нет), а
-      список товаров и количество подставятся из накладной. Дальше кладовщик открывает
-      документ на телефоне и сверяет товар по списку.
+      список товаров, количество и заказ по каждой позиции подставятся из накладной.
+      Дальше кладовщик открывает документ на телефоне и сверяет товар по списку.
     </p>
     <form method="post" enctype="multipart/form-data">
       <div class="mb-3">
@@ -29,8 +29,8 @@
         <input type="file" name="file" accept=".xlsx" class="form-control" required>
       </div>
       <div class="mb-3">
-        <label class="form-label" for="orderNumberInput">№ заказа <span class="text-danger">*</span> <span class="text-muted">(вносится вручную — в файле его нет)</span></label>
-        <input type="text" name="order_number" id="orderNumberInput" class="form-control" required>
+        <label class="form-label" for="orderNumberInput">№ заказа <span class="text-muted">(только для старого файла без колонки «Заказ»)</span></label>
+        <input type="text" name="order_number" id="orderNumberInput" class="form-control">
       </div>
       <button type="submit" class="btn btn-primary">Загрузить</button>
     </form>

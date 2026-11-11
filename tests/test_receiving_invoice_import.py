@@ -22,6 +22,7 @@ def _build_invoice_xlsx(
     supplier_line="ИП Кииков Мурат Борисович, ИНН 091701566682, тел.: 89283882790",
     rows=(("НФ-00003575", DEFAULT_ROW_NAME, 80),),
     with_barcode_column=False,
+    with_order_column=False,
 ):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -36,12 +37,17 @@ def _build_invoice_xlsx(
     header = ["№", "Код", "Товары", "Мест", "Количество", "Цена", "Сумма"]
     if with_barcode_column:
         header.append("Штрихкод")
+    if with_order_column:
+        header.append("Заказ")
     ws.append(header)
     for i, row in enumerate(rows, start=1):
         code, name, qty = row[0], row[1], row[2]
         line = [i, code, name, None, qty, 220.0, qty * 220.0]
         if with_barcode_column:
             line.append(row[3] if len(row) > 3 else "")
+        if with_order_column:
+            order_index = 4 if with_barcode_column else 3
+            line.append(row[order_index] if len(row) > order_index else "")
         ws.append(line)
     ws.append([])
     ws.append(["Итого:", "", "", "", "", "", sum(row[2] for row in rows) * 220.0])
@@ -79,6 +85,20 @@ def test_parse_invoice_extracts_barcode_column_when_present():
     invoice = parse_invoice(file_stream)
 
     assert invoice.rows[0]["barcode"] == "4601234567890"
+
+
+def test_parse_invoice_extracts_order_number_for_each_product():
+    file_stream = _build_invoice_xlsx(
+        rows=(
+            ("НФ-00003575", "Товар 1", 80, "Заказ поставщику 45 от 07.10.2026"),
+            ("НФ-00003576", "Товар 2", 30, "Заказ поставщику 46 от 08.10.2026"),
+        ),
+        with_order_column=True,
+    )
+
+    invoice = parse_invoice(file_stream)
+
+    assert [row["order_number"] for row in invoice.rows] == ["45", "46"]
 
 
 def test_parse_invoice_multiple_rows_stops_at_itogo():
@@ -748,4 +768,34 @@ def test_upload_requires_order_number(db, client_logged_in):
     assert ReceivingDocument.query.count() == 0
 
     form = client_logged_in.get("/receiving/import-invoice").get_data(as_text=True)
-    assert 'name="order_number" id="orderNumberInput" class="form-control" required' in form
+    assert 'name="order_number" id="orderNumberInput" class="form-control"' in form
+    assert "только для старого файла" in form
+
+
+def test_upload_uses_per_product_orders_from_new_invoice_format(db, client_logged_in):
+    warehouse = _make_warehouse()
+    items = [
+        Nomenclature(sku="НФ-00003575", barcode="8880000101", name="Товар 1", unit="шт"),
+        Nomenclature(sku="НФ-00003576", barcode="8880000102", name="Товар 2", unit="шт"),
+    ]
+    db.session.add_all(items)
+    db.session.commit()
+
+    file_stream = _build_invoice_xlsx(
+        rows=(
+            ("НФ-00003575", "Товар 1", 80, "Заказ поставщику 45 от 07.10.2026"),
+            ("НФ-00003576", "Товар 2", 30, "Заказ поставщику 46 от 08.10.2026"),
+        ),
+        with_order_column=True,
+    )
+    response = client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "order_number": "", "file": (file_stream, "3267.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    doc = ReceivingDocument.query.filter_by(number="1706").one()
+    assert doc.order_number == "45, 46"
+    assert [line.order_number for line in doc.lines.order_by(ReceivingLine.id)] == ["45", "46"]

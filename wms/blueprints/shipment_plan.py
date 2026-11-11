@@ -412,26 +412,13 @@ def _apply_priority_distribution():
 
         priority = next((l.priority for l in barcode_lines if l.priority is not None), None)
         if priority not in (0, 1, 2):
-            total_planned = sum(l.planned_qty for l in barcode_lines)
-            total_remaining = sum(l.remaining_qty() for l in barcode_lines)
-            # Обычный товар без приоритета: план по каждому городу и так
-            # ограничивает подсказку "куда везти короб" через planned_qty
-            # (effective_planned_qty() возвращает его, пока
-            # distributed_target_qty не задан). Но если план по ВСЕМ
-            # городам этого штрихкода уже закрыт (remaining_qty()==0
-            # везде), а на складе-отправителе все еще остается "готово к
-            # отгрузке" — короба с этим остатком иначе никому не
-            # предлагаются (см. чат: "остаток есть, а потребности не
-            # выдает для сборщиков"). Дораспределяем его пропорционально
-            # исходной доле города в плане — тем же принципом, что и для
-            # приоритетных товаров выше, чтобы не отправить лишнее в город,
-            # который изначально почти не заказывал эту позицию.
-            if total_remaining <= 0 and total_planned > 0 and ready_to_ship > 0:
-                for line in barcode_lines:
-                    line.distributed_target_qty = ready_to_ship * (line.planned_qty / total_planned)
-            else:
-                for line in barcode_lines:
-                    line.distributed_target_qty = None
+            # Обычные товары распределяются строго по цифрам плана. Если до
+            # закрытия осталось 3, целый короб из 5 можно направить в город,
+            # но следующий короб туда уже не предлагается. Перераспределять
+            # остаток после закрытия плана можно только для приоритетных
+            # товаров/новинок ниже.
+            for line in barcode_lines:
+                line.distributed_target_qty = None
             continue
 
         total_planned = sum(l.planned_qty for l in barcode_lines)

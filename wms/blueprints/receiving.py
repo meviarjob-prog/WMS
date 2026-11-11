@@ -456,12 +456,9 @@ def import_invoice_form():
         flash("Выберите файл накладной (.xlsx)", "danger")
         return redirect(url_for("receiving.import_invoice_form"))
 
-    order_number = request.form.get("order_number", "").strip()
-    if not order_number:
-        # Номер заказа поставщику нужен 1С: по нему возврат поставщику
-        # привязывается к основанию (см. integrations/1c — НайтиЗаказПоставщикуПоНомеру).
-        flash("Укажите № заказа — без него приемку из накладной не загрузить", "danger")
-        return redirect(url_for("receiving.import_invoice_form"))
+    # В новой форме 1С заказ указан у каждой товарной строки. Ручное поле
+    # остается запасным вариантом для старых файлов без колонки «Заказ».
+    fallback_order_number = request.form.get("order_number", "").strip()
     file_bytes = file.read()
 
     try:
@@ -473,6 +470,25 @@ def import_invoice_form():
         current_app.logger.exception("Не удалось прочитать файл накладной")
         flash(f"Не удалось прочитать файл: {exc}", "danger")
         return redirect(url_for("receiving.import_invoice_form"))
+
+    missing_order_rows = [
+        row["name"]
+        for row in invoice.rows
+        if not row.get("order_number") and not fallback_order_number
+    ]
+    if missing_order_rows:
+        flash(
+            "В файле не указан заказ для некоторых товаров. Укажите № заказа вручную "
+            "для старой формы накладной или загрузите новую форму с колонкой «Заказ».",
+            "danger",
+        )
+        return redirect(url_for("receiving.import_invoice_form"))
+
+    order_numbers = []
+    for row in invoice.rows:
+        row["order_number"] = row.get("order_number") or fallback_order_number
+        if row["order_number"] not in order_numbers:
+            order_numbers.append(row["order_number"])
 
     if ReceivingDocument.query.filter_by(number=invoice.invoice_number).first():
         flash(f"Накладная № {invoice.invoice_number} уже была загружена раньше", "danger")
@@ -487,7 +503,9 @@ def import_invoice_form():
             supplier=supplier.name,
             supplier_id=supplier.id,
             created_by_id=current_user.id,
-            order_number=order_number or None,
+            # Поле документа оставляем для списка/поиска и совместимости со
+            # старыми данными; точная привязка хранится в ReceivingLine.
+            order_number=", ".join(order_numbers)[:50] or None,
             invoice_file_data=file_bytes,
             invoice_file_name=file.filename,
         )
@@ -507,6 +525,7 @@ def import_invoice_form():
                     nomenclature_id=item.id,
                     qty=row["qty"],
                     expected_qty=row["qty"],
+                    order_number=row["order_number"],
                 )
             )
             matched += 1
@@ -1005,7 +1024,13 @@ def update_line(doc_id, line_id):
             )
             return redirect(url_for("receiving.detail", doc_id=doc_id))
         if credit_delta > 0:
-            UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, credit_delta, receiving_document=doc)
+            UnplacedStock.add(
+                doc.warehouse_id,
+                line.nomenclature_id,
+                credit_delta,
+                receiving_document=doc,
+                order_number=line.order_number,
+            )
         elif credit_delta < 0:
             UnplacedStock.consume(doc.warehouse_id, line.nomenclature_id, -credit_delta)
 
@@ -1133,7 +1158,13 @@ def update_line_nomenclature(doc_id, line_id):
         good_qty = line.good_qty()
         if good_qty > 0:
             UnplacedStock.consume(doc.warehouse_id, old_item.id, good_qty)
-            UnplacedStock.add(doc.warehouse_id, new_item.id, good_qty, receiving_document=doc)
+            UnplacedStock.add(
+                doc.warehouse_id,
+                new_item.id,
+                good_qty,
+                receiving_document=doc,
+                order_number=line.order_number,
+            )
         if line.defect_qty:
             for supplier_return in SupplierReturn.query.filter_by(
                 receiving_document_id=doc.id, nomenclature_id=old_item.id
@@ -1451,7 +1482,13 @@ def _credit_receiving_line(doc, line):
     good_qty = line.good_qty()
     credit_qty = _unboxed_credit_qty(doc, line, good_qty)
     if credit_qty > 0:
-        UnplacedStock.add(doc.warehouse_id, line.nomenclature_id, credit_qty, receiving_document=doc)
+        UnplacedStock.add(
+            doc.warehouse_id,
+            line.nomenclature_id,
+            credit_qty,
+            receiving_document=doc,
+            order_number=line.order_number,
+        )
     if line.defect_qty:
         db.session.add(
             SupplierReturn(
@@ -1463,6 +1500,7 @@ def _credit_receiving_line(doc, line):
                 receiving_document_id=doc.id,
                 supplier_name=doc.supplier,
                 invoice_number=doc.number if doc.is_from_invoice_import() else None,
+                order_number=line.order_number or doc.order_number,
             )
         )
 

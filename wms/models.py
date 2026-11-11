@@ -475,7 +475,7 @@ class UnplacedStock(db.Model):
     )
 
     @staticmethod
-    def add(warehouse_id, nomenclature_id, qty, receiving_document=None):
+    def add(warehouse_id, nomenclature_id, qty, receiving_document=None, order_number=None):
         """receiving_document — если остаток пришел из конкретной приемки по
         накладной, заводим под него партию (см. UnplacedStockLot), чтобы
         потом можно было увидеть поставщика и номер заявки по остатку.
@@ -492,7 +492,13 @@ class UnplacedStock(db.Model):
             db.session.add(row)
         row.qty += qty
         if qty > 0:
-            UnplacedStockLot.add(warehouse_id, nomenclature_id, qty, receiving_document)
+            UnplacedStockLot.add(
+                warehouse_id,
+                nomenclature_id,
+                qty,
+                receiving_document,
+                order_number=order_number,
+            )
         return row
 
     @staticmethod
@@ -580,13 +586,17 @@ class UnplacedStockLot(db.Model):
     receiving_document = db.relationship("ReceivingDocument")
 
     @staticmethod
-    def add(warehouse_id, nomenclature_id, qty, receiving_document=None):
+    def add(warehouse_id, nomenclature_id, qty, receiving_document=None, order_number=None):
         lot = UnplacedStockLot(
             warehouse_id=warehouse_id,
             nomenclature_id=nomenclature_id,
             receiving_document_id=receiving_document.id if receiving_document else None,
             supplier_name=receiving_document.supplier if receiving_document else None,
-            order_number=receiving_document.order_number if receiving_document else None,
+            order_number=(
+                order_number
+                if order_number is not None
+                else (receiving_document.order_number if receiving_document else None)
+            ),
             qty_received=qty,
             qty_remaining=qty,
         )
@@ -878,6 +888,9 @@ class ReceivingLine(db.Model):
     # сравнения при приемке. NULL — строка добавлена вручную/сканированием,
     # сверять не с чем.
     expected_qty = db.Column(db.Float, nullable=True)
+    # Номер «Заказа поставщику» именно для этой позиции. В новой печатной
+    # форме 1С один файл может содержать товары из разных заказов.
+    order_number = db.Column(db.String(50), nullable=True)
     # Отметка кладовщика "принято" на мобильной форме приемки по накладной
     # (см. receiving.confirm_invoice) — не влияет на остатки сама по себе,
     # только на прогресс сверки; остатки формирует qty при завершении
@@ -1564,12 +1577,9 @@ class ShipmentPlanLine(db.Model):
     def effective_planned_qty(self):
         """planned_qty этого города — либо, если посчитан
         distributed_target_qty, пропорциональная цель по факту "готово к
-        отгрузке" вместо жесткого плана города. Это либо приоритетные
-        товары/новинки (см. distributed_target_qty и чат), либо обычный
-        товар, у которого план по ВСЕМ городам уже закрыт, но остаток
-        "готово к отгрузке" еще есть — тогда его дораспределяют по той же
-        пропорции плана (см. shipment_plan._apply_priority_distribution),
-        чтобы короб не остался без подсказки, куда его везти.
+        отгрузке" вместо жесткого плана города. Такая цель используется для
+        приоритетных товаров/новинок (см. distributed_target_qty и чат).
+        Обычные товары всегда распределяются по planned_qty.
         Используется ТОЛЬКО подсказкой "куда везти короб" (см.
         movement._compute_routing) — сознательно не участвует в
         remaining_qty()/дашборде: там план и так уже показывает разрыв с
@@ -1649,6 +1659,9 @@ class SupplierReturn(db.Model):
     # загруженных из файла накладной (см. ReceivingDocument.invoice_file_name)
     # — для остальных 1С этот номер не найдет, см. SyncWMS.bsl.
     invoice_number = db.Column(db.String(30), nullable=True)
+    # Снимок заказа исходной товарной строки — нужен, чтобы возвраты из одной
+    # накладной выгружались в 1С отдельными документами по своим основаниям.
+    order_number = db.Column(db.String(50), nullable=True)
     # См. MovementDocument.synced_to_1c_at.
     synced_to_1c_at = db.Column(db.DateTime, nullable=True)
     # См. MovementDocument.accounting_entered_at — ручное исключение из

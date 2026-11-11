@@ -403,23 +403,56 @@ def test_routing_without_priority_still_uses_planned_qty(db, client_logged_in):
     assert routing[0]["items"][0]["remaining"] == 30
 
 
-def test_routing_for_closed_plan_uses_live_stock_not_fulfilled(db, client_logged_in):
-    """К-тSmile 44-48: план закрыт (выполнено 160 при плане 100), короб с
-    остатком лежит на складе — подтягиваем потребность, а не «нет потребности»
-    (раньше цель, меньшая fulfilled, обнуляла остаток)."""
-    sender, city, item = _setup_plan(planned_qty=100, fulfilled_qty=160)
-    box = _make_box(sender, item, qty=80, box_number="BOX-000010")
+def test_routing_ignores_stale_distributed_target_for_regular_item(db, client_logged_in):
+    """После обновления правило действует сразу, даже если в БД у обычной
+    строки осталась цель от прежнего дораспределения закрытого плана."""
+    sender, city, item = _setup_plan(planned_qty=3)
+    line = ShipmentPlanLine.query.filter_by(
+        warehouse_id=city.id, nomenclature_id=item.id
+    ).one()
+    line.distributed_target_qty = 50
+    db.session.commit()
+    box = _make_box(sender, item, qty=5, box_number="BOX-STALE-TARGET")
 
     routing = _compute_routing(box)
 
+    assert routing[0]["items"][0]["remaining"] == 3
+    assert routing[0]["matched_qty"] == 3
+
+
+def test_regular_item_allows_whole_box_over_plan_and_then_closes_route(db, client_logged_in):
+    """План 3, в коробе 5: обычный товар грузим целым коробом без
+    блокировки, но следующий короб в этот город уже не направляем."""
+    sender, city, item = _setup_plan(planned_qty=3)
+    oversized_box = _make_box(sender, item, qty=5, box_number="BOX-PLAN-OVER-1")
+    next_box = _make_box(sender, item, qty=1, box_number="BOX-PLAN-OVER-2")
+
+    routing = _compute_routing(oversized_box)
     assert len(routing) == 1
-    assert routing[0]["warehouse"].id == city.id
-    # единственный город — весь упакованный остаток (80) ему
-    assert routing[0]["items"][0]["remaining"] == 80
-    assert routing[0]["matched_qty"] == 80
+    assert routing[0]["matched_qty"] == 3
+    assert routing[0]["items"][0]["box_qty"] == 5
+
+    response = client_logged_in.post(
+        "/movement/route-box/add",
+        data={"box_id": oversized_box.id, "to_warehouse_id": city.id},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert MovementLine.query.filter_by(box_id=oversized_box.id).count() == 1
+    assert _compute_routing(next_box) == []
 
 
-def test_routing_for_closed_plan_splits_live_stock_by_plan_share(db, client_logged_in):
+def test_routing_for_closed_regular_plan_does_not_distribute_extra_stock(db, client_logged_in):
+    """Неприоритетный товар после закрытия цифры плана больше не
+    распределяется, даже если на складе остались упакованные короба."""
+    sender, city, item = _setup_plan(planned_qty=100, fulfilled_qty=160)
+    box = _make_box(sender, item, qty=80, box_number="BOX-000010")
+
+    assert _compute_routing(box) == []
+
+
+def test_routing_for_closed_regular_plan_does_not_split_extra_stock(db, client_logged_in):
     sender, city, item = _setup_plan(planned_qty=100, fulfilled_qty=100)
     other = Warehouse(code="WH-CTY2", name="ОЗОН: Город 2", marketplace="ozon", marketplace_city="Город 2")
     db.session.add(other)
@@ -430,9 +463,7 @@ def test_routing_for_closed_plan_splits_live_stock_by_plan_share(db, client_logg
     db.session.commit()
     box = _make_box(sender, item, qty=40, box_number="BOX-000011")
 
-    routing = {r["warehouse"].id: r["items"][0]["remaining"] for r in _compute_routing(box)}
-
-    assert routing == {other.id: 30, ShipmentPlanLine.query.filter_by(nomenclature_id=item.id).first().warehouse_id: 10}
+    assert _compute_routing(box) == []
 
 
 def test_routing_still_empty_when_closed_plan_and_no_stock_left(db, client_logged_in):

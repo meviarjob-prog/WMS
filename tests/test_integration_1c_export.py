@@ -7,6 +7,7 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 from wms.extensions import db
 from wms.models import (
@@ -23,6 +24,19 @@ from wms.models import (
 )
 
 TOKEN = "test-1c-token"
+
+
+def test_one_c_modules_recalculate_return_document_total_and_confirm_row_ids():
+    root = Path(__file__).resolve().parents[1]
+    for relative_path in (
+        "integrations/1c/SyncWMS.bsl",
+        "integrations/1c/SyncWMS_ObjectModule.bsl",
+    ):
+        source = (root / relative_path).read_text(encoding="utf-8")
+        assert source.count("ПересчитатьСуммуДокументаПоСтрокам(") == 2
+        assert 'ИменаИтога.Добавить("СуммаДокумента")' in source
+        assert 'ПолучитьСвойствоИлиПустойМассив(\n\t\t\t\tДокВозврата, "return_ids")' in source
+        assert 'Тело.Вставить("supplier_return_ids_are_rows", Истина)' in source
 
 
 def _set_token():
@@ -312,10 +326,55 @@ def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_
     assert len(data["supplier_returns"]) == 1
     ret_doc = data["supplier_returns"][0]
     assert ret_doc["id"] == doc.id
+    assert len(ret_doc["return_ids"]) == 2
     assert ret_doc["invoice_number"] == "НАКЛ-777"
     assert ret_doc["order_number"] == "Ш-00105"
     assert ret_doc["supplier"] == "ИП Тестов"
     assert {line["qty"] for line in ret_doc["lines"]} == {3, 1}
+
+
+def test_export_splits_supplier_returns_by_line_order_number(db, client_logged_in):
+    _set_token()
+    wh = Warehouse(code="WH-1C-ORDERS", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item1 = _make_item("9990000041", "Товар 41")
+    item2 = _make_item("9990000042", "Товар 42")
+    doc = ReceivingDocument(
+        number="НАКЛ-ORDERS",
+        warehouse_id=wh.id,
+        supplier="ИП Тестов",
+        invoice_file_name="3267.xlsx",
+        order_number="45, 46",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    returns = [
+        SupplierReturn(
+            warehouse_id=wh.id,
+            nomenclature_id=item1.id,
+            qty=2,
+            receiving_document_id=doc.id,
+            invoice_number=doc.number,
+            order_number="45",
+        ),
+        SupplierReturn(
+            warehouse_id=wh.id,
+            nomenclature_id=item2.id,
+            qty=3,
+            receiving_document_id=doc.id,
+            invoice_number=doc.number,
+            order_number="46",
+        ),
+    ]
+    db.session.add_all(returns)
+    db.session.commit()
+
+    response = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    documents = response.get_json()["supplier_returns"]
+
+    assert [row["order_number"] for row in documents] == ["45", "46"]
+    assert [row["return_ids"] for row in documents] == [[returns[0].id], [returns[1].id]]
 
 
 def test_export_supplier_return_order_number_uses_first_of_slash_separated_list(db, client_logged_in):

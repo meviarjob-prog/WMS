@@ -417,47 +417,6 @@ def _committed_by_warehouse_and_item(period_start=None, drafts_only=False):
     return {(wh_id, nom_id): qty or 0 for wh_id, nom_id, qty in rows}
 
 
-def _live_overflow_targets(lines):
-    """{id строки плана: цель}, пересчитанная ПРЯМО СЕЙЧАС для обычных
-    товаров (без приоритета/новинки), у которых план по всем городам уже
-    закрыт, а упакованный остаток на складах-отправителях еще есть:
-    остаток делится пропорционально доле города в плане (тот же принцип,
-    что у shipment_plan._apply_priority_distribution, но по актуальному
-    остатку, а не по снимку на момент синхронизации плана — иначе короб,
-    собранный после синхронизации, получал «потребности нет»)."""
-    by_item = {}
-    for line in lines:
-        by_item.setdefault(line.nomenclature_id, []).append(line)
-    targets = {}
-    sender_ids = None
-    for nomenclature_id, item_lines in by_item.items():
-        if any(l.novelty_marketplace for l in item_lines):
-            continue    # новинки — по снимку плана (нужны средние доли городов)
-        if any(l.priority is not None for l in item_lines):
-            continue    # приоритетные — по снимку плана (distributed_target_qty)
-        total_planned = sum(l.planned_qty or 0 for l in item_lines)
-        total_open = sum(max((l.planned_qty or 0) - (l.fulfilled_qty or 0), 0) for l in item_lines)
-        if total_planned <= 0 or total_open > 0:
-            continue
-        if sender_ids is None:
-            sender_ids = [
-                wh.id for wh in Warehouse.query.filter_by(marketplace=None, is_active=True).all()
-            ]
-        if not sender_ids:
-            return {}
-        ready = (
-            db.session.query(func.sum(BoxItem.qty))
-            .join(Box, BoxItem.box_id == Box.id)
-            .filter(BoxItem.nomenclature_id == nomenclature_id, Box.warehouse_id.in_(sender_ids))
-            .scalar()
-        ) or 0
-        if ready <= 0:
-            continue
-        for line in item_lines:
-            targets[line.id] = ready * (line.planned_qty or 0) / total_planned
-    return targets
-
-
 def _routing_line_states(box):
     """Состояние каждой строки плана по товарам короба: сколько осталось
     (remaining) и по какому правилу посчитано — общая основа для
@@ -474,10 +433,17 @@ def _routing_line_states(box):
     lines = ShipmentPlanLine.query.filter(
         ShipmentPlanLine.nomenclature_id.in_(qty_by_item.keys())
     ).all()
+    # distributed_target_qty мог сохраниться у обычного товара от старой
+    # версии логики. Применяем его только если хотя бы одна строка этого
+    # штрихкода действительно приоритетная/новинка; тогда цель намеренно
+    # проставляется и на соседние строки того же штрихкода.
+    special_barcodes = {
+        line.barcode
+        for line in lines
+        if line.priority in (0, 1, 2) or line.novelty_marketplace
+    }
     committed_by_period = {}
     drafts_by_period = {}
-    live_targets = _live_overflow_targets(lines)
-
     states = []
     for line in lines:
         period_start = _plan_line_start(line)
@@ -487,14 +453,7 @@ def _routing_line_states(box):
         key = (line.warehouse_id, line.nomenclature_id)
         already_committed = committed_by_period[period_start].get(key, 0)
         not_departed = drafts_by_period[period_start].get(key, 0)
-        if line.id in live_targets:
-            # Цель посчитана ПРЯМО СЕЙЧАС от остатка на складах-отправителях
-            # (см. _live_overflow_targets): выполненное и уже уехавшее в
-            # цель не входят, вычитаем только еще не уехавшие короба.
-            target = live_targets[line.id]
-            remaining = max(target - not_departed, 0)
-            rule = "доля остатка на складе (по текущему остатку)"
-        elif line.distributed_target_qty is not None:
+        if line.barcode in special_barcodes and line.distributed_target_qty is not None:
             # Цель из снимка при синхронизации плана — тоже доля остатка на
             # складе, поэтому ни fulfilled_qty, ни «в пути» не вычитаем (см.
             # чат: К-тSmile — цель в разы меньше уже отправленного, и короб
@@ -525,10 +484,10 @@ def _compute_routing(box):
     Пустой список — значит короб никому не нужен по текущему плану (короб
     можно пропустить).
 
-    Для приоритетных товаров (см. ShipmentPlanLine.effective_planned_qty и
-    чат) целью служит не жесткий planned_qty конкретного города, а доля
-    текущего "готово к отгрузке" пропорционально доле города в общем плане
-    по штрихкоду — план по количеству для них не ограничение."""
+    Для обычных товаров короб отправляется целиком, если потребность города
+    еще положительна: например, остаток плана 3 и короб 5 — короб допустим,
+    после его добавления потребность считается закрытой. Для приоритетных
+    товаров сохраняется распределение по distributed_target_qty."""
     qty_by_item, states = _routing_line_states(box)
     by_warehouse = {}
     for state in states:

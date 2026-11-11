@@ -45,7 +45,7 @@
             <span class="text-muted">без приемки</span>
           {% endif %}
         </td>
-        <td>{{ r.receiving_document.order_number if r.receiving_document else '' }}</td>
+        <td>{{ r.order_number or (r.receiving_document.order_number if r.receiving_document else '') }}</td>
         <td>{{ r.supplier_name or '' }}</td>
         <td>{{ r.nomenclature.name }} <span class="text-muted">({{ r.nomenclature.sku }})</span></td>
         <td>{{ r.qty }} {{ r.nomenclature.unit }}</td>

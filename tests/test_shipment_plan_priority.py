@@ -207,14 +207,9 @@ def test_priority_distribution_zero_planned_total_gives_zero_target(db, client_l
     assert ShipmentPlanLine.query.get(line.id).distributed_target_qty == 0.0
 
 
-def test_overflow_distribution_for_regular_item_when_plan_fully_closed(db, client_logged_in):
-    """Обычный товар (без приоритета): план Москва 100/Казань 50 уже
-    полностью выполнен (fulfilled_qty == planned_qty по обоим городам), но
-    на складе-отправителе остается еще 60 шт "готово к отгрузке" — иначе
-    эти короба никому не предлагает подсказка "куда везти короб" (см. чат:
-    "остаток есть, а потребности не выдает для сборщиков"). Дораспределяем
-    остаток пропорционально исходной доле города в плане — тем же
-    принципом, что и для приоритетных товаров."""
+def test_regular_item_is_not_redistributed_after_plan_fully_closed(db, client_logged_in):
+    """Обычный товар всегда ограничен цифрами плана; остаток после полного
+    закрытия не получает distributed_target_qty."""
     item = Nomenclature(sku="SKU-PRIO-6", barcode="7770200006", name="Товар", unit="шт")
     db.session.add(item)
     db.session.commit()
@@ -246,8 +241,8 @@ def test_overflow_distribution_for_regular_item_when_plan_fully_closed(db, clien
     _apply_priority_distribution()
     db.session.commit()
 
-    assert ShipmentPlanLine.query.get(moscow.id).distributed_target_qty == 40.0
-    assert ShipmentPlanLine.query.get(kazan.id).distributed_target_qty == 20.0
+    assert ShipmentPlanLine.query.get(moscow.id).distributed_target_qty is None
+    assert ShipmentPlanLine.query.get(kazan.id).distributed_target_qty is None
 
 
 def test_no_overflow_distribution_for_regular_item_while_plan_still_open(db, client_logged_in):
