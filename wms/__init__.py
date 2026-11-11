@@ -577,16 +577,17 @@ def _mvb_preset_schedule(marketplace, destination):
 
 
 def _seed_mvb_default_schedules():
-    """Ставит v2 графиков, сохраняя ручные настройки оператора.
+    """Ставит v3 графиков, принудительно применяя новую предустановку.
 
-    Уже установленную v1 заменяем только тогда, когда значение направления
-    по-прежнему в точности равно старой предустановке. Значит, оператор его не
-    редактировал. Пустые графики заполняем, неизвестные направления оставляем
-    свободными для ручного выбора.
+    Для направлений из нового файла заменяем в том числе ручные настройки.
+    Неизвестные направления оставляем для ручного выбора. Если направление
+    исчезло из файла, снимаем только прежнюю автоматическую настройку v1.
     """
     from .models import AppSetting, MvbDestination
 
-    key = "mvb_default_delivery_schedules_v2"
+    # Новая версия ключа нужна, чтобы обновление выполнилось и на сервере, где
+    # предыдущая предустановка v2 уже успела примениться.
+    key = "mvb_default_delivery_schedules_v3"
     if db.session.get(AppSetting, key) is not None:
         return
     changed = 0
@@ -598,17 +599,17 @@ def _seed_mvb_default_schedules():
         except (TypeError, ValueError):
             current = None
         old_json = {str(day): delivery for day, delivery in (old_schedule or {}).items()}
-        if not schedule:
+        if schedule:
+            new_json = json.dumps(schedule, ensure_ascii=False)
+            if destination.schedule_json != new_json:
+                destination.schedule_json = new_json
+                changed += 1
+        else:
             # Направление исчезло из нового файла: убираем только прежнюю
             # автоматическую настройку, ручную не трогаем.
             if current and old_schedule and current == old_json:
                 destination.schedule_json = None
                 changed += 1
-            continue
-        if current and current != old_json:
-            continue
-        destination.schedule_json = json.dumps(schedule, ensure_ascii=False)
-        changed += 1
     db.session.add(AppSetting(key=key, value="1"))
     db.session.commit()
     print(f"[schema] МВБ: предустановлен график поставок — {changed} направлений")

@@ -2305,6 +2305,7 @@ def test_delivery_schedule_shows_nearest_dates_and_validates_slot(db, client):
 
 def test_delivery_schedule_presets_from_reference_images(db):
     from wms import _seed_mvb_default_schedules
+    from wms.models import AppSetting
 
     wb = MvbDestination(marketplace="wb", city="Коледино", is_active=True)
     ozon = MvbDestination(marketplace="ozon", city="Невинномысск РФЦ", is_active=True)
@@ -2318,8 +2319,13 @@ def test_delivery_schedule_presets_from_reference_images(db):
         marketplace="wb", city="Щеглово", is_active=True,
         schedule_json='{"0": 3, "1": 5, "2": 5, "3": 0, "4": 0}',
     )
-    unknown = MvbDestination(marketplace="wb", city="Новое направление", is_active=True)
+    unknown = MvbDestination(
+        marketplace="wb", city="Новое направление", is_active=True,
+        schedule_json='{"6": 6}',
+    )
     db.session.add_all([wb, ozon, yandex, custom, old_auto, removed_auto, unknown])
+    # Имитируем сервер, на котором предыдущая версия уже запускалась.
+    db.session.add(AppSetting(key="mvb_default_delivery_schedules_v2", value="1"))
     db.session.commit()
 
     _seed_mvb_default_schedules()
@@ -2333,10 +2339,10 @@ def test_delivery_schedule_presets_from_reference_images(db):
     assert wb.schedule_json == '{"0": 3, "1": 5, "2": 5, "3": 0, "4": 0, "5": 2}'
     assert ozon.schedule_json == '{"0": 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6}'
     assert yandex.schedule_json == '{"0": 4, "1": 4}'
-    assert custom.schedule_json == '{"2": 4}'  # ручную настройку не перезаписали
+    assert custom.schedule_json == '{"0": 3, "1": 5, "2": 5, "3": 0, "4": 0, "5": 2}'
     assert old_auto.schedule_json == '{"0": 2, "1": 3, "2": 4}'
     assert removed_auto.schedule_json is None
-    assert unknown.schedule_json is None  # без предустановки дата остается свободной
+    assert unknown.schedule_json == '{"6": 6}'  # направления вне файла остаются ручными
 
 
 @pytest.mark.parametrize(("marketplace", "destination", "expected"), [
