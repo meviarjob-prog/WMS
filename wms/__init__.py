@@ -449,12 +449,8 @@ MVB_DEFAULT_CITIES = [
 MVB_DEFAULT_PICKUP_ZONES = [("Черкесск", 1000), ("Регионы", 1500), ("Хабез", 1800), ("Отрадная", 2800)]
 
 
-def _mvb_preset_schedule(marketplace, destination):
-    """График с предоставленных изображений: день отправки → выгрузка.
-
-    Дни недели: 0=пн … 6=вс. Названия в рабочей базе могут содержать
-    «СЦ», «РФЦ», номер площадки, поэтому сопоставляем по устойчивой части.
-    """
+def _mvb_preset_schedule_v1(marketplace, destination):
+    """Предыдущая предустановка — нужна для безопасного обновления v2."""
     name = " ".join((destination or "").lower().replace("ё", "е").split())
     weekday_chain = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5}
     common_long = {0: 3, 1: 5, 2: 5, 3: 0, 4: 0}
@@ -508,21 +504,111 @@ def _mvb_preset_schedule(marketplace, destination):
     return None
 
 
+def _mvb_preset_schedule(marketplace, destination):
+    """Актуальный график с изображений от 11.11.2026.
+
+    Возвращает соответствие «день отправки → день выгрузки», где 0=пн …
+    6=вс. Несколько пунктов из одной группы имеют одинаковый график. Названия
+    в базе могут содержать «СЦ», «РФЦ» и номер площадки, поэтому ищем по
+    устойчивой части названия.
+    """
+    name = " ".join((destination or "").lower().replace("ё", "е").split())
+    common_long = {0: 3, 1: 5, 2: 5, 3: 0, 4: 0, 5: 2}
+    weekday_chain = {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6}
+    ekaterinburg = {0: 1, 1: 1, 2: 1, 3: 4, 4: 4, 5: 4}
+    northwest = {0: 4, 1: 4, 2: 0, 3: 0}
+
+    if marketplace == "ozon":
+        if any(value in name for value in (
+            "гривно", "софьино", "софино", "ногинск", "хоругвино",
+            "пушкино", "домодедово", "петровск", "ватутинк", "жуковск",
+        )):
+            return common_long
+        if "казан" in name:
+            return {0: 3, 1: 5, 2: 0, 3: 0}
+        if "ростов" in name:
+            return {0: 2, 1: 3, 2: 4}
+        if any(value in name for value in ("колпино", "порошкино")):
+            return {2: 1, 3: 1}
+        if any(value in name for value in (
+            "санкт-петербург", "спб", "софийск", "бугры", "шушар",
+        )):
+            return {0: 6, 1: 6}
+        if "невинномыс" in name:
+            return weekday_chain
+        if "краснодар" in name:
+            return {0: 1, 2: 3, 4: 5}
+        if "екатеринбург" in name:
+            return ekaterinburg
+        if "воронеж" in name:
+            return {0: 2, 1: 4, 3: 6, 4: 6, 5: 1}
+        if any(value in name for value in ("ярослав", "твер", "нижн", "новгород")):
+            return northwest
+        if "уфа" in name:
+            return {0: 3, 1: 3, 2: 3, 3: 3, 4: 3}
+    elif marketplace == "wb":
+        if any(value in name for value in (
+            "обухов", "радумл", "никольск", "подольск", "домодедово",
+            "коледино", "тула", "истра", "ногинск",
+        )):
+            return common_long
+        if any(value in name for value in ("рязан", "ярослав", "владимир", "твер")):
+            return northwest
+        if any(value in name for value in ("казан", "столбищ", "самар")):
+            return {0: 3, 1: 5, 2: 0, 3: 0}
+        if "крыловск" in name:
+            return {0: 2, 1: 3, 2: 4}
+        if "тахтамукай" in name:
+            return {0: 1, 2: 3, 4: 5}
+        if "невинномыс" in name:
+            return weekday_chain
+        if any(value in name for value in ("екатеринбург", "перспектив", "черняхов")):
+            return ekaterinburg
+        if "шушар" in name:
+            return {0: 6, 1: 6, 2: 1, 3: 1}
+    elif marketplace == "yandex":
+        if "соф" in name:
+            return {0: 4, 1: 4}
+        if "ростов" in name:
+            return {0: 3, 1: 3}
+    elif marketplace == "lamoda" and any(value in name for value in ("соф", "быково")):
+        return {0: 4, 1: 4}
+    return None
+
+
 def _seed_mvb_default_schedules():
-    """Один раз ставит графики из изображений, не меняя ручные настройки."""
+    """Ставит v2 графиков, сохраняя ручные настройки оператора.
+
+    Уже установленную v1 заменяем только тогда, когда значение направления
+    по-прежнему в точности равно старой предустановке. Значит, оператор его не
+    редактировал. Пустые графики заполняем, неизвестные направления оставляем
+    свободными для ручного выбора.
+    """
     from .models import AppSetting, MvbDestination
 
-    key = "mvb_default_delivery_schedules_v1"
+    key = "mvb_default_delivery_schedules_v2"
     if db.session.get(AppSetting, key) is not None:
         return
     changed = 0
     for destination in MvbDestination.query.all():
-        if destination.schedule_json:
-            continue
         schedule = _mvb_preset_schedule(destination.marketplace, destination.value)
-        if schedule:
-            destination.schedule_json = json.dumps(schedule, ensure_ascii=False)
-            changed += 1
+        old_schedule = _mvb_preset_schedule_v1(destination.marketplace, destination.value)
+        try:
+            current = json.loads(destination.schedule_json) if destination.schedule_json else None
+        except (TypeError, ValueError):
+            current = None
+        old_json = {str(day): delivery for day, delivery in (old_schedule or {}).items()}
+        if not schedule:
+            # Направление исчезло из нового файла: убираем только прежнюю
+            # автоматическую настройку, ручную не трогаем.
+            if current and old_schedule and current == old_json:
+                destination.schedule_json = None
+                changed += 1
+            continue
+        if current and current != old_json:
+            continue
+        destination.schedule_json = json.dumps(schedule, ensure_ascii=False)
+        changed += 1
     db.session.add(AppSetting(key=key, value="1"))
     db.session.commit()
     print(f"[schema] МВБ: предустановлен график поставок — {changed} направлений")

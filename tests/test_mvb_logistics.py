@@ -2,6 +2,7 @@
 на каждый короб и поштучные сканы (забор → склад МВБ → СЦ)."""
 
 from flask import g
+import pytest
 
 from wms.extensions import db
 from datetime import datetime, timedelta
@@ -2309,8 +2310,16 @@ def test_delivery_schedule_presets_from_reference_images(db):
     ozon = MvbDestination(marketplace="ozon", city="Невинномысск РФЦ", is_active=True)
     yandex = MvbDestination(marketplace="yandex", city="Софьино", is_active=True)
     custom = MvbDestination(marketplace="wb", city="СЦ Истра", is_active=True, schedule_json='{"2": 4}')
+    old_auto = MvbDestination(
+        marketplace="ozon", city="Ростов РФЦ 2", is_active=True,
+        schedule_json='{"0": 3, "1": 3, "2": 5, "3": 5}',
+    )
+    removed_auto = MvbDestination(
+        marketplace="wb", city="Щеглово", is_active=True,
+        schedule_json='{"0": 3, "1": 5, "2": 5, "3": 0, "4": 0}',
+    )
     unknown = MvbDestination(marketplace="wb", city="Новое направление", is_active=True)
-    db.session.add_all([wb, ozon, yandex, custom, unknown])
+    db.session.add_all([wb, ozon, yandex, custom, old_auto, removed_auto, unknown])
     db.session.commit()
 
     _seed_mvb_default_schedules()
@@ -2318,12 +2327,42 @@ def test_delivery_schedule_presets_from_reference_images(db):
     db.session.refresh(ozon)
     db.session.refresh(yandex)
     db.session.refresh(custom)
+    db.session.refresh(old_auto)
+    db.session.refresh(removed_auto)
     db.session.refresh(unknown)
-    assert wb.schedule_json == '{"0": 3, "1": 5, "2": 5, "3": 0, "4": 0}'
-    assert ozon.schedule_json == '{"0": 1, "1": 2, "2": 3, "3": 4, "4": 5}'
+    assert wb.schedule_json == '{"0": 3, "1": 5, "2": 5, "3": 0, "4": 0, "5": 2}'
+    assert ozon.schedule_json == '{"0": 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6}'
     assert yandex.schedule_json == '{"0": 4, "1": 4}'
     assert custom.schedule_json == '{"2": 4}'  # ручную настройку не перезаписали
+    assert old_auto.schedule_json == '{"0": 2, "1": 3, "2": 4}'
+    assert removed_auto.schedule_json is None
     assert unknown.schedule_json is None  # без предустановки дата остается свободной
+
+
+@pytest.mark.parametrize(("marketplace", "destination", "expected"), [
+    ("ozon", "Ватутинки РФЦ", {0: 3, 1: 5, 2: 5, 3: 0, 4: 0, 5: 2}),
+    ("ozon", "Казань РФЦ", {0: 3, 1: 5, 2: 0, 3: 0}),
+    ("ozon", "СПБ Софийская", {0: 6, 1: 6}),
+    ("ozon", "Колпино РФЦ", {2: 1, 3: 1}),
+    ("ozon", "Краснодар 2 РФЦ", {0: 1, 2: 3, 4: 5}),
+    ("ozon", "Екатеринбург РФЦ Новый", {0: 1, 1: 1, 2: 1, 3: 4, 4: 4, 5: 4}),
+    ("ozon", "Воронеж 2 РФЦ", {0: 2, 1: 4, 3: 6, 4: 6, 5: 1}),
+    ("ozon", "Нижний Новгород 2 РФЦ", {0: 4, 1: 4, 2: 0, 3: 0}),
+    ("ozon", "Уфа РФЦ", {0: 3, 1: 3, 2: 3, 3: 3, 4: 3}),
+    ("wb", "Обухово СЦ", {0: 3, 1: 5, 2: 5, 3: 0, 4: 0, 5: 2}),
+    ("wb", "СЦ Владимир", {0: 4, 1: 4, 2: 0, 3: 0}),
+    ("wb", "Казань Столбище", {0: 3, 1: 5, 2: 0, 3: 0}),
+    ("wb", "Крыловская СЦ", {0: 2, 1: 3, 2: 4}),
+    ("wb", "Невинномысск FBO/FBS", {0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6}),
+    ("wb", "ЕКБ Перспективный", {0: 1, 1: 1, 2: 1, 3: 4, 4: 4, 5: 4}),
+    ("wb", "СПБ Шушары", {0: 6, 1: 6, 2: 1, 3: 1}),
+    ("yandex", "Софино", {0: 4, 1: 4}),
+    ("lamoda", "Софино Быково", {0: 4, 1: 4}),
+])
+def test_delivery_schedule_v2_matches_reference_images(marketplace, destination, expected):
+    from wms import _mvb_preset_schedule
+
+    assert _mvb_preset_schedule(marketplace, destination) == expected
 
 
 def test_client_legal_entities_under_one_login(db, client):
