@@ -35,6 +35,9 @@ def test_one_c_modules_recalculate_return_document_total_and_confirm_row_ids():
         source = (root / relative_path).read_text(encoding="utf-8")
         assert source.count("ПересчитатьСуммуДокументаПоСтрокам(") == 2
         assert 'ИменаИтога.Добавить("СуммаДокумента")' in source
+        assert 'ИменаСуммСтроки.Добавить("Всего")' in source
+        assert 'ИменаСуммСтроки.Добавить("СуммаВсего")' in source
+        assert 'ИменаСкидокСтроки.Добавить("СуммаРучнойСкидки")' in source
         assert 'ПолучитьСвойствоИлиПустойМассив(\n\t\t\t\tДокВозврата, "return_ids")' in source
         assert 'Тело.Вставить("supplier_return_ids_are_rows", Истина)' in source
 
