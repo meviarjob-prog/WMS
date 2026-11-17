@@ -416,6 +416,15 @@ def _find_or_create_supplier(name, inn, phone):
         supplier = Supplier(name=name, inn=inn, phone=phone)
         db.session.add(supplier)
         db.session.flush()
+    else:
+        # ИНН однозначно связывает накладную с карточкой поставщика, но
+        # имя/телефон в карточке могли быть заведены с ошибкой или устареть.
+        # Источником актуальных реквизитов при импорте является сама
+        # накладная 1С, поэтому обновляем карточку, не создавая дубль.
+        if name and supplier.name != name:
+            supplier.name = name
+        if phone and supplier.phone != phone:
+            supplier.phone = phone
     return supplier
 
 
@@ -500,7 +509,10 @@ def import_invoice_form():
         doc = ReceivingDocument(
             number=invoice.invoice_number,
             warehouse_id=warehouse_id,
-            supplier=supplier.name,
+            # Снимок имени именно из этой накладной. Он не должен зависеть
+            # от старого значения карточки поставщика и не изменится задним
+            # числом при следующих обновлениях справочника.
+            supplier=invoice.supplier_name,
             supplier_id=supplier.id,
             created_by_id=current_user.id,
             # Поле документа оставляем для списка/поиска и совместимости со

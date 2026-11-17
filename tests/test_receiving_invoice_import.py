@@ -317,6 +317,14 @@ def test_upload_reuses_existing_supplier_by_inn(db, client_logged_in):
     warehouse = _make_warehouse()
     existing = Supplier(name="Старое название", inn="091701566682", phone="000")
     db.session.add(existing)
+    db.session.flush()
+    old_doc = ReceivingDocument(
+        number="OLD-INVOICE",
+        warehouse_id=warehouse.id,
+        supplier="Старое название",
+        supplier_id=existing.id,
+    )
+    db.session.add(old_doc)
     db.session.commit()
     item = Nomenclature(sku="НФ-00003575", barcode="8880000002", name=DEFAULT_ROW_NAME, unit="шт")
     db.session.add(item)
@@ -331,6 +339,10 @@ def test_upload_reuses_existing_supplier_by_inn(db, client_logged_in):
     assert Supplier.query.filter_by(inn="091701566682").count() == 1
     doc = ReceivingDocument.query.filter_by(number="1706").first()
     assert doc.supplier_id == existing.id
+    assert doc.supplier == "ИП Кииков Мурат Борисович"
+    assert existing.name == "ИП Кииков Мурат Борисович"
+    assert existing.phone == "89283882790"
+    assert old_doc.supplier == "Старое название"
 
 
 def test_upload_rejects_duplicate_invoice_number(db, client_logged_in):
