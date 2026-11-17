@@ -23,7 +23,7 @@
   ДЕМО-ВЕРСИЯ — все данные вымышленные, боевая база не затрагивается
 </div>
 {% endif %}
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 sticky-top shadow-sm">
   <div class="container-fluid">
     <a class="navbar-brand" href="{{ url_for('production.index') if current_user.is_authenticated and current_user.is_production_only() else url_for('movement.transport_list') if current_user.is_authenticated and current_user.is_logist_only() else url_for('receiving.list_documents') if current_user.is_authenticated and current_user.is_fulfillment_only() else url_for('main.index') }}">📦 WMS</a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain">
