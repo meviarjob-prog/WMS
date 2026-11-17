@@ -296,9 +296,10 @@ def _first_order_number(order_number):
 
 def _supplier_returns_export():
     """Возвраты поставщику из разбраковки приемок (см. receiving.complete) —
-    группируем по приемке И номеру заказа в один документ на 1С с
-    несколькими строками. Новая форма накладной может содержать позиции из
-    разных заказов, а у каждого возврата в 1С должно быть свое основание.
+    снова группируем только по приемке: одна приемка создает один документ
+    возврата в 1С с несколькими строками. Если в накладной были позиции из
+    разных заказов, основанием становится первый номер из общего списка
+    заказов приемки. Это откат разделения возвратов по заказам из 9ef2e11.
     Возвраты без invoice_number (ручное списание из "Размещения", либо
     разбраковка приемки, не загруженной из файла накладной — см.
     ReceivingDocument.is_from_invoice_import) не выгружаем вовсе: 1С не с
@@ -316,15 +317,14 @@ def _supplier_returns_export():
 
     groups = {}
     for ret in returns:
-        order_number = _first_order_number(
-            ret.order_number
-            or (ret.receiving_document.order_number if ret.receiving_document else None)
-        )
-        groups.setdefault((ret.receiving_document_id, order_number), []).append(ret)
+        groups.setdefault(ret.receiving_document_id, []).append(ret)
 
     payloads = []
-    for (receiving_document_id, order_number), group in groups.items():
+    for receiving_document_id, group in groups.items():
         first = group[0]
+        order_number = _first_order_number(
+            first.receiving_document.order_number if first.receiving_document else None
+        )
         # ИНН поставщика (из справочника Supplier, заполняется при загрузке
         # накладной — см. receiving._find_or_create_supplier) — надежный
         # уникальный идентификатор для поиска контрагента в 1С, в отличие
@@ -342,9 +342,9 @@ def _supplier_returns_export():
                 # приемки выше сохранен для совместимости со старым модулем.
                 "return_ids": [ret.id for ret in group],
                 "invoice_number": first.invoice_number,
-                # Номер "Заказа поставщику" из товарной строки накладной
-                # (ручное поле используется только для старых файлов) — именно
-                # по нему 1С ищет основание для возврата (см.
+                # Для единого возврата по приемке используем первый номер из
+                # общего списка заказов документа — именно по нему 1С ищет
+                # основание для возврата (см.
                 # SyncWMS.bsl НайтиЗаказПоставщикуПоНомеру), а не по
                 # invoice_number, который относится к документу поступления,
                 # а не к заказу поставщику.
@@ -658,9 +658,9 @@ def export_confirm():
     for doc in confirmed_inventories:
         doc.synced_to_1c_at = now
 
-    # Новый модуль 1С возвращает id конкретных строк SupplierReturn: одна
-    # приемка теперь может породить несколько документов по разным заказам.
-    # Без флага поддерживаем старый модуль, присылавший id приемки.
+    # Новый модуль 1С возвращает id конкретных строк SupplierReturn, чтобы
+    # точно отметить весь состав единого возврата. Без флага поддерживаем
+    # старый модуль, присылавший id приемки.
     return_id_column = (
         SupplierReturn.id
         if supplier_return_ids_are_rows

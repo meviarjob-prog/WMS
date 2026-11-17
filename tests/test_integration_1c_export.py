@@ -337,7 +337,7 @@ def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_
     assert {line["qty"] for line in ret_doc["lines"]} == {3, 1}
 
 
-def test_export_splits_supplier_returns_by_line_order_number(db, client_logged_in):
+def test_export_keeps_one_supplier_return_for_multiple_line_orders(db, client_logged_in):
     _set_token()
     wh = Warehouse(code="WH-1C-ORDERS", name="Основной склад")
     db.session.add(wh)
@@ -377,8 +377,10 @@ def test_export_splits_supplier_returns_by_line_order_number(db, client_logged_i
     response = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     documents = response.get_json()["supplier_returns"]
 
-    assert [row["order_number"] for row in documents] == ["45", "46"]
-    assert [row["return_ids"] for row in documents] == [[returns[0].id], [returns[1].id]]
+    assert len(documents) == 1
+    assert documents[0]["order_number"] == "45"
+    assert documents[0]["return_ids"] == [returns[0].id, returns[1].id]
+    assert {line["qty"] for line in documents[0]["lines"]} == {2, 3}
 
 
 def test_export_supplier_return_order_number_uses_first_of_slash_separated_list(db, client_logged_in):
