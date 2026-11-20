@@ -31,6 +31,12 @@ def test_one_c_processing_recalculates_total_and_confirms_return_rows():
     source = (root / "integrations/1c/SyncWMS.bsl").read_text(encoding="utf-8")
     assert source.count("ПересчитатьСуммуДокументаПоСтрокам(") == 2
     assert 'ИменаИтога.Добавить("СуммаДокумента")' in source
+    assert 'ИменаСуммСтроки.Добавить("СуммаСНДС")' in source
+    assert 'ИменаСуммСтроки.Добавить("СуммаВсего")' in source
+    assert 'ИменаСкидокСтроки.Добавить("СуммаРучнойСкидки")' in source
+    assert "Функция ПоставщикДокументаСовпадает(" in source
+    assert "Возврат ИННСовпадает(" in source
+    assert "Возвраты разных заказов должны выгружаться отдельными" in source
     assert 'ПолучитьСвойствоИлиПустойМассив(\n\t\t\t\tДокВозврата, "return_ids")' in source
     assert 'Тело.Вставить("supplier_return_ids_are_rows", Истина)' in source
 
@@ -371,6 +377,14 @@ def test_export_splits_supplier_returns_by_line_order_number(db, client_logged_i
 
     assert [row["order_number"] for row in documents] == ["45", "46"]
     assert [row["return_ids"] for row in documents] == [[returns[0].id], [returns[1].id]]
+    assert [[line["order_number"] for line in row["lines"]] for row in documents] == [
+        ["45"],
+        ["46"],
+    ]
+    assert [row["comment"] for row in documents] == [
+        "WMS: возврат по приемке НАКЛ-ORDERS, заказ 45",
+        "WMS: возврат по приемке НАКЛ-ORDERS, заказ 46",
+    ]
 
 
 def test_export_supplier_return_order_number_uses_first_of_slash_separated_list(db, client_logged_in):
