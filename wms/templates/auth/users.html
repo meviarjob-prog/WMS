@@ -3,6 +3,43 @@
 {% block content %}
 <h3 class="mb-4">Настройки</h3>
 
+<h5 class="mb-3">Маркетплейсы</h5>
+<div class="row g-3 mb-5">
+  <div class="col-12 col-md-4">
+    <a class="card h-100 p-3 text-decoration-none text-reset" href="{{ url_for('integration_ozon.settings') }}">
+      <div class="d-flex align-items-center gap-3">
+        <span class="fs-3" aria-hidden="true">🔗</span>
+        <div>
+          <div class="fw-semibold">Обмен с Ozon</div>
+          <div class="text-muted small">Client ID, API-ключ и проверка подключения</div>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-12 col-md-4">
+    <a class="card h-100 p-3 text-decoration-none text-reset" href="{{ url_for('integration_wb.settings') }}">
+      <div class="d-flex align-items-center gap-3">
+        <span class="fs-3" aria-hidden="true">🔗</span>
+        <div>
+          <div class="fw-semibold">Обмен с WB</div>
+          <div class="text-muted small">API-токен Wildberries и проверка подключения</div>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-12 col-md-4">
+    <a class="card h-100 p-3 text-decoration-none text-reset" href="{{ url_for('marketplace_export.ozon_mapping') }}">
+      <div class="d-flex align-items-center gap-3">
+        <span class="fs-3" aria-hidden="true">📋</span>
+        <div>
+          <div class="fw-semibold">Артикулы Ozon</div>
+          <div class="text-muted small">Сопоставление штрихкодов WMS с артикулами Ozon</div>
+        </div>
+      </div>
+    </a>
+  </div>
+</div>
+
 <h5 class="mb-3">Пользователи</h5>
 <div class="row g-4 mb-5">
   <div class="col-md-4">
