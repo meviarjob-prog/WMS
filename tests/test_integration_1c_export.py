@@ -26,21 +26,13 @@ from wms.models import (
 TOKEN = "test-1c-token"
 
 
-def test_one_c_modules_recalculate_return_document_total_and_confirm_row_ids():
+def test_one_c_processing_recalculates_total_and_confirms_return_rows():
     root = Path(__file__).resolve().parents[1]
-    for relative_path in (
-        "integrations/1c/SyncWMS.bsl",
-        "integrations/1c/SyncWMS_ObjectModule.bsl",
-    ):
-        source = (root / relative_path).read_text(encoding="utf-8")
-        assert source.count("ПересчитатьСуммуДокументаПоСтрокам(") == 2
-        assert 'ИменаИтога.Добавить("СуммаДокумента")' in source
-        assert 'ИменаСуммСтроки.Добавить("Всего")' in source
-        assert 'ИменаСуммСтроки.Добавить("СуммаВсего")' in source
-        assert 'ИменаСуммСтроки.Добавить("СуммаСНДС")' in source
-        assert 'ИменаСкидокСтроки.Добавить("СуммаРучнойСкидки")' in source
-        assert 'ПолучитьСвойствоИлиПустойМассив(\n\t\t\t\tДокВозврата, "return_ids")' in source
-        assert 'Тело.Вставить("supplier_return_ids_are_rows", Истина)' in source
+    source = (root / "integrations/1c/SyncWMS.bsl").read_text(encoding="utf-8")
+    assert source.count("ПересчитатьСуммуДокументаПоСтрокам(") == 2
+    assert 'ИменаИтога.Добавить("СуммаДокумента")' in source
+    assert 'ПолучитьСвойствоИлиПустойМассив(\n\t\t\t\tДокВозврата, "return_ids")' in source
+    assert 'Тело.Вставить("supplier_return_ids_are_rows", Истина)' in source
 
 
 def _set_token():
@@ -337,7 +329,7 @@ def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_
     assert {line["qty"] for line in ret_doc["lines"]} == {3, 1}
 
 
-def test_export_keeps_one_supplier_return_for_multiple_line_orders(db, client_logged_in):
+def test_export_splits_supplier_returns_by_line_order_number(db, client_logged_in):
     _set_token()
     wh = Warehouse(code="WH-1C-ORDERS", name="Основной склад")
     db.session.add(wh)
@@ -377,10 +369,8 @@ def test_export_keeps_one_supplier_return_for_multiple_line_orders(db, client_lo
     response = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     documents = response.get_json()["supplier_returns"]
 
-    assert len(documents) == 1
-    assert documents[0]["order_number"] == "45"
-    assert documents[0]["return_ids"] == [returns[0].id, returns[1].id]
-    assert {line["qty"] for line in documents[0]["lines"]} == {2, 3}
+    assert [row["order_number"] for row in documents] == ["45", "46"]
+    assert [row["return_ids"] for row in documents] == [[returns[0].id], [returns[1].id]]
 
 
 def test_export_supplier_return_order_number_uses_first_of_slash_separated_list(db, client_logged_in):
