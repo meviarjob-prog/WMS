@@ -328,6 +328,42 @@ def list_documents():
     )
 
 
+@bp.route("/counterparties")
+def counterparties():
+    """Справочник сопоставления контрагентов WMS с ИНН.
+
+    Отдельную копию данных не создаем: показываем Supplier, который реально
+    используется при загрузке накладной и выгрузке возвратов в 1С. Поэтому
+    исправление карточки по ИНН сразу видно и здесь, и в следующих обменах.
+    """
+    q = request.args.get("q", "").strip()
+    query = (
+        db.session.query(
+            Supplier,
+            func.count(ReceivingDocument.id).label("receiving_count"),
+            func.max(ReceivingDocument.created_at).label("last_receiving_at"),
+        )
+        .outerjoin(ReceivingDocument, ReceivingDocument.supplier_id == Supplier.id)
+        .group_by(Supplier.id)
+    )
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                Supplier.name.ilike(like),
+                Supplier.inn.ilike(like),
+                Supplier.phone.ilike(like),
+            )
+        )
+
+    rows = query.order_by(Supplier.name, Supplier.id).all()
+    return render_template(
+        "receiving/counterparties.html",
+        rows=rows,
+        q=q,
+    )
+
+
 @bp.route("/<int:doc_id>/toggle-checked-in-1c", methods=["POST"])
 def toggle_checked_in_1c(doc_id):
     """Ручная отметка "проверено в 1С" — просто галочка для контроля
