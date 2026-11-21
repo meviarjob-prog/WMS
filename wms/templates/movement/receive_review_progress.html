@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Проверка приемки Ozon{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('movement.receive_review') }}">&larr; Массовая проверка приемки</a></p>
+<h3 class="mb-3">Проверка приемки через Ozon API</h3>
+{% if job.status == 'failed' %}
+  <div class="alert alert-danger">
+    Проверка не завершилась ({{ job.error }}). Проверено {{ job.progress_done }} из {{ job.progress_total }};
+    уже принятые перемещения остались принятыми.
+  </div>
+  {% if remaining_ids %}
+  <form method="post" action="{{ url_for('movement.receive_review_run') }}">
+    {% for doc_id in remaining_ids %}<input type="hidden" name="doc_ids" value="{{ doc_id }}">{% endfor %}
+    <button type="submit" class="btn btn-primary">🔁 Проверить оставшиеся ({{ remaining_ids | length }})</button>
+  </form>
+  {% else %}
+  <a class="btn btn-outline-secondary" href="{{ url_for('movement.receive_review') }}">К списку перемещений</a>
+  {% endif %}
+{% else %}
+  <div class="card p-3">
+    <div class="mb-2">Идёт проверка… <span id="rvDone">{{ job.progress_done }}</span> из <span id="rvTotal">{{ job.progress_total }}</span>
+      <span class="text-muted small ms-2" id="rvCurrent">{% if job.current_label %}сейчас: {{ job.current_label }}{% endif %}</span></div>
+    <div class="progress" role="progressbar" aria-label="Ход проверки">
+      <div class="progress-bar progress-bar-striped progress-bar-animated" id="rvBar"
+           style="width: {{ (100 * job.progress_done / job.progress_total) | round(0) if job.progress_total else 0 }}%"></div>
+    </div>
+    <div class="small text-muted mt-2">Страницу можно не держать открытой — проверка идёт на сервере. Результат откроется здесь автоматически.</div>
+  </div>
+  <script>
+    (function poll() {
+      fetch("{{ url_for('movement.receive_review_job_status', job_id=job.id) }}", {credentials: "same-origin"})
+        .then(r => r.json())
+        .then(s => {
+          if (s.status !== "running") { location.reload(); return; }
+          document.getElementById("rvDone").textContent = s.done;
+          document.getElementById("rvTotal").textContent = s.total;
+          document.getElementById("rvCurrent").textContent = s.current ? "сейчас: " + s.current : "";
+          document.getElementById("rvBar").style.width = (s.total ? Math.round(100 * s.done / s.total) : 0) + "%";
+          setTimeout(poll, 3000);
+        })
+        .catch(() => setTimeout(poll, 5000));
+    })();
+  </script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Справочник контрагентов{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div>
+    <h3 class="mb-1">Справочник контрагентов</h3>
+    <div class="text-muted small">Сопоставление поставщика WMS с ИНН, используемое при обмене с 1С.</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="{{ url_for('receiving.list_documents') }}">&larr; Приемка</a>
+</div>
+
+<form method="get" class="row g-2 mb-3">
+  <div class="col-12 col-md-6 col-lg-4">
+    <input type="search" name="q" value="{{ q }}" class="form-control"
+           placeholder="Название, ИНН или телефон" autofocus>
+  </div>
+  <div class="col-auto"><button class="btn btn-primary" type="submit">Найти</button></div>
+  {% if q %}
+  <div class="col-auto"><a class="btn btn-outline-secondary" href="{{ url_for('receiving.counterparties') }}">Сбросить</a></div>
+  {% endif %}
+</form>
+
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Контрагенты</span>
+    <span class="badge bg-secondary">{{ rows|length }}</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Контрагент WMS</th>
+          <th>ИНН</th>
+          <th>Телефон</th>
+          <th class="text-end">Приемок</th>
+          <th>Последняя приемка</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for supplier, receiving_count, last_receiving_at in rows %}
+        <tr>
+          <td class="fw-semibold">{{ supplier.name }}</td>
+          <td>
+            {% if supplier.inn %}
+              <span class="font-monospace">{{ supplier.inn }}</span>
+            {% else %}
+              <span class="badge bg-warning text-dark">ИНН не указан</span>
+            {% endif %}
+          </td>
+          <td>{{ supplier.phone or '—' }}</td>
+          <td class="text-end">{{ receiving_count }}</td>
+          <td>
+            {% if last_receiving_at %}{{ (last_receiving_at|msk).strftime('%d.%m.%Y %H:%M') }}{% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-center text-muted py-4">Контрагенты не найдены</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

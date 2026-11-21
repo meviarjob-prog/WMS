@@ -43,6 +43,7 @@ _HEADER_CODE_MARKERS = ("код",)
 _HEADER_NAME_MARKERS = ("товар",)
 _HEADER_QTY_MARKERS = ("количество", "кол-во")
 _HEADER_BARCODE_MARKERS = ("штрихкод", "штрих-код", "barcode", "ean")
+_HEADER_ORDER_MARKERS = ("заказ",)
 _STOP_MARKERS = ("итого", "всего наименований")
 
 
@@ -231,14 +232,14 @@ def _find_supplier(ws, max_scan_rows=15):
 
 
 def _find_header_row(ws, max_scan_rows=25):
-    """Возвращает (row, code_col, name_col, qty_col, barcode_col).
+    """Возвращает (row, code_col, name_col, qty_col, barcode_col, order_col).
 
-    Колонка со штрихкодом необязательна — в текущей выгрузке 1С ее нет, но
-    она может появиться в будущем (тогда сопоставление с номенклатурой
-    будет вестись в первую очередь по ней, см. parse_invoice/receiving.py)."""
+    Колонки со штрихкодом и заказом необязательны: старые печатные формы их
+    не содержат, а новая форма указывает «Заказ поставщику ...» отдельно у
+    каждой товарной строки."""
     max_row = min(ws.max_row, max_scan_rows)
     for r in range(1, max_row + 1):
-        code_col = name_col = qty_col = barcode_col = None
+        code_col = name_col = qty_col = barcode_col = order_col = None
         for c in range(1, ws.max_column + 1):
             text = _norm(ws.cell(row=r, column=c).value).lower()
             if not text:
@@ -251,9 +252,28 @@ def _find_header_row(ws, max_scan_rows=25):
                 qty_col = c
             if barcode_col is None and any(m in text for m in _HEADER_BARCODE_MARKERS):
                 barcode_col = c
+            if order_col is None and any(m in text for m in _HEADER_ORDER_MARKERS):
+                order_col = c
         if code_col and name_col and qty_col:
-            return r, code_col, name_col, qty_col, barcode_col
-    return None, None, None, None, None
+            return r, code_col, name_col, qty_col, barcode_col, order_col
+    return None, None, None, None, None, None
+
+
+def _order_number(value):
+    """Из «Заказ поставщику 45 от 07.10.2026» получает номер ``45``.
+
+    Если ячейка уже содержит только номер, оставляет его без изменений.
+    Дата не сохраняется: интеграция 1С ищет основание именно по номеру.
+    """
+    text = _norm(value)
+    if not text:
+        return ""
+    match = re.match(
+        r"^заказ(?:\s+поставщику)?\s*(?:№\s*)?(.+?)(?:\s+от\s+.+)?$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else text
 
 
 def _to_qty(value):
@@ -285,7 +305,7 @@ def parse_invoice(file_stream):
     if not supplier_name:
         raise InvoiceParseError("Не удалось найти в файле строку «Поставщик:»")
 
-    header_row, code_col, name_col, qty_col, barcode_col = _find_header_row(ws)
+    header_row, code_col, name_col, qty_col, barcode_col, order_col = _find_header_row(ws)
     if header_row is None:
         raise InvoiceParseError(
             "Не удалось найти таблицу товаров (шапку со столбцами «Код», "
@@ -310,7 +330,16 @@ def parse_invoice(file_stream):
             if trailing_match:
                 barcode = trailing_match.group(1)
                 name = name[: trailing_match.start()].rstrip()
-        invoice.rows.append({"code": code, "name": name, "qty": qty, "barcode": barcode})
+        order_number = _order_number(ws.cell(row=r, column=order_col).value) if order_col else ""
+        invoice.rows.append(
+            {
+                "code": code,
+                "name": name,
+                "qty": qty,
+                "barcode": barcode,
+                "order_number": order_number,
+            }
+        )
 
     if not invoice.rows:
         raise InvoiceParseError("В файле не нашлось ни одной строки с товаром и количеством")

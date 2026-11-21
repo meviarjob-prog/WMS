@@ -388,3 +388,73 @@ def test_admin_can_upload_google_credentials_from_setup_page(
     assert target.exists()
     assert json.loads(target.read_text(encoding="utf-8"))["project_id"] == "test-project"
     assert "Ключ Google сохранен на сервере" in response.get_data(as_text=True)
+
+
+def _background_env(monkeypatch, app, sync_impl):
+    """Включает фоновый режим (в тестах он выключен флагом TESTING) и
+    запускает «поток» тут же, в этом же потоке выполнения."""
+    from wms.blueprints import shipment_plan as sp
+
+    app.config["SYNC_GOOGLE_INLINE"] = False
+
+    class InlineThread:
+        def __init__(self, target, args=(), daemon=None):
+            self._target, self._args = target, args
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr(sp.threading, "Thread", InlineThread)
+    monkeypatch.setattr(sp, "sync_google_plans_and_movements", sync_impl)
+    return sp
+
+
+def test_sync_button_runs_in_background_and_stores_result(db, app, client_logged_in, monkeypatch):
+    sp = _background_env(
+        monkeypatch, app,
+        lambda uploaded_by_id=None: (["ОЗОН: 3 позиций"], ["Распределение"], 5, 7),
+    )
+    resp = client_logged_in.post("/shipment-plan/sync-google", follow_redirects=True)
+    assert "запущена в фоне" in resp.get_data(as_text=True)
+
+    status = sp._google_sync_status()
+    assert status["running"] is False
+    assert "Google Таблица синхронизирована" in status["last_result"] and "обновлено ячеек факта: 7" in status["last_result"]
+    assert sp._google_sync_lock.acquire(False)      # блокировка освобождена
+    sp._google_sync_lock.release()
+
+
+def test_background_sync_error_is_saved_not_raised(db, app, client_logged_in, monkeypatch):
+    def boom(uploaded_by_id=None):
+        raise RuntimeError("Google недоступен")
+
+    sp = _background_env(monkeypatch, app, boom)
+    client_logged_in.post("/shipment-plan/sync-google")
+    status = sp._google_sync_status()
+    assert status["running"] is False
+    assert "Google недоступен" in status["last_error"] and "Не удалось" in status["last_result"]
+
+
+def test_second_click_while_running_is_refused_but_stale_marker_is_ignored(db, app, client_logged_in, monkeypatch):
+    from datetime import datetime, timedelta
+
+    calls = []
+    sp = _background_env(
+        monkeypatch, app,
+        lambda uploaded_by_id=None: calls.append(1) or (["x"], ["Лист"], 0, 0),
+    )
+    sp._set_sync_setting(sp.GOOGLE_SYNC_RUNNING_KEY, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    db.session.commit()
+    resp = client_logged_in.post("/shipment-plan/sync-google", follow_redirects=True)
+    assert "уже выполняется" in resp.get_data(as_text=True) and calls == []
+
+    old = (datetime.utcnow() - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+    sp._set_sync_setting(sp.GOOGLE_SYNC_RUNNING_KEY, old)
+    db.session.commit()
+    client_logged_in.post("/shipment-plan/sync-google")
+    assert calls == [1]
+
+
+def test_status_endpoint_is_admin_only_and_reports_running(db, app, client_logged_in, monkeypatch):
+    resp = client_logged_in.get("/shipment-plan/sync-google/status")
+    assert resp.get_json() == {"running": False, "result": ""}

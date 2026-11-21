@@ -1,0 +1,35 @@
+{% extends "mvb/base.html" %}
+{% block title %}Мои юрлица{% endblock %}
+{% block content %}
+<h3 class="mb-1">Мои юрлица</h3>
+<p class="text-muted">Все юрлица работают под одним входом и телефоном. При создании заявки выберите, от какого юрлица она. Новое юрлицо оператор МВБ подтверждает — до этого заявки на него оформить нельзя.</p>
+<div class="row g-3 mb-4">
+  {% for c in companies %}
+  <div class="col-md-6 col-lg-4">
+    <div class="card p-3 h-100">
+      <div class="d-flex justify-content-between gap-2">
+        <b>{{ c.name }}</b>
+        {% if c.approval == 'pending' %}<span class="badge bg-warning text-dark">на проверке</span>
+        {% elif c.approval == 'rejected' %}<span class="badge bg-danger">отклонено</span>
+        {% elif not c.is_active %}<span class="badge bg-secondary">отключено</span>
+        {% else %}<span class="badge bg-success">работает</span>{% endif %}
+      </div>
+      <div class="small text-muted mt-1">
+        {% if c.inn %}ИНН {{ c.inn }}<br>{% endif %}
+        {{ c.address or 'адрес забора не указан' }}
+        {% if c.id == current_user.mvb_client_id %}<br><i>основное</i>{% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+<form method="post" class="card p-3" style="max-width:720px">
+  <h6>Добавить юрлицо</h6>
+  <div class="row g-2">
+    <div class="col-md-5"><input name="name" class="form-control" placeholder="Название (ИП / ООО) *" required></div>
+    <div class="col-md-3"><input name="inn" class="form-control" placeholder="ИНН" inputmode="numeric"></div>
+    <div class="col-md-4"><input name="address" class="form-control" placeholder="Адрес забора"></div>
+  </div>
+  <div class="mt-2"><button class="btn btn-success">Отправить на подтверждение</button></div>
+</form>
+{% endblock %}

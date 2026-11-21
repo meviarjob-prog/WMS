@@ -22,6 +22,7 @@ def _build_invoice_xlsx(
     supplier_line="ИП Кииков Мурат Борисович, ИНН 091701566682, тел.: 89283882790",
     rows=(("НФ-00003575", DEFAULT_ROW_NAME, 80),),
     with_barcode_column=False,
+    with_order_column=False,
 ):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -36,12 +37,17 @@ def _build_invoice_xlsx(
     header = ["№", "Код", "Товары", "Мест", "Количество", "Цена", "Сумма"]
     if with_barcode_column:
         header.append("Штрихкод")
+    if with_order_column:
+        header.append("Заказ")
     ws.append(header)
     for i, row in enumerate(rows, start=1):
         code, name, qty = row[0], row[1], row[2]
         line = [i, code, name, None, qty, 220.0, qty * 220.0]
         if with_barcode_column:
             line.append(row[3] if len(row) > 3 else "")
+        if with_order_column:
+            order_index = 4 if with_barcode_column else 3
+            line.append(row[order_index] if len(row) > order_index else "")
         ws.append(line)
     ws.append([])
     ws.append(["Итого:", "", "", "", "", "", sum(row[2] for row in rows) * 220.0])
@@ -79,6 +85,20 @@ def test_parse_invoice_extracts_barcode_column_when_present():
     invoice = parse_invoice(file_stream)
 
     assert invoice.rows[0]["barcode"] == "4601234567890"
+
+
+def test_parse_invoice_extracts_order_number_for_each_product():
+    file_stream = _build_invoice_xlsx(
+        rows=(
+            ("НФ-00003575", "Товар 1", 80, "Заказ поставщику 45 от 07.10.2026"),
+            ("НФ-00003576", "Товар 2", 30, "Заказ поставщику 46 от 08.10.2026"),
+        ),
+        with_order_column=True,
+    )
+
+    invoice = parse_invoice(file_stream)
+
+    assert [row["order_number"] for row in invoice.rows] == ["45", "46"]
 
 
 def test_parse_invoice_multiple_rows_stops_at_itogo():
@@ -166,7 +186,7 @@ def test_upload_with_html_disguised_invoice_does_not_500(db, client_logged_in):
 
     resp = client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_html_xls(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_html_xls(), "invoice.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
@@ -184,6 +204,7 @@ def test_upload_with_garbage_file_shows_flash_not_500(db, client_logged_in):
         "/receiving/import-invoice",
         data={
             "warehouse_id": warehouse.id,
+            "order_number": "ЗП-1",
             "file": (io.BytesIO(b"\x00\x01\x02 garbage \xff\xfe"), "invoice.xlsx"),
         },
         content_type="multipart/form-data",
@@ -210,7 +231,7 @@ def test_upload_creates_document_with_invoice_number_and_supplier(db, client_log
     file_stream = _build_invoice_xlsx()
     resp = client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (file_stream, "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (file_stream, "invoice.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
@@ -270,7 +291,7 @@ def test_download_invoice_file_returns_saved_bytes(db, client_logged_in):
     raw_bytes = file_stream.getvalue()
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (io.BytesIO(raw_bytes), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (io.BytesIO(raw_bytes), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     doc = ReceivingDocument.query.filter_by(number="1706").first()
@@ -296,6 +317,14 @@ def test_upload_reuses_existing_supplier_by_inn(db, client_logged_in):
     warehouse = _make_warehouse()
     existing = Supplier(name="Старое название", inn="091701566682", phone="000")
     db.session.add(existing)
+    db.session.flush()
+    old_doc = ReceivingDocument(
+        number="OLD-INVOICE",
+        warehouse_id=warehouse.id,
+        supplier="Старое название",
+        supplier_id=existing.id,
+    )
+    db.session.add(old_doc)
     db.session.commit()
     item = Nomenclature(sku="НФ-00003575", barcode="8880000002", name=DEFAULT_ROW_NAME, unit="шт")
     db.session.add(item)
@@ -303,13 +332,17 @@ def test_upload_reuses_existing_supplier_by_inn(db, client_logged_in):
 
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
 
     assert Supplier.query.filter_by(inn="091701566682").count() == 1
     doc = ReceivingDocument.query.filter_by(number="1706").first()
     assert doc.supplier_id == existing.id
+    assert doc.supplier == "ИП Кииков Мурат Борисович"
+    assert existing.name == "ИП Кииков Мурат Борисович"
+    assert existing.phone == "89283882790"
+    assert old_doc.supplier == "Старое название"
 
 
 def test_upload_rejects_duplicate_invoice_number(db, client_logged_in):
@@ -320,12 +353,12 @@ def test_upload_rejects_duplicate_invoice_number(db, client_logged_in):
 
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     resp = client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
@@ -348,7 +381,7 @@ def test_upload_reports_unmatched_codes_but_keeps_matched(db, client_logged_in):
     )
     resp = client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (file_stream, "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (file_stream, "invoice.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
@@ -366,7 +399,7 @@ def test_confirm_line_updates_qty_and_confirmed_flag(db, client_logged_in):
     db.session.commit()
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     doc = ReceivingDocument.query.filter_by(number="1706").first()
@@ -395,7 +428,7 @@ def test_completing_confirmed_invoice_credits_unplaced_stock(db, client_logged_i
     db.session.commit()
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     doc = ReceivingDocument.query.filter_by(number="1706").first()
@@ -424,7 +457,7 @@ def test_mobile_confirm_invoice_page_can_drive_full_recount_sorting_flow(db, cli
     db.session.commit()
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     doc = ReceivingDocument.query.filter_by(number="1706").first()
@@ -476,7 +509,7 @@ def test_confirm_invoice_page_has_add_unlisted_item_button(db, client_logged_in)
     db.session.commit()
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     doc = ReceivingDocument.query.filter_by(number="1706").first()
@@ -495,7 +528,7 @@ def test_confirm_invoice_page_shows_document_author(db, client_logged_in, admin_
     db.session.commit()
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     doc = ReceivingDocument.query.filter_by(number="1706").first()
@@ -513,7 +546,7 @@ def test_add_unlisted_item_appears_on_confirm_invoice_page_without_expected_qty(
     db.session.commit()
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     doc = ReceivingDocument.query.filter_by(number="1706").first()
@@ -543,7 +576,7 @@ def test_confirm_invoice_page_highlights_mismatch_with_expected_qty(db, client_l
     db.session.commit()
     client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
     )
     doc = ReceivingDocument.query.filter_by(number="1706").first()
@@ -584,7 +617,7 @@ def test_upload_matches_by_barcode_when_available_even_if_name_differs(db, clien
     )
     resp = client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (file_stream, "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (file_stream, "invoice.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
@@ -604,7 +637,7 @@ def test_upload_matches_by_name_case_insensitively(db, client_logged_in):
 
     resp = client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
@@ -704,7 +737,7 @@ def test_upload_matches_by_barcode_extracted_from_name_suffix(db, client_logged_
     )
     resp = client_logged_in.post(
         "/receiving/import-invoice",
-        data={"warehouse_id": warehouse.id, "file": (file_stream, "invoice.xlsx")},
+        data={"warehouse_id": warehouse.id, "order_number": "ЗП-1", "file": (file_stream, "invoice.xlsx")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
@@ -731,3 +764,50 @@ def test_parse_invoice_date_not_truncated_by_letter_ge_in_month_name():
     invoice = parse_invoice(buf)
 
     assert invoice.invoice_date_text == "4 августа 2026"
+
+
+def test_upload_requires_order_number(db, client_logged_in):
+    from wms.models import ReceivingDocument
+
+    warehouse = _make_warehouse()
+    resp = client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "order_number": "  ", "file": (_build_invoice_xlsx(), "invoice.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "Укажите № заказа" in resp.get_data(as_text=True)
+    assert ReceivingDocument.query.count() == 0
+
+    form = client_logged_in.get("/receiving/import-invoice").get_data(as_text=True)
+    assert 'name="order_number" id="orderNumberInput" class="form-control"' in form
+    assert "только для старого файла" in form
+
+
+def test_upload_uses_per_product_orders_from_new_invoice_format(db, client_logged_in):
+    warehouse = _make_warehouse()
+    items = [
+        Nomenclature(sku="НФ-00003575", barcode="8880000101", name="Товар 1", unit="шт"),
+        Nomenclature(sku="НФ-00003576", barcode="8880000102", name="Товар 2", unit="шт"),
+    ]
+    db.session.add_all(items)
+    db.session.commit()
+
+    file_stream = _build_invoice_xlsx(
+        rows=(
+            ("НФ-00003575", "Товар 1", 80, "Заказ поставщику 45 от 07.10.2026"),
+            ("НФ-00003576", "Товар 2", 30, "Заказ поставщику 46 от 08.10.2026"),
+        ),
+        with_order_column=True,
+    )
+    response = client_logged_in.post(
+        "/receiving/import-invoice",
+        data={"warehouse_id": warehouse.id, "order_number": "", "file": (file_stream, "3267.xlsx")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    doc = ReceivingDocument.query.filter_by(number="1706").one()
+    assert doc.order_number == "45, 46"
+    assert [line.order_number for line in doc.lines.order_by(ReceivingLine.id)] == ["45", "46"]

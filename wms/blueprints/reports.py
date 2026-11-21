@@ -1,6 +1,6 @@
 import statistics
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
 from flask_login import current_user
@@ -15,10 +15,15 @@ from ..models import (
     Nomenclature,
     OneCQuantityCheck,
     PlacementDocument,
+    PlacementLine,
     ProductCategory,
     ReceivingDocument,
     ReceivingLine,
+    User,
+    MVB_ROLES,
     Warehouse,
+    WorkEvent,
+    WorkPlan,
 )
 from ..utils.excel_io import (
     export_movement_to_excel,
@@ -29,6 +34,7 @@ from ..utils.excel_io import (
     timestamp_for_filename,
 )
 from ..utils.http import content_disposition
+from ..utils.work_log import work_day
 
 bp = Blueprint("reports", __name__)
 
@@ -522,3 +528,9 @@ def box_anomalies_report():
         threshold=threshold,
         boxes_by_nomenclature=boxes_by_nomenclature,
     )
+
+
+@bp.route("/employee-output")
+def employee_output_moved():
+    """Страница переехала в раздел «Производство» — старые ссылки ведут туда."""
+    return redirect(url_for("production.employee_output", **request.args))

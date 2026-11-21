@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Обмен с WB{% endblock %}
+{% block content %}
+<h3 class="mb-4">Обмен с WB</h3>
+<div class="row g-4">
+  <div class="col-md-7">
+    <div class="card p-3">
+      <h5>Токен WB API</h5>
+      <p class="text-muted small">
+        Создается в кабинете продавца: Профиль → Настройки → Доступ к API. Нужна категория
+        «Поставки»; для проверки приемки по коробам — персональный или сервисный токен.
+        Достаточно режима «Только на чтение» — WMS ничего не меняет на стороне WB.
+      </p>
+      <form method="post">
+        <label class="form-label" for="wbToken">Токен</label>
+        <div class="input-group mb-2">
+          <input type="password" name="token" id="wbToken" class="form-control" autocomplete="off"
+                 placeholder="{{ 'сохранен: …' ~ token_tail if has_token else 'вставьте токен' }}" required>
+          <button type="button" class="btn btn-outline-secondary" onclick="const f=document.getElementById('wbToken'); f.type = f.type === 'password' ? 'text' : 'password';">👁</button>
+        </div>
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+      </form>
+      {% if has_token %}
+        {% if info %}
+        <ul class="small mt-3 mb-2">
+          <li>Тип: <b>{{ info.type }}</b>{% if info.test %} (тестовый контур){% endif %}</li>
+          <li>Категории: {{ info.categories | join(', ') or '—' }}
+            {% if not info.has_supplies %}<span class="text-danger"> — нет «Поставок», проверка приемки работать не будет</span>{% endif %}</li>
+          <li>Доступ: {{ 'только чтение' if info.read_only else 'чтение и запись (для WMS хватило бы «только чтение»)' }}</li>
+          <li>Действует до: {{ (info.expires | msk).strftime('%d.%m.%Y') if info.expires else '—' }}</li>
+        </ul>
+        {% endif %}
+        <form method="post" action="{{ url_for('integration_wb.check') }}">
+          <button type="submit" class="btn btn-outline-secondary btn-sm">🔌 Проверить токен</button>
+        </form>
+      {% else %}
+        <p class="text-danger small mt-2 mb-0">Токен еще не сохранен — проверка приемки WB через API работать не будет.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
