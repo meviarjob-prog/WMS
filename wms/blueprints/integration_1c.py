@@ -181,6 +181,9 @@ def _movement_payload(doc):
         "date": (doc.completed_at or doc.created_at).isoformat(),
         "from_warehouse": _warehouse_name_for_1c(doc.from_warehouse),
         "to_warehouse": _to_warehouse_name_for_1c(doc),
+        # Передаем отдельно от комментария: обработка 1С
+        # записывает значение в реквизит документа «Номер заявки».
+        "marketplace_request_number": doc.marketplace_request_number or "",
         # Реальный склад-город WMS (например, "ОЗОН: Казань") — когда
         # to_warehouse выше подменен на общий "Товары в пути на
         # Фулфилмент" (см. _to_warehouse_name_for_1c), это единственное

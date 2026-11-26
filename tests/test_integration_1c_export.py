@@ -36,6 +36,14 @@ def test_one_c_processing_recalculates_total_and_confirms_return_rows():
     assert 'ИменаСкидокСтроки.Добавить("СуммаРучнойСкидки")' in source
     assert "Функция ПоставщикДокументаСовпадает(" in source
     assert "Возврат ИННСовпадает(" in source
+    assert "Процедура УстановитьПоставщикаИзWMS(" in source
+    assert source.count("УстановитьПоставщикаИзWMS(") == 2
+    assert "Функция УстановитьДоговорИзОснования(" in source
+    assert source.count("УстановитьДоговорИзОснования(") == 3
+    assert 'Имена.Добавить("ДоговорКонтрагента")' in source
+    assert '"заказа поставщику " + Строка(Заказ)' in source
+    assert "Цена из поступления не определена — используется цена из заказа" in source
+    assert "И ПоставщикДокументаСовпадает(\n\t\t\tВыборка.Ссылка" in source
     assert "Возвраты разных заказов должны выгружаться отдельными" in source
     assert 'ПолучитьСвойствоИлиПустойМассив(\n\t\t\t\tДокВозврата, "return_ids")' in source
     assert 'Тело.Вставить("supplier_return_ids_are_rows", Истина)' in source
@@ -258,10 +266,21 @@ def test_export_comment_includes_marketplace_request_number(db, client_logged_in
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     data = resp.get_json()
     movement = next(m for m in data["movements"] if m["number"] == "PER-BOX-1C-5")
+    assert movement["marketplace_request_number"] == "REQ-778"
     assert "(№ заявки МП: REQ-778)" in movement["comment"]
     # Номер перемещения уже есть в начале комментария — не дублируем его
     # еще раз в конце строки с заявкой.
     assert "REQ-778: PER-BOX-1C-5" not in movement["comment"]
+
+
+def test_one_c_processing_sets_marketplace_request_number_on_movement():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "integrations/1c/SyncWMS.bsl").read_text(encoding="utf-8")
+
+    assert "Процедура УстановитьНомерЗаявкиМаркетплейса(" in source
+    assert 'ИменаРеквизита.Добавить("НомерЗаявки")' in source
+    assert '"№ ЗАЯВКИ"' in source
+    assert 'ПолучитьСтроковоеСвойство(\n\t\t\tДанные,\n\t\t\t"marketplace_request_number")' in source
 
 
 def test_export_excludes_movement_without_marketplace_request_number(db, client_logged_in):
