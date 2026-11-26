@@ -5,11 +5,11 @@ from flask import g
 import pytest
 
 from wms.extensions import db
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from wms.models import (
     Box, MovementDocument, MovementLine, MvbBox, MvbClient, MvbOrder, MvbPallet, MvbPriceTier, MvbTrip,
-    MvbVehicle, MvbDestination, MvbOrderLine,
+    MvbVehicle, MvbDestination, MvbOrderLine, MvbPayment,
     User, Warehouse,
 )
 
@@ -1064,6 +1064,95 @@ def test_client_report_for_period(db, client):
     assert sheet["A1"].value == "Дата заявки" and sheet["B2"].value == order_a.number
     # другой период — пусто
     assert _report_rows(datetime(2020, 1, 1).date(), datetime(2020, 1, 31).date())[0] == []
+
+
+def test_order_payments_reduce_debt_and_are_visible(db, client):
+    staff = _user("payments-staff", "mvb_admin")
+    client_user = _user("payments-client", "mvb_client", _mvb_client("Клиент оплаты"))
+    _login(client, client_user)
+    order = _confirmed_order(client, box_count="2")
+    order.pickup_cost = 100
+    order.sc_cost = 200
+    db.session.commit()
+
+    _login(client, staff)
+    response = client.post(
+        f"/mvb/orders/{order.id}/payments",
+        data={"paid_on": "2026-11-26", "amount": "120,50", "comment": "Перевод"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    db.session.refresh(order)
+    assert order.paid_amount == 120.5
+    assert order.debt_amount == 179.5
+    html = response.get_data(as_text=True)
+    assert "Оплаты по заявке" in html and "120.50" in html and "179.50" in html
+
+    _login(client, client_user)
+    client.post(
+        f"/mvb/orders/{order.id}/payments",
+        data={"paid_on": "2026-11-26", "amount": "10"},
+    )
+    assert MvbPayment.query.filter_by(order_id=order.id).count() == 1
+
+
+def test_report_includes_payments_and_total_client_debt(db, client):
+    staff = _user("balance-staff", "mvb_admin")
+    client_user = _user("balance-client", "mvb_client", _mvb_client("Клиент взаиморасчетов"))
+    _login(client, client_user)
+    order = _confirmed_order(client, box_count="1")
+    order.pickup_cost = 100
+    order.sc_cost = 200
+    db.session.add(MvbPayment(order=order, amount=125, paid_on=date.today(), created_by_id=staff.id))
+    db.session.commit()
+
+    _login(client, staff)
+    today = date.today()
+    html = client.get(f"/mvb/reports?date_from={today}&date_to={today}").get_data(as_text=True)
+    assert "Взаиморасчеты с клиентами" in html
+    assert "Клиент взаиморасчетов" in html
+    assert "175.00" in html
+
+    from wms.blueprints.mvb import _client_balance_rows, _report_rows
+
+    rows, totals, _ = _report_rows(today, today)
+    row = next(r for r in rows if r["client"].id == order.client_id)
+    assert row["paid"] == 125 and row["debt_change"] == 175
+    balances, balance_totals = _client_balance_rows(today)
+    balance = next(r for r in balances if r["client"].id == order.client_id)
+    assert balance["accrued"] == 300 and balance["paid"] == 125 and balance["debt"] == 175
+    assert balance_totals["debt"] == 175
+
+    import io
+    from openpyxl import load_workbook
+
+    xlsx = client.get(f"/mvb/reports.xlsx?date_from={today}&date_to={today}")
+    workbook = load_workbook(io.BytesIO(xlsx.data))
+    assert "Взаиморасчеты" in workbook.sheetnames
+    assert workbook["Взаиморасчеты"]["E2"].value == 175
+
+
+def test_pickup_orders_have_column_filters(db, client):
+    staff = _user("filters-staff", "mvb_admin")
+    client_user = _user("filters-client", "mvb_client", _mvb_client("Клиент фильтров"))
+    _login(client, client_user)
+    first = _confirmed_order(client, destination="Коледино", box_count="2", planned_date="2026-10-05")
+    second = _confirmed_order(client, destination="Тула", box_count="8", planned_date="2026-10-07")
+    first.pickup_cost = first.sc_cost = 100
+    second.pickup_cost = second.sc_cost = 100
+    db.session.add(MvbPayment(order=first, amount=200, paid_on=date.today(), created_by_id=staff.id))
+    db.session.commit()
+
+    _login(client, staff)
+    html = client.get(f"/mvb/orders?method=pickup&number={first.number}").get_data(as_text=True)
+    assert f">{first.number}</a>" in html and f">{second.number}</a>" not in html
+    assert 'name="destination"' in html and 'name="slot_date"' in html and 'name="boxes_min"' in html
+
+    html = client.get("/mvb/orders?method=pickup&destination=Тула&boxes_min=5").get_data(as_text=True)
+    assert f">{second.number}</a>" in html and f">{first.number}</a>" not in html
+
+    html = client.get("/mvb/orders?method=pickup&settlement=paid").get_data(as_text=True)
+    assert f">{first.number}</a>" in html and f">{second.number}</a>" not in html
 
 
 def test_driver_report_counts_boxes_per_order_per_driver(db, client):

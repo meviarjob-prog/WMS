@@ -44,6 +44,44 @@
   <button class="btn btn-outline-secondary" name="action" value="recalc">Пересчитать по прайсу</button>
 </form>
 {% endif %}
+{% if order.status == 'confirmed' and not order.client.is_internal and (mvb_is_operator or mvb_is_client) %}
+<div class="card p-3 mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <h5 class="mb-0">Оплаты по заявке</h5>
+    <div class="d-flex flex-wrap gap-3">
+      <span>Стоимость: <b>{{ '%.2f'|format(order.total_cost) if order.total_cost is not none else '—' }} ₽</b></span>
+      <span>Оплачено: <b class="text-success">{{ '%.2f'|format(order.paid_amount) }} ₽</b></span>
+      {% if order.debt_amount is not none %}<span>Долг: <b class="{{ 'text-danger' if order.debt_amount > 0 else 'text-success' }}">{{ '%.2f'|format(order.debt_amount) }} ₽</b></span>{% endif %}
+    </div>
+  </div>
+  {% if mvb_is_operator %}
+  <form method="post" action="{{ url_for('mvb.order_payment_add', order_id=order.id) }}" class="row g-2 align-items-end mb-3">
+    <div class="col-sm-3"><label class="form-label small mb-0">Дата оплаты</label><input type="date" name="paid_on" value="{{ today.isoformat() }}" class="form-control" required></div>
+    <div class="col-sm-3"><label class="form-label small mb-0">Сумма, ₽</label><input name="amount" inputmode="decimal" class="form-control" required placeholder="0,00"></div>
+    <div class="col-sm-4"><label class="form-label small mb-0">Комментарий</label><input name="comment" class="form-control" placeholder="Счёт, способ оплаты"></div>
+    <div class="col-sm-2"><button class="btn btn-success w-100">Добавить</button></div>
+  </form>
+  {% endif %}
+  <div class="table-responsive">
+    <table class="table table-sm mb-0">
+      <thead><tr><th>Дата</th><th class="text-end">Сумма, ₽</th><th>Комментарий</th><th>Внес</th>{% if mvb_is_operator %}<th></th>{% endif %}</tr></thead>
+      <tbody>
+      {% for payment in order.payments %}
+        <tr>
+          <td>{{ payment.paid_on.strftime('%d.%m.%Y') }}</td>
+          <td class="text-end fw-bold text-success">{{ '%.2f'|format(payment.amount) }}</td>
+          <td>{{ payment.comment or '—' }}</td>
+          <td>{{ payment.created_by.display_name() if payment.created_by else '—' }}</td>
+          {% if mvb_is_operator %}<td class="text-end"><form method="post" action="{{ url_for('mvb.order_payment_delete', order_id=order.id, payment_id=payment.id) }}" onsubmit="return confirm('Удалить оплату {{ '%.2f'|format(payment.amount) }} ₽?')"><button class="btn btn-sm btn-outline-danger">Удалить</button></form></td>{% endif %}
+        </tr>
+      {% else %}
+        <tr><td colspan="{{ 5 if mvb_is_operator else 4 }}" class="text-muted">Оплат пока нет</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 {% if order.client.is_internal and (order.wms_movement or order.lines|selectattr('wms_movement')|list) %}
 <div class="alert alert-secondary">Свои короба из WMS — сканируются по прежним этикеткам WMS.</div>
 {% endif %}

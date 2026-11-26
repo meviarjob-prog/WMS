@@ -1946,6 +1946,10 @@ class MvbOrder(db.Model):
     boxes = db.relationship(
         "MvbBox", back_populates="order", order_by="MvbBox.seq", cascade="all, delete-orphan"
     )
+    payments = db.relationship(
+        "MvbPayment", back_populates="order", order_by="MvbPayment.paid_on.desc(), MvbPayment.id.desc()",
+        cascade="all, delete-orphan",
+    )
 
     @property
     def marketplace_label(self):
@@ -1980,6 +1984,16 @@ class MvbOrder(db.Model):
             return None
         return round((self.pickup_cost or 0) + (self.sc_cost or 0) + (self.pallet_cost or 0), 2)
 
+    @property
+    def paid_amount(self):
+        return round(sum(payment.amount or 0 for payment in self.payments), 2)
+
+    @property
+    def debt_amount(self):
+        if self.total_cost is None:
+            return None
+        return round(self.total_cost - self.paid_amount, 2)
+
     def status_counts(self):
         counts = {code: 0 for code, _ in MVB_BOX_STATUSES}
         for box in self.boxes:
@@ -1999,6 +2013,23 @@ class MvbOrder(db.Model):
             return MVB_BOX_STATUSES[0][1]
         reached = sum(1 for b in self.boxes if MVB_BOX_STATUS_ORDER.get(b.status, 0) >= furthest)
         return f"{MVB_BOX_STATUSES[furthest][1]}: {reached} из {len(self.boxes)}"
+
+
+class MvbPayment(db.Model):
+    """Оплата клиента, привязанная к конкретной заявке МВБ."""
+
+    __tablename__ = "mvb_payments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey("mvb_orders.id"), nullable=False, index=True)
+    amount = db.Column(db.Float, nullable=False)
+    paid_on = db.Column(db.Date, nullable=False, default=date.today, index=True)
+    comment = db.Column(db.String(500))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    order = db.relationship("MvbOrder", back_populates="payments")
+    created_by = db.relationship("User", foreign_keys=[created_by_id])
 
 
 class MvbOrderLine(db.Model):

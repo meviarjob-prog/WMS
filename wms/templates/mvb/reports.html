@@ -9,7 +9,7 @@
   <button class="btn btn-outline-success">Показать</button>
   <a class="btn btn-outline-secondary" href="{{ url_for('mvb.reports_xlsx', date_from=date_from.isoformat(), date_to=date_to.isoformat()) }}">⬇ Excel</a>
 </form>
-<p class="text-muted small">Заявки, стоимость и короба по этапам — по заявкам, оформленным в периоде. «Отправлено на СЦ», «Сдано», «Не сдано» — короба, отправленные рейсами в периоде.</p>
+<p class="text-muted small">Заявки, начисления и короба по этапам — по заявкам, оформленным в периоде. Оплаты — по дате оплаты в периоде. «Изменение долга» = начислено минус оплачено. Общий долг на конец периода показан отдельно ниже.</p>
 <div class="table-responsive">
 <table class="table table-sm align-middle">
   <thead><tr><th>Клиент</th>{% for key, label in columns %}<th class="text-end">{{ label }}</th>{% endfor %}</tr></thead>
@@ -17,15 +17,29 @@
   {% for r in rows %}
     <tr>
       <td><a href="{{ url_for('mvb.orders', client_id=r.client.id) }}">{{ r.client.name }}</a></td>
-      {% for key, label in columns %}<td class="text-end {{ 'fw-bold' if key in ('shipped', 'total') }}">{{ num(r[key], key.endswith('cost') or key == 'total') }}</td>{% endfor %}
+      {% for key, label in columns %}<td class="text-end {{ 'fw-bold' if key in ('shipped', 'total', 'paid', 'debt_change') }}">{{ num(r[key], key.endswith('cost') or key in ('total', 'paid', 'debt_change')) }}</td>{% endfor %}
     </tr>
   {% else %}
     <tr><td colspan="{{ columns|length + 1 }}" class="text-muted">За период данных нет</td></tr>
   {% endfor %}
   </tbody>
   {% if rows %}
-  <tfoot><tr class="fw-bold"><td>Итого</td>{% for key, label in columns %}<td class="text-end">{{ num(totals[key], key.endswith('cost') or key == 'total') }}</td>{% endfor %}</tr></tfoot>
+  <tfoot><tr class="fw-bold"><td>Итого</td>{% for key, label in columns %}<td class="text-end">{{ num(totals[key], key.endswith('cost') or key in ('total', 'paid', 'debt_change')) }}</td>{% endfor %}</tr></tfoot>
   {% endif %}
+</table>
+</div>
+
+<h5 class="mt-4">Взаиморасчеты с клиентами на {{ date_to.strftime('%d.%m.%Y') }}</h5>
+<p class="text-muted small">Все оформленные заявки и все внесённые оплаты по ним с начала работы по конец выбранного периода.</p>
+<div class="table-responsive">
+<table class="table table-sm align-middle" style="max-width:850px">
+  <thead><tr><th>Клиент</th><th class="text-end">Начислено, ₽</th><th class="text-end">Оплачено, ₽</th><th class="text-end">Долг, ₽</th></tr></thead>
+  <tbody>
+  {% for r in balance_rows %}
+    <tr><td><a href="{{ url_for('mvb.orders', client_id=r.client.id) }}">{{ r.client.name }}</a></td><td class="text-end">{{ num(r.accrued, True) }}</td><td class="text-end text-success">{{ num(r.paid, True) }}</td><td class="text-end fw-bold {{ 'text-danger' if r.debt > 0 else 'text-success' }}">{{ num(r.debt, True) }}</td></tr>
+  {% else %}<tr><td colspan="4" class="text-muted">Взаиморасчетов пока нет</td></tr>{% endfor %}
+  </tbody>
+  {% if balance_rows %}<tfoot><tr class="fw-bold"><td>Общий итог</td><td class="text-end">{{ num(balance_totals.accrued, True) }}</td><td class="text-end text-success">{{ num(balance_totals.paid, True) }}</td><td class="text-end {{ 'text-danger' if balance_totals.debt > 0 else 'text-success' }}">{{ num(balance_totals.debt, True) }}</td></tr></tfoot>{% endif %}
 </table>
 </div>
 
@@ -40,7 +54,7 @@
       <td><a href="{{ url_for('mvb.order_detail', order_id=r.order.id) }}">{{ r.order.number }}</a></td>
       <td>{{ r.order.client.name }}</td>
       <td>{{ r.order.directions_label }}</td>
-      {% for key, label in order_columns %}<td class="text-end">{% if key == 'total' %}{{ num(r.total, True) if r.total is not none else '—' }}{% else %}{{ r[key] }}{% endif %}</td>{% endfor %}
+      {% for key, label in order_columns %}<td class="text-end">{% if key in ('total', 'paid', 'debt') %}{{ num(r[key], True) if r[key] is not none else '—' }}{% else %}{{ r[key] }}{% endif %}</td>{% endfor %}
     </tr>
   {% else %}
     <tr><td colspan="{{ order_columns|length + 4 }}" class="text-muted">За период заявок нет</td></tr>

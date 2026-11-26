@@ -21,11 +21,12 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_user, logout_user
+from sqlalchemy.orm import selectinload
 
 from ..extensions import db
 from ..models import (
     MVB_BOX_STATUS_LABELS, MVB_BOX_STATUS_ORDER, MVB_BOX_STATUSES, MVB_DELIVERY_METHODS,
-    MVB_DROPOFF_CITIES, MVB_MARKETPLACES, MVB_ROLES, MvbCity, MvbDestination, MvbOrderLine, MVB_TRIP_STATUSES, MvbBox, MvbBoxEvent, MvbClient, MvbOrder,
+    MVB_DROPOFF_CITIES, MVB_MARKETPLACES, MVB_ROLES, MvbCity, MvbDestination, MvbOrderLine, MVB_TRIP_STATUSES, MvbBox, MvbBoxEvent, MvbClient, MvbOrder, MvbPayment,
     AppSetting, MVB_PRICE_KINDS, MvbPallet, MvbPickupZone, MvbPriceTier, MvbTrip, MvbTripStop, MvbVehicle, User,
 )
 from ..utils.http import content_disposition
@@ -547,6 +548,40 @@ def orders():
     client_id = request.args.get("client_id", type=int)
     if client_id and not _is_client():
         query = query.filter(MvbOrder.client_id == client_id)
+    filters = {
+        "number": request.args.get("number", "").strip(),
+        "destination": request.args.get("destination", "").strip(),
+        "slot_date": request.args.get("slot_date", "").strip(),
+        "planned_date": request.args.get("planned_date", "").strip(),
+        "boxes_min": request.args.get("boxes_min", "").strip(),
+        "boxes_max": request.args.get("boxes_max", "").strip(),
+        "settlement": request.args.get("settlement", "").strip(),
+        "driver_id": request.args.get("driver_id", "").strip(),
+    }
+    if filters["number"]:
+        query = query.filter(MvbOrder.number.ilike(f"%{filters['number']}%"))
+    if filters["destination"]:
+        like = f"%{filters['destination']}%"
+        query = query.filter(db.or_(
+            MvbOrder.destination.ilike(like),
+            MvbOrder.lines.any(db.or_(
+                MvbOrderLine.destination.ilike(like), MvbOrderLine.marketplace.ilike(like),
+            )),
+        ))
+    for key, column in (("slot_date", MvbOrder.slot_date), ("planned_date", MvbOrder.planned_date)):
+        if filters[key]:
+            try:
+                query = query.filter(column == date.fromisoformat(filters[key]))
+            except ValueError:
+                filters[key] = ""
+    if filters["boxes_min"].isdigit():
+        query = query.filter(MvbOrder.box_count >= int(filters["boxes_min"]))
+    if filters["boxes_max"].isdigit():
+        query = query.filter(MvbOrder.box_count <= int(filters["boxes_max"]))
+    if filters["driver_id"] == "none":
+        query = query.filter(MvbOrder.driver_id.is_(None))
+    elif filters["driver_id"].isdigit():
+        query = query.filter(MvbOrder.driver_id == int(filters["driver_id"]))
     # Тип забора — вкладки «Забор ТК» и «Самопривоз» (у сотрудников; по
     # умолчанию «Забор ТК»), клиент видит все свои заявки.
     method = request.args.get("method", "")
@@ -563,7 +598,14 @@ def orders():
     )
     if status == "need_driver":
         query = query.filter(*need_driver_filter)
-    items = query.order_by(MvbOrder.created_at.desc()).limit(300).all()
+    items = query.options(selectinload(MvbOrder.payments)).order_by(MvbOrder.created_at.desc()).limit(1000).all()
+    if filters["settlement"] == "unpaid":
+        items = [o for o in items if o.paid_amount <= 0 and (o.debt_amount or 0) > 0]
+    elif filters["settlement"] == "partial":
+        items = [o for o in items if o.paid_amount > 0 and (o.debt_amount or 0) > 0]
+    elif filters["settlement"] == "paid":
+        items = [o for o in items if o.total_cost is not None and (o.debt_amount or 0) <= 0]
+    items = items[:300]
     clients = [] if _is_client() else MvbClient.query.order_by(MvbClient.name).all()
     need_driver = 0 if _is_client() else MvbOrder.query.filter(*need_driver_filter).count()
     # Раздел "Из WMS" был отдельной страницей — теперь кандидаты на передачу в
@@ -574,7 +616,7 @@ def orders():
         "mvb/orders.html", orders=items, clients=clients, status=status, client_id=client_id, method=method,
         method_counts=method_counts,
         need_driver=need_driver, drivers=_active_drivers() if _is_staff() else [],
-        wms_rows=wms_rows,
+        wms_rows=wms_rows, filters=filters,
     )
 
 
@@ -754,6 +796,7 @@ def order_detail(order_id):
     drivers = _active_drivers() if _is_staff() else []
     return render_template(
         "mvb/order_detail.html", order=order, counts=order.status_counts(), drivers=drivers,
+        today=(datetime.utcnow() + MOSCOW_OFFSET).date(),
     )
 
 
@@ -3184,6 +3227,50 @@ def order_costs(order_id):
     return redirect(url_for("mvb.order_detail", order_id=order.id))
 
 
+@bp.route("/orders/<int:order_id>/payments", methods=["POST"])
+def order_payment_add(order_id):
+    """Оператор фиксирует оплату по конкретной заявке клиента."""
+    if not _require_operator():
+        return redirect(url_for("mvb.index"))
+    order = _get_order_or_404(order_id)
+    try:
+        amount = _parse_money(request.form.get("amount"))
+    except ValueError:
+        amount = None
+    try:
+        paid_on = date.fromisoformat(request.form.get("paid_on", "").strip())
+    except ValueError:
+        paid_on = None
+    if amount is None or amount <= 0:
+        flash("Укажите сумму оплаты больше нуля", "danger")
+    elif paid_on is None:
+        flash("Укажите дату оплаты", "danger")
+    else:
+        db.session.add(MvbPayment(
+            order=order,
+            amount=amount,
+            paid_on=paid_on,
+            comment=request.form.get("comment", "").strip() or None,
+            created_by_id=current_user.id,
+        ))
+        db.session.commit()
+        flash(f"Оплата {amount:.2f} ₽ добавлена к заявке {order.number}", "success")
+    return redirect(url_for("mvb.order_detail", order_id=order.id))
+
+
+@bp.route("/orders/<int:order_id>/payments/<int:payment_id>/delete", methods=["POST"])
+def order_payment_delete(order_id, payment_id):
+    if not _require_operator():
+        return redirect(url_for("mvb.index"))
+    order = _get_order_or_404(order_id)
+    payment = MvbPayment.query.filter_by(id=payment_id, order_id=order.id).first_or_404()
+    amount = payment.amount
+    db.session.delete(payment)
+    db.session.commit()
+    flash(f"Оплата {amount:.2f} ₽ удалена", "success")
+    return redirect(url_for("mvb.order_detail", order_id=order.id))
+
+
 @bp.route("/guide")
 def guide():
     """Обучение МВБ по ролям — для всех вошедших пользователей МВБ."""
@@ -3468,13 +3555,16 @@ def _report_rows(date_from, date_to):
             "client": client, "orders": 0, "boxes": 0, "picked_up": 0, "received": 0,
             "shipped": 0, "delivered": 0, "not_delivered": 0,
             "pickup_cost": 0.0, "sc_cost": 0.0, "pallet_cost": 0.0, "total": 0.0,
+            "paid": 0.0, "debt_change": 0.0,
         })
 
     orders = MvbOrder.query.filter(
         MvbOrder.status == "confirmed", MvbOrder.confirmed_at >= start, MvbOrder.confirmed_at <= end,
-    ).order_by(MvbOrder.created_at, MvbOrder.id).all()
+    ).options(selectinload(MvbOrder.payments)).order_by(MvbOrder.created_at, MvbOrder.id).all()
     order_rows = []
     for order in orders:
+        paid_as_of = round(sum(p.amount or 0 for p in order.payments if p.paid_on <= date_to), 2)
+        total_cost = order.total_cost
         order_rows.append({
             "order": order, "date": order.created_at + MOSCOW_OFFSET if order.created_at else None,
             "boxes": len(order.boxes),
@@ -3483,7 +3573,8 @@ def _report_rows(date_from, date_to):
             "shipped": sum(1 for b in order.boxes if b.shipped_at),
             "delivered": sum(1 for b in order.boxes if b.status == "delivered"),
             "not_delivered": sum(1 for b in order.boxes if b.status == "not_delivered"),
-            "total": order.total_cost,
+            "total": total_cost, "paid": paid_as_of,
+            "debt": round((total_cost or 0) - paid_as_of, 2) if total_cost is not None else None,
         })
         row = row_for(order.client)
         row["orders"] += 1
@@ -3507,12 +3598,55 @@ def _report_rows(date_from, date_to):
             row["delivered"] += 1
         elif box.status == "not_delivered":
             row["not_delivered"] += 1
+    payments = (
+        MvbPayment.query.join(MvbOrder)
+        .filter(MvbPayment.paid_on >= date_from, MvbPayment.paid_on <= date_to)
+        .all()
+    )
+    for payment in payments:
+        row_for(payment.order.client)["paid"] += payment.amount or 0
+    for row in rows.values():
+        row["paid"] = round(row["paid"], 2)
+        row["debt_change"] = round(row["total"] - row["paid"], 2)
     result = sorted(rows.values(), key=lambda r: (-r["shipped"], -r["boxes"], r["client"].name))
     totals = {key: sum(r[key] for r in result) for key in (
         "orders", "boxes", "picked_up", "received", "shipped", "delivered", "not_delivered",
-        "pickup_cost", "sc_cost", "pallet_cost", "total",
+        "pickup_cost", "sc_cost", "pallet_cost", "total", "paid", "debt_change",
     )}
     return result, totals, order_rows
+
+
+def _client_balance_rows(date_to):
+    """Общий взаиморасчет по клиентам на конец выбранного периода."""
+    from datetime import time
+
+    end = datetime.combine(date_to, time.max) - MOSCOW_OFFSET
+    rows = {}
+
+    def row_for(client):
+        return rows.setdefault(client.id, {
+            "client": client, "accrued": 0.0, "paid": 0.0, "debt": 0.0,
+        })
+
+    for order in MvbOrder.query.filter(
+        MvbOrder.status == "confirmed", MvbOrder.confirmed_at <= end,
+    ).all():
+        if order.total_cost is not None:
+            row_for(order.client)["accrued"] += order.total_cost
+    for payment in MvbPayment.query.filter(MvbPayment.paid_on <= date_to).all():
+        row_for(payment.order.client)["paid"] += payment.amount or 0
+    result = []
+    for row in rows.values():
+        row["accrued"] = round(row["accrued"], 2)
+        row["paid"] = round(row["paid"], 2)
+        row["debt"] = round(row["accrued"] - row["paid"], 2)
+        result.append(row)
+    result.sort(key=lambda r: (-r["debt"], r["client"].name))
+    totals = {
+        key: round(sum(row[key] for row in result), 2)
+        for key in ("accrued", "paid", "debt")
+    }
+    return result, totals
 
 
 def _driver_report_rows(date_from, date_to):
@@ -3557,7 +3691,8 @@ REPORT_COLUMNS = [
     ("orders", "Заявок"), ("boxes", "Коробов в заявках"), ("picked_up", "Забрано"),
     ("received", "Принято на складе"), ("shipped", "Отправлено на СЦ"), ("delivered", "Сдано на СЦ"),
     ("not_delivered", "Не сдано"), ("pickup_cost", "Забор, руб."), ("sc_cost", "Отправка на СЦ, руб."),
-    ("pallet_cost", "Палетирование, руб."), ("total", "Итого, руб."),
+    ("pallet_cost", "Палетирование, руб."), ("total", "Начислено, руб."),
+    ("paid", "Оплачено, руб."), ("debt_change", "Изменение долга, руб."),
 ]
 
 
@@ -3565,7 +3700,7 @@ REPORT_COLUMNS = [
 REPORT_ORDER_COLUMNS = [
     ("boxes", "Коробов"), ("picked_up", "Забрано"), ("received", "Принято на складе"),
     ("shipped", "Отправлено на СЦ"), ("delivered", "Сдано на СЦ"), ("not_delivered", "Не сдано"),
-    ("total", "Стоимость, руб."),
+    ("total", "Стоимость, руб."), ("paid", "Оплачено, руб."), ("debt", "Долг, руб."),
 ]
 
 
@@ -3575,12 +3710,14 @@ def reports():
         return redirect(url_for("mvb.index"))
     date_from, date_to = _report_period()
     rows, totals, order_rows = _report_rows(date_from, date_to)
+    balance_rows, balance_totals = _client_balance_rows(date_to)
     # Отчет по водителям — тот же период, та же страница "Отчет" (см. чат).
     driver_rows, driver_totals = _driver_report_rows(date_from, date_to)
     return render_template(
         "mvb/reports.html", rows=rows, totals=totals, date_from=date_from, date_to=date_to,
         columns=REPORT_COLUMNS, order_rows=order_rows, order_columns=REPORT_ORDER_COLUMNS,
         driver_rows=driver_rows, driver_totals=driver_totals,
+        balance_rows=balance_rows, balance_totals=balance_totals,
     )
 
 
@@ -3595,6 +3732,7 @@ def reports_xlsx():
 
     date_from, date_to = _report_period()
     rows, totals, order_rows = _report_rows(date_from, date_to)
+    balance_rows, balance_totals = _client_balance_rows(date_to)
     wb = Workbook()
     ws = wb.active
     ws.title = "По клиентам"
@@ -3624,6 +3762,20 @@ def reports_xlsx():
         ws.cell(row=ws.max_row, column=1).number_format = "DD.MM.YYYY HH:MM"
     for col, width in zip("ABCD", (17, 14, 28, 44)):
         ws.column_dimensions[col].width = width
+
+    ws = wb.create_sheet("Взаиморасчеты")
+    ws.append(["Клиент", "ИНН", "Начислено, руб.", "Оплачено, руб.", "Долг, руб."])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for row in balance_rows:
+        ws.append([row["client"].name, row["client"].inn or "", row["accrued"], row["paid"], row["debt"]])
+    ws.append(["Итого", "", balance_totals["accrued"], balance_totals["paid"], balance_totals["debt"]])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 18
+    for col in "CDE":
+        ws.column_dimensions[col].width = 18
 
     driver_rows, driver_totals = _driver_report_rows(date_from, date_to)
     ws = wb.create_sheet("По водителям")

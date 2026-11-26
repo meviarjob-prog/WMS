@@ -71,7 +71,7 @@
   {% endfor %}
 </ul>
 {% endif %}
-<form class="row g-2 mb-3" method="get">
+<form id="orders-column-filters" class="row g-2 mb-3" method="get">
   <div class="col-auto">
     <select name="status" class="form-select" onchange="this.form.submit()">
       <option value="">Все статусы</option>
@@ -90,6 +90,8 @@
     </select>
   </div>
   {% endif %}
+  <div class="col-auto"><button class="btn btn-outline-success">Применить фильтры</button></div>
+  <div class="col-auto"><a class="btn btn-outline-secondary" href="{{ url_for('mvb.orders', method=method or None) }}">Сбросить</a></div>
 </form>
 {% if mvb_can_manage and orders %}
 <form id="bulk-delete-orders" method="post" action="{{ url_for('mvb.orders_delete_selected') }}" class="mb-3" onsubmit="return confirm('Удалить выбранные заявки вместе с коробами и историей без возможности восстановления?')">
@@ -115,6 +117,7 @@
         <span>{% if o.status == 'confirmed' and o.lines|selectattr('pass_trip')|map(attribute='pass_trip')|selectattr('pass_ready')|list %}🚚 Данные водителя для пропуска есть{% endif %}</span>
         {% if o.total_cost is not none %}<b>{{ '%.2f'|format(o.total_cost) }} ₽</b>{% endif %}
       </div>
+      {% if o.total_cost is not none %}<div class="small">Оплачено: <b class="text-success">{{ '%.2f'|format(o.paid_amount) }} ₽</b> · долг: <b class="{{ 'text-danger' if o.debt_amount > 0 else 'text-success' }}">{{ '%.2f'|format(o.debt_amount) }} ₽</b></div>{% endif %}
     </a>
     {% if drivers and o.status == 'confirmed' and o.delivery_method == 'pickup' %}
     <form method="post" action="{{ url_for('mvb.order_assign_driver', order_id=o.id) }}" class="d-flex gap-1 px-3 pb-3 js-assign">
@@ -136,7 +139,21 @@
   <thead><tr>
     {% if mvb_can_manage %}<th><input class="form-check-input" type="checkbox" title="Выбрать все" onchange="document.querySelectorAll('input[form=bulk-delete-orders][name=order_id]').forEach(x => x.checked=this.checked)"></th>{% endif %}
     <th>Номер</th>{% if not mvb_is_client %}<th>Клиент</th>{% endif %}<th>Куда</th><th>Слот на СЦ</th><th>Способ</th>
-    <th>Дата забора</th><th class="text-end">Коробов</th><th class="text-end">Стоимость, ₽</th><th>Статус</th>{% if drivers %}<th>Водитель</th>{% endif %}
+    <th>Дата забора</th><th class="text-end">Коробов</th><th class="text-end">Стоимость, ₽</th><th class="text-end">Оплачено, ₽</th><th class="text-end">Долг, ₽</th><th>Статус</th>{% if drivers %}<th>Водитель</th>{% endif %}
+  </tr>
+  <tr class="table-light">
+    {% if mvb_can_manage %}<th></th>{% endif %}
+    <th><input form="orders-column-filters" name="number" value="{{ filters.number }}" class="form-control form-control-sm" placeholder="Номер"></th>
+    {% if not mvb_is_client %}<th class="small text-muted">выше</th>{% endif %}
+    <th><input form="orders-column-filters" name="destination" value="{{ filters.destination }}" class="form-control form-control-sm" placeholder="Направление"></th>
+    <th><input form="orders-column-filters" type="date" name="slot_date" value="{{ filters.slot_date }}" class="form-control form-control-sm"></th>
+    <th></th>
+    <th><input form="orders-column-filters" type="date" name="planned_date" value="{{ filters.planned_date }}" class="form-control form-control-sm"></th>
+    <th><div class="d-flex gap-1"><input form="orders-column-filters" type="number" min="0" name="boxes_min" value="{{ filters.boxes_min }}" class="form-control form-control-sm" placeholder="от"><input form="orders-column-filters" type="number" min="0" name="boxes_max" value="{{ filters.boxes_max }}" class="form-control form-control-sm" placeholder="до"></div></th>
+    <th></th><th></th>
+    <th><select form="orders-column-filters" name="settlement" class="form-select form-select-sm"><option value="">Все</option><option value="unpaid" {{ 'selected' if filters.settlement == 'unpaid' }}>Не оплачено</option><option value="partial" {{ 'selected' if filters.settlement == 'partial' }}>Частично</option><option value="paid" {{ 'selected' if filters.settlement == 'paid' }}>Оплачено</option></select></th>
+    <th class="small text-muted">выше</th>
+    {% if drivers %}<th><select form="orders-column-filters" name="driver_id" class="form-select form-select-sm"><option value="">Все</option><option value="none" {{ 'selected' if filters.driver_id == 'none' }}>Не назначен</option>{% for d in drivers %}<option value="{{ d.id }}" {{ 'selected' if filters.driver_id == d.id|string }}>{{ d.display_name() }}</option>{% endfor %}</select></th>{% endif %}
   </tr></thead>
   <tbody>
   {% for o in orders %}
@@ -150,6 +167,8 @@
       <td>{{ o.planned_date.strftime('%d.%m.%Y') if o.planned_date else '—' }}{% if o.time_from %} {{ o.time_from }}{% if o.time_to %}–{{ o.time_to }}{% endif %}{% endif %}</td>
       <td class="text-end">{{ o.box_count }}</td>
       <td class="text-end">{{ '%.2f'|format(o.total_cost) if o.total_cost is not none else '—' }}</td>
+      <td class="text-end text-success">{{ '%.2f'|format(o.paid_amount) if o.total_cost is not none else '—' }}</td>
+      <td class="text-end {{ 'text-danger fw-bold' if o.debt_amount is not none and o.debt_amount > 0 else 'text-success' }}">{{ '%.2f'|format(o.debt_amount) if o.debt_amount is not none else '—' }}</td>
       <td>{{ o.progress_label() }}</td>
       {% if drivers %}
       <td>
@@ -167,7 +186,7 @@
       {% endif %}
     </tr>
   {% else %}
-    <tr><td colspan="11" class="text-muted text-center py-4">Заявок пока нет</td></tr>
+    <tr><td colspan="13" class="text-muted text-center py-4">Заявок пока нет</td></tr>
   {% endfor %}
   </tbody>
 </table>
