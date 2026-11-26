@@ -87,6 +87,7 @@ def test_demo_users_log_in_with_demo_password_and_banner_is_shown(demo_app):
     login_html = client.get("/login").get_data(as_text=True)
     assert "Логин: <code>admin</code>" in login_html
     assert "Пароль: <code>demo</code>" in login_html
+    assert "МВБ Логистика" not in login_html
     resp = client.post("/login", data={"username": "admin", "password": DEMO_PASSWORD}, follow_redirects=True)
     html = resp.get_data(as_text=True)
     assert resp.status_code == 200
