@@ -24,6 +24,13 @@
   {% endwith %}
 
   <div class="card p-4">
+    {% if demo_mode %}
+      <div class="alert alert-warning py-2">
+        <strong>Демо-версия</strong><br>
+        Логин: <code>admin</code> · Пароль: <code>demo</code><br>
+        <span class="small">Все склады, товары и документы вымышлены.</span>
+      </div>
+    {% endif %}
     <form method="post">
       <div class="mb-3">
         <label class="form-label">Логин</label>

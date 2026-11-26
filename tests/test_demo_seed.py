@@ -16,6 +16,7 @@ from wms.models import (
     ShipmentPlan,
     ShipmentPlanCityDeadline,
     User,
+    Warehouse,
 )
 
 
@@ -50,6 +51,15 @@ def test_seed_populates_demo_database(demo_app):
         assert ShipmentPlan.query.count() == 2
         assert ShipmentPlanCityDeadline.query.count() > 0
         assert ProductionRecord.query.count() > 0
+        assert [item.name for item in Nomenclature.query.order_by(Nomenclature.id)] == [
+            f"Товар {index}" for index in range(1, 19)
+        ]
+        warehouse_names = {warehouse.name for warehouse in Warehouse.query.all()}
+        assert {"Склад 1", "Склад 2", "Склад 3"} <= warehouse_names
+        assert all(
+            name.startswith("Склад ") or "Направление " in name
+            for name in warehouse_names
+        )
 
         statuses = {doc.status for doc in MovementDocument.query.all()}
         assert {"draft", "completed"} <= statuses
@@ -74,6 +84,9 @@ def test_demo_users_log_in_with_demo_password_and_banner_is_shown(demo_app):
         assert User.query.filter_by(username="kladovshik").first().check_password(DEMO_PASSWORD)
 
     client = demo_app.test_client()
+    login_html = client.get("/login").get_data(as_text=True)
+    assert "Логин: <code>admin</code>" in login_html
+    assert "Пароль: <code>demo</code>" in login_html
     resp = client.post("/login", data={"username": "admin", "password": DEMO_PASSWORD}, follow_redirects=True)
     html = resp.get_data(as_text=True)
     assert resp.status_code == 200

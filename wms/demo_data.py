@@ -35,38 +35,29 @@ from .models import (
     Warehouse,
     Zone,
 )
-from .utils.categorize import classify_by_name
 from .utils.numbering import next_number
 
 DEMO_PASSWORD = "demo"
 
-MAIN_WAREHOUSE = "Основной склад"
-SECOND_WAREHOUSE = "Склад №2 (Шоссейная 167)"
-WORKSHOP_WAREHOUSE = "Склад №3"
+MAIN_WAREHOUSE = "Склад 1"
+SECOND_WAREHOUSE = "Склад 2"
+WORKSHOP_WAREHOUSE = "Склад 3"
 
-# (вид, модель, цвета, размеры, множественное число вида для названия)
-CATALOG = [
-    ("Шапка", "Аврора", ["беж", "серый", "черный"], ["52-56"], "Шапки"),
-    ("Шапка", "Нева", ["белый", "бордо"], ["52-56"], "Шапки"),
-    ("Кардиган", "Лидия", ["беж", "графит"], ["44-46", "48-50"], "Кардиганы"),
-    ("Кардиган", "Марта", ["олива"], ["48-50", "52-54"], "Кардиганы"),
-    ("Свитер", "Север", ["серый", "синий"], ["46", "48"], "Свитеры"),
-    ("Шарф", "Метель", ["белый", "красный", "серый"], ["180"], "Шарфы"),
+DEMO_PRODUCT_COUNT = 18
+DEMO_CATEGORIES = [
+    # (название, норма минут на 1 шт, порог штук в коробе)
+    ("Категория 1", 12, 60),
+    ("Категория 2", 30, 40),
+    ("Категория 3", 55, 30),
 ]
-
-EXTRA_CATEGORIES = [
-    # (название, ключевые слова, норма минут на 1 шт, порог штук в коробе)
-    ("Шарф", "шарф,шарфы", 20, 200),
-]
-CATEGORY_NORMS = {"Шапка": 12, "Кардиган": 55, "Свитер": 45}
 
 OZON_CITIES = [
-    ("Москва 1", 78), ("Москва 2", 49), ("Санкт-Петербург", 38),
-    ("Казань", 38), ("Екатеринбург", 38), ("Новосибирск", 30),
+    ("Направление 1", 78), ("Направление 2", 49), ("Направление 3", 38),
+    ("Направление 4", 38), ("Направление 5", 38), ("Направление 6", 30),
 ]
 WB_CITIES = [
-    ("Москва", 125), ("Краснодар", 60), ("Самара", 40),
-    ("Санкт-Петербург", 45), ("Казань", 40),
+    ("Направление 7", 125), ("Направление 8", 60), ("Направление 9", 40),
+    ("Направление 10", 45), ("Направление 11", 40),
 ]
 
 
@@ -100,41 +91,45 @@ def _create_users(main_wh, second_wh, workshop_wh):
         return user
 
     storekeeper = _user(
-        "kladovshik", "Ирина Склад (кладовщик)",
+        "kladovshik", "Кладовщик 1",
         warehouse_id=main_wh.id,
         movement_complete_allowed=True,
         movement_receive_allowed=True,
         movement_view_allowed=True,
         invoice_receiving_view_allowed=True,
     )
-    logist = _user("logist", "Сергей Логист", role="logist")
-    fulfillment = _user("fulfilment", "Фулфилмент (Склад №3)", role="fulfillment", warehouse_id=workshop_wh.id)
+    logist = _user("logist", "Логист 1", role="logist")
+    fulfillment = _user("fulfilment", "Фулфилмент (Склад 3)", role="fulfillment", warehouse_id=workshop_wh.id)
     fulfillment.allowed_sections = "receiving,movement"
     workers = [
-        _user("shveya1", "Анна Швея", role="production"),
-        _user("shveya2", "Мария Швея", role="production"),
-        _user("shveya3", "Ольга Швея", role="production"),
+        _user("shveya1", "Сотрудник 1", role="production"),
+        _user("shveya2", "Сотрудник 2", role="production"),
+        _user("shveya3", "Сотрудник 3", role="production"),
     ]
     db.session.commit()
     return admin, storekeeper, logist, fulfillment, workers
 
 
 def _create_categories():
-    for name, keywords, norm, warning in EXTRA_CATEGORIES:
-        if ProductCategory.query.filter_by(name=name).first() is None:
-            db.session.add(
-                ProductCategory(name=name, keywords=keywords, norm_minutes=norm, box_qty_warning=warning)
+    # Демо-база отдельная и еще пустая: заменяем системные
+    # примеры на обезличенные категории.
+    ProductCategory.query.delete()
+    for name, norm, warning in DEMO_CATEGORIES:
+        db.session.add(
+            ProductCategory(
+                name=name,
+                keywords="",
+                norm_minutes=norm,
+                box_qty_warning=warning,
             )
-    for category in ProductCategory.query.all():
-        if category.norm_minutes is None and category.name in CATEGORY_NORMS:
-            category.norm_minutes = CATEGORY_NORMS[category.name]
+        )
     db.session.commit()
 
 
 def _create_warehouses():
-    main = Warehouse(code=next_number("warehouse"), name=MAIN_WAREHOUSE, address="г. Иваново, ул. Складская, 1")
-    second = Warehouse(code=next_number("warehouse"), name=SECOND_WAREHOUSE, address="г. Иваново, Шоссейная, 167")
-    workshop = Warehouse(code=next_number("warehouse"), name=WORKSHOP_WAREHOUSE, address="г. Иваново, ул. Цеховая, 5")
+    main = Warehouse(code=next_number("warehouse"), name=MAIN_WAREHOUSE, address="")
+    second = Warehouse(code=next_number("warehouse"), name=SECOND_WAREHOUSE, address="")
+    workshop = Warehouse(code=next_number("warehouse"), name=WORKSHOP_WAREHOUSE, address="")
     db.session.add_all([main, second, workshop])
     db.session.commit()
 
@@ -156,24 +151,19 @@ def _create_warehouses():
 
 def _create_nomenclature():
     items = []
-    index = 0
-    for kind, model, colors, sizes, plural in CATALOG:
-        for color in colors:
-            for size in sizes:
-                index += 1
-                article = f"{model}_{color}"
-                name = f"{kind} {model} {color} / {plural} ({size})"
-                category = classify_by_name(name)
-                item = Nomenclature(
-                    sku=f"{article}-{size}",
-                    barcode=f"46000{index:08d}",
-                    name=name,
-                    size=size,
-                    unit="шт",
-                    category_id=category.id if category else None,
-                )
-                db.session.add(item)
-                items.append(item)
+    categories = ProductCategory.query.order_by(ProductCategory.id).all()
+    for index in range(1, DEMO_PRODUCT_COUNT + 1):
+        category = categories[(index - 1) % len(categories)]
+        item = Nomenclature(
+            sku=f"ART-{index:03d}",
+            barcode=f"46000{index:08d}",
+            name=f"Товар {index}",
+            size=f"Размер {((index - 1) % 4) + 1}",
+            unit="шт",
+            category_id=category.id,
+        )
+        db.session.add(item)
+        items.append(item)
     db.session.commit()
     # Один товар с доп. штрихкодом — чтобы на презентации показать, что план
     # и сканер находят его по любому из двух кодов.
@@ -206,7 +196,7 @@ def _create_stock(rng, items, main, second, workshop, cells_by_warehouse):
             if rng.random() > share:
                 continue
             for _ in range(rng.randint(1, 3)):
-                qty = rng.choice([20, 24, 30, 36, 40, 48, 60]) if "Шапка" in item.name else rng.choice([8, 10, 12, 15, 20])
+                qty = rng.choice([8, 10, 12, 15, 20, 24, 30, 36, 40])
                 cell = cells[cell_cursor % len(cells)]
                 cell_cursor += 1
                 _new_box(rng, warehouse, cell, [(item, qty)], days_ago=rng.randint(1, 20))
@@ -217,7 +207,7 @@ def _create_stock(rng, items, main, second, workshop, cells_by_warehouse):
 
 
 def _create_receivings(rng, items, main, admin):
-    supplier = Supplier(name="ООО «Пряжа-Опт» (демо)", inn="7700000001", phone="+7 900 000-00-01")
+    supplier = Supplier(name="Поставщик 1", inn="0000000000", phone="")
     db.session.add(supplier)
     db.session.commit()
 
@@ -290,7 +280,7 @@ def _create_plans(rng, items, admin, today):
             warehouse = _get_or_create_city_warehouse(marketplace, city)
             city_warehouses[(marketplace, city)] = warehouse
             for position, item in enumerate(items):
-                base = 0.42 if "Шапка" in item.name else 0.17
+                base = 0.42 if position % 3 == 0 else 0.17
                 planned = round(weight * base * rng.uniform(0.5, 1.2))
                 db.session.add(
                     ShipmentPlanLine(
@@ -368,19 +358,19 @@ def _create_movements(app, rng, items, main, second, workshop, city_warehouses, 
 
     scenarios = [
         # (отправитель, город, коробов, дней назад, приемка, площадка)
-        (main, ozon("Москва 1"), 3, 6, "full", "ozon"),
-        (main, ozon("Москва 1"), 2, 2, None, "ozon"),
-        (second, ozon("Москва 2"), 2, 5, "short", "ozon"),
-        (main, ozon("Санкт-Петербург"), 3, 4, "full", "ozon"),
-        (main, ozon("Казань"), 2, 3, None, "ozon"),
-        (second, ozon("Екатеринбург"), 2, 1, None, "ozon"),
-        (main, ozon("Новосибирск"), 1, 7, "full", "ozon"),
-        (main, wb("Москва"), 4, 5, "full", "wb"),
-        (second, wb("Москва"), 3, 2, None, "wb"),
-        (main, wb("Краснодар"), 3, 4, "short", "wb"),
-        (main, wb("Самара"), 2, 3, "full", "wb"),
-        (second, wb("Санкт-Петербург"), 2, 1, None, "wb"),
-        (main, wb("Казань"), 2, 6, "full", "wb"),
+        (main, ozon("Направление 1"), 3, 6, "full", "ozon"),
+        (main, ozon("Направление 1"), 2, 2, None, "ozon"),
+        (second, ozon("Направление 2"), 2, 5, "short", "ozon"),
+        (main, ozon("Направление 3"), 3, 4, "full", "ozon"),
+        (main, ozon("Направление 4"), 2, 3, None, "ozon"),
+        (second, ozon("Направление 5"), 2, 1, None, "ozon"),
+        (main, ozon("Направление 6"), 1, 7, "full", "ozon"),
+        (main, wb("Направление 7"), 4, 5, "full", "wb"),
+        (second, wb("Направление 7"), 3, 2, None, "wb"),
+        (main, wb("Направление 8"), 3, 4, "short", "wb"),
+        (main, wb("Направление 9"), 2, 3, "full", "wb"),
+        (second, wb("Направление 10"), 2, 1, None, "wb"),
+        (main, wb("Направление 11"), 2, 6, "full", "wb"),
     ]
     for sender, city_wh, boxes, days_ago, receive, marketplace in scenarios:
         contents = [pick(rng.randint(1, 2)) for _ in range(boxes)]
@@ -388,7 +378,7 @@ def _create_movements(app, rng, items, main, second, workshop, city_warehouses, 
 
     # Незавершенный черновик — виден в списке перемещений как «в работе».
     draft = MovementDocument(
-        number=next_number("movement"), from_warehouse_id=main.id, to_warehouse_id=ozon("Казань").id,
+        number=next_number("movement"), from_warehouse_id=main.id, to_warehouse_id=ozon("Направление 4").id,
         created_by_id=admin.id,
     )
     db.session.add(draft)
@@ -420,14 +410,14 @@ def _create_deadlines(city_warehouses, today):
 
 
 def _create_production(rng, items, workers, today):
-    shirts = [item for item in items if "Шапка" in item.name]
+    primary_items = items[:5]
     for day_offset in range(5, -1, -1):
         work_date = today - timedelta(days=day_offset)
         if work_date.weekday() >= 5:
             continue
         for worker in workers:
             for index in range(rng.randint(20, 30)):
-                item = rng.choice(shirts if rng.random() < 0.7 else items)
+                item = rng.choice(primary_items if rng.random() < 0.7 else items)
                 moment = datetime.combine(work_date, time(8, 30)) + timedelta(minutes=9 * index + rng.randint(0, 6))
                 db.session.add(
                     ProductionRecord(
