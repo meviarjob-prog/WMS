@@ -81,4 +81,7 @@ def test_filter_row_rendered_and_reset_link(db, client_logged_in):
     _docs()
     html = client_logged_in.get("/receiving/?f_number=CF-A").get_data(as_text=True)
     assert 'name="f_number"' in html and 'value="CF-A"' in html
+    assert 'name="f_date"' in html
+    assert "data-submit-date-on-blur" in html
+    assert 'name="f_date" form="listFilters" class="form-control form-control-sm" value="" onchange=' not in html
     assert "Сбросить" in html

@@ -49,7 +49,10 @@
            Enter или смена списка применяют фильтр -->
       <tr class="column-filters">
         <th><input type="text" name="f_number" form="listFilters" class="form-control form-control-sm" placeholder="Номер" value="{{ filters.f_number }}"></th>
-        <th><input type="date" name="f_date" form="listFilters" class="form-control form-control-sm" value="{{ filters.f_date }}" onchange="this.form.submit()"></th>
+        <th><input type="date" name="f_date" form="listFilters" class="form-control form-control-sm" value="{{ filters.f_date }}"
+                   data-submit-date-on-blur
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();this.dataset.submitted='1';this.form.requestSubmit()}"
+                   onblur="if(this.dataset.submitted!=='1' && this.value!==this.defaultValue && (this.value==='' || this.validity.valid)){this.form.requestSubmit()}"></th>
         <th><input type="text" name="f_warehouse" form="listFilters" class="form-control form-control-sm" placeholder="Склад" value="{{ filters.f_warehouse }}"></th>
         <th><input type="text" name="f_supplier" form="listFilters" class="form-control form-control-sm" placeholder="Поставщик" value="{{ filters.f_supplier }}"></th>
         <th><input type="text" name="f_order" form="listFilters" class="form-control form-control-sm" placeholder="№ заказа" value="{{ filters.f_order }}"></th>
