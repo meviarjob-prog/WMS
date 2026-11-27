@@ -7,6 +7,7 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 from wms.extensions import db
 from wms.models import (
@@ -23,6 +24,29 @@ from wms.models import (
 )
 
 TOKEN = "test-1c-token"
+
+
+def test_one_c_processing_recalculates_total_and_confirms_return_rows():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "integrations/1c/SyncWMS.bsl").read_text(encoding="utf-8")
+    assert source.count("ПересчитатьСуммуДокументаПоСтрокам(") == 2
+    assert 'ИменаИтога.Добавить("СуммаДокумента")' in source
+    assert 'ИменаСуммСтроки.Добавить("СуммаСНДС")' in source
+    assert 'ИменаСуммСтроки.Добавить("СуммаВсего")' in source
+    assert 'ИменаСкидокСтроки.Добавить("СуммаРучнойСкидки")' in source
+    assert "Функция ПоставщикДокументаСовпадает(" in source
+    assert "Возврат ИННСовпадает(" in source
+    assert "Процедура УстановитьПоставщикаИзWMS(" in source
+    assert source.count("УстановитьПоставщикаИзWMS(") == 2
+    assert "Функция УстановитьДоговорИзОснования(" in source
+    assert source.count("УстановитьДоговорИзОснования(") == 3
+    assert 'Имена.Добавить("ДоговорКонтрагента")' in source
+    assert '"заказа поставщику " + Строка(Заказ)' in source
+    assert "Цена из поступления не определена — используется цена из заказа" in source
+    assert "И ПоставщикДокументаСовпадает(\n\t\t\tВыборка.Ссылка" in source
+    assert "Возвраты разных заказов должны выгружаться отдельными" in source
+    assert 'ПолучитьСвойствоИлиПустойМассив(\n\t\t\t\tДокВозврата, "return_ids")' in source
+    assert 'Тело.Вставить("supplier_return_ids_are_rows", Истина)' in source
 
 
 def _set_token():
@@ -242,10 +266,21 @@ def test_export_comment_includes_marketplace_request_number(db, client_logged_in
     resp = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
     data = resp.get_json()
     movement = next(m for m in data["movements"] if m["number"] == "PER-BOX-1C-5")
+    assert movement["marketplace_request_number"] == "REQ-778"
     assert "(№ заявки МП: REQ-778)" in movement["comment"]
     # Номер перемещения уже есть в начале комментария — не дублируем его
     # еще раз в конце строки с заявкой.
     assert "REQ-778: PER-BOX-1C-5" not in movement["comment"]
+
+
+def test_one_c_processing_sets_marketplace_request_number_on_movement():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "integrations/1c/SyncWMS.bsl").read_text(encoding="utf-8")
+
+    assert "Процедура УстановитьНомерЗаявкиМаркетплейса(" in source
+    assert 'ИменаРеквизита.Добавить("НомерЗаявки")' in source
+    assert '"№ ЗАЯВКИ"' in source
+    assert 'ПолучитьСтроковоеСвойство(\n\t\t\tДанные,\n\t\t\t"marketplace_request_number")' in source
 
 
 def test_export_excludes_movement_without_marketplace_request_number(db, client_logged_in):
@@ -312,10 +347,63 @@ def test_export_groups_supplier_returns_by_receiving_document(db, client_logged_
     assert len(data["supplier_returns"]) == 1
     ret_doc = data["supplier_returns"][0]
     assert ret_doc["id"] == doc.id
+    assert len(ret_doc["return_ids"]) == 2
     assert ret_doc["invoice_number"] == "НАКЛ-777"
     assert ret_doc["order_number"] == "Ш-00105"
     assert ret_doc["supplier"] == "ИП Тестов"
     assert {line["qty"] for line in ret_doc["lines"]} == {3, 1}
+
+
+def test_export_splits_supplier_returns_by_line_order_number(db, client_logged_in):
+    _set_token()
+    wh = Warehouse(code="WH-1C-ORDERS", name="Основной склад")
+    db.session.add(wh)
+    db.session.commit()
+    item1 = _make_item("9990000041", "Товар 41")
+    item2 = _make_item("9990000042", "Товар 42")
+    doc = ReceivingDocument(
+        number="НАКЛ-ORDERS",
+        warehouse_id=wh.id,
+        supplier="ИП Тестов",
+        invoice_file_name="3267.xlsx",
+        order_number="45, 46",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    returns = [
+        SupplierReturn(
+            warehouse_id=wh.id,
+            nomenclature_id=item1.id,
+            qty=2,
+            receiving_document_id=doc.id,
+            invoice_number=doc.number,
+            order_number="45",
+        ),
+        SupplierReturn(
+            warehouse_id=wh.id,
+            nomenclature_id=item2.id,
+            qty=3,
+            receiving_document_id=doc.id,
+            invoice_number=doc.number,
+            order_number="46",
+        ),
+    ]
+    db.session.add_all(returns)
+    db.session.commit()
+
+    response = client_logged_in.get("/integrations/1c/api/export", headers={"X-1C-Token": TOKEN})
+    documents = response.get_json()["supplier_returns"]
+
+    assert [row["order_number"] for row in documents] == ["45", "46"]
+    assert [row["return_ids"] for row in documents] == [[returns[0].id], [returns[1].id]]
+    assert [[line["order_number"] for line in row["lines"]] for row in documents] == [
+        ["45"],
+        ["46"],
+    ]
+    assert [row["comment"] for row in documents] == [
+        "WMS: возврат по приемке НАКЛ-ORDERS, заказ 45",
+        "WMS: возврат по приемке НАКЛ-ORDERS, заказ 46",
+    ]
 
 
 def test_export_supplier_return_order_number_uses_first_of_slash_separated_list(db, client_logged_in):

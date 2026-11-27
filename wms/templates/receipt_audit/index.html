@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Проверка непринятых перемещений{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('movement.list_documents') }}">&larr; Перемещения</a></p>
+<h3 class="mb-1">Проверка непринятых перемещений (Ozon)</h3>
+<div class="text-muted mb-3">Только для администратора. Сверка идёт по отчётам Ozon о приёмке (xlsx), загруженным пачкой.</div>
+
+<div class="alert alert-info small">
+  <b>Что делает проверка.</b> Для каждого непринятого перемещения на Ozon находит его отчёт и сравнивает с отправленным:
+  <ul class="mb-1">
+    <li><b>Совпало</b> — проводим как принятое.</li>
+    <li><b>Не хватает товара</b> (излишков нет) — исправляем: короба, которых нет в отчёте, возвращаем на склад-отправитель,
+        в пришедших коробах ставим принятое количество.</li>
+    <li><b>Ручная проверка</b> — излишек, нераспознанные позиции, нет заявки на МП, а также случаи, когда в одном перемещении
+        не хватило товара, а в другом тот же товар оказался лишним (вероятная ошибка при отправке). Ничего не меняется.</li>
+  </ul>
+  Сначала вы увидите результат и подтвердите применение. Прямого подключения к API Ozon в программе пока нет — данные берутся из файлов.
+</div>
+
+<div class="card p-3 mb-4">
+  <form method="post" action="{{ url_for('receipt_audit.check') }}" enctype="multipart/form-data" class="d-flex gap-2 flex-wrap align-items-center">
+    <input type="file" name="reports" accept=".xlsx,.zip" multiple class="form-control" style="max-width:520px" required>
+    <button type="submit" class="btn btn-primary">🔎 Проверить</button>
+    <span class="text-muted small">Можно выбрать сразу много файлов (supply-…-acceptance-report.xlsx).</span>
+  </form>
+</div>
+
+<h5>Непринятые перемещения на Ozon: {{ docs | length }}</h5>
+<div class="card p-3">
+  <div class="table-responsive">
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Перемещение</th><th>Куда</th><th>Отгружено</th><th>№ заявки</th><th>Коробов</th><th>ГМ запомнены</th><th>Заявка создана</th></tr></thead>
+    <tbody>
+    {% for d in docs %}
+      <tr>
+        <td><a href="{{ url_for('movement.detail', doc_id=d.id) }}">{{ d.number }}</a></td>
+        <td>{{ d.to_warehouse.name }}</td>
+        <td>{{ (d.shipped_at|msk).strftime('%d.%m.%Y') }}</td>
+        <td>{{ d.marketplace_request_number or '—' }}</td>
+        <td>{{ line_counts.get(d.id, 0) }}</td>
+        <td>{% if d.id in saved_ids %}да{% else %}—{% endif %}</td>
+        <td>{% if ready(d) %}да{% else %}<span class="text-danger">нет</span>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="text-muted">Непринятых перемещений на Ozon нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

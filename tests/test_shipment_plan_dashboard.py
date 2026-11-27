@@ -81,8 +81,8 @@ def test_dashboard_top_summary_shows_in_transit(db, client_logged_in):
 
     resp = client_logged_in.get("/shipment-plan/")
     html = resp.get_data(as_text=True)
-    idx = html.find("Город")
-    assert "10" in html[idx : idx + 400]
+    idx = html.find("<tbody>", html.find("Город"))
+    assert "10" in html[idx : idx + 700]
 
 
 def test_city_in_transit_includes_shipped_sku_missing_from_current_plan(
@@ -124,7 +124,7 @@ def test_city_in_transit_includes_shipped_sku_missing_from_current_plan(
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
     city_idx = html.find("<td>Город</td>")
-    city_snippet = html[city_idx : city_idx + 300]
+    city_snippet = html[city_idx : city_idx + 1500]
     assert ">834<" in city_snippet
     top_idx = html.find("в пути")
     assert "<b>834</b>" in html[top_idx : top_idx + 100]
@@ -246,8 +246,8 @@ def test_marketplace_header_uses_only_completed_movement_fact(db, client_logged_
     assert "Выполнено" not in html
 
     city_idx = html.find("<td>Город</td>")
-    city_snippet = html[city_idx : city_idx + 500]
-    assert "Все завершенные перемещения с 00:01 даты листа" in html
+    city_snippet = html[city_idx : city_idx + 1500]
+    assert "Все перемещения, которые транспорт забрал с 00:01 даты листа" in html
     assert ">10<" in city_snippet
 
 
@@ -273,9 +273,11 @@ def test_dashboard_keeps_sent_qty_after_marketplace_receives_less(
 
     html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
 
-    idx = html.find("в пути")
+    idx = html.find("отгружено <b>")
     # Отправлено 6; недовоз 2 ведется отдельно и не уменьшает отгрузку WMS.
-    assert "<b>6</b>" in html[idx : idx + 200]
+    assert "отгружено <b>6</b>" in html[idx : idx + 200]
+    # После «Принято на складе» в пути уже ничего нет.
+    assert "в пути <b>0</b>" in html[idx : idx + 200]
 
 
 def test_excel_export_matches_dashboard_table_and_keeps_transit_separate(db, client_logged_in):
@@ -540,6 +542,62 @@ def test_picking_list_shows_receiving_on_recount_and_sorting_as_unplaced(db, cli
     idx = html.find("ART-1")
     snippet = html[idx : idx + 3000]
     assert ">10<" in snippet  # 12 - 2 брака = 10 годного "на разбраковке"
+
+
+def test_unplaced_not_doubled_when_sorting_line_completed_separately(db, client_logged_in):
+    """Строку на разбраковке завершили отдельно («Готово») — ее товар уже
+    зачислен в неразмещенный остаток, а документ еще на разбраковке. Раньше
+    она считалась дважды: и как остаток, и как строка на разбраковке."""
+    sender, city, item = _setup(planned_qty=100)
+    doc = ReceivingDocument(
+        number="REC-PLAN-DBL",
+        warehouse_id=sender.id,
+        supplier="ИП Тестов",
+        invoice_file_name="накладная.xlsx",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    first = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=12)
+    second = ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=5)
+    db.session.add_all([first, second])
+    db.session.commit()
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    client_logged_in.post(f"/receiving/{doc.id}/lines/{first.id}/complete-line")
+    assert ReceivingDocument.query.get(doc.id).status == "sorting"
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    idx = html.find("ART-1")
+    snippet = html[idx : idx + 3000]
+    assert ">17<" in snippet      # 12 зачислено + 5 еще на разбраковке
+    assert ">29<" not in snippet
+
+
+def test_sorting_counts_invoice_line_not_touched_on_recount(db, client_logged_in):
+    """Строка накладной, количество которой на пересчете не правили (совпало
+    с накладной), остается неподтвержденной — но после перехода на
+    разбраковку количество окончательное, и товар должен быть виден «на
+    разбраковке» (было: «—», хотя приемка на разбраковке)."""
+    sender, city, item = _setup(planned_qty=300)
+    doc = ReceivingDocument(
+        number="REC-PLAN-SORT", warehouse_id=sender.id, supplier="ИП Тестов",
+        invoice_file_name="накладная.xlsx",
+    )
+    db.session.add(doc)
+    db.session.commit()
+    db.session.add(ReceivingLine(document_id=doc.id, nomenclature_id=item.id, qty=210, expected_qty=210))
+    db.session.commit()
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-recount")
+
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    snippet = html[html.find("ART-1"): html.find("ART-1") + 3000]
+    assert ">210<" not in snippet      # на пересчете не подтверждено — не считаем
+
+    client_logged_in.post(f"/receiving/{doc.id}/send-to-sorting")
+    assert ReceivingLine.query.filter_by(document_id=doc.id).one().confirmed is False
+    html = client_logged_in.get("/shipment-plan/").get_data(as_text=True)
+    snippet = html[html.find("ART-1"): html.find("ART-1") + 3000]
+    assert ">210<" in snippet
 
 
 def test_picking_list_ignores_invoice_receiving_still_in_draft(db, client_logged_in):

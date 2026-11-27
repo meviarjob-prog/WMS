@@ -201,6 +201,16 @@ def read_sheet_tables(app, spreadsheet_id, sheet_titles):
 
 
 def movement_wms_totals(period_start=None):
+    """{(склад-город, товар): отправлено/в пути/принято} по завершенным и
+    переданным транспорту перемещениям. Считается несколькими запросами с
+    группировкой в БД, а не обходом документ → строка → короб → позиция
+    через ORM: на реальной базе тот обход занимал десятки секунд, и
+    синхронизация плана упиралась в таймаут (504)."""
+    from sqlalchemy import func
+
+    from ..extensions import db
+    from ..models import BoxItem, MovementLine, MovementReceiptDiscrepancy, Warehouse
+
     totals = defaultdict(
         lambda: {
             "shipped": 0.0,
@@ -211,63 +221,114 @@ def movement_wms_totals(period_start=None):
             "nomenclature": None,
         }
     )
-    documents = MovementDocument.query.filter(
+    # Дата листа задает начало нового плана. Считаем все завершенные
+    # перемещения, фактически переданные транспорту, начиная с 00:01
+    # этой даты. Завершение сборки и заявка МП сами по себе не являются
+    # отгрузкой.
+    conditions = [
         MovementDocument.status == "completed",
         MovementDocument.shipped_at.isnot(None),
-    ).all()
-    for document in documents:
-        shipped_at = document.shipped_at
-        # Дата листа задает начало нового плана. Считаем все завершенные
-        # перемещения, фактически переданные транспорту, начиная с 00:01
-        # этой даты. Завершение сборки и заявка МП сами по себе не являются
-        # отгрузкой.
-        if period_start and (
-            not shipped_at
-            or shipped_at < datetime.combine(period_start, time(0, 1))
-        ):
-            continue
-        warehouse = document.to_warehouse
-        if not warehouse.marketplace:
-            continue
+        Warehouse.marketplace.isnot(None),
+    ]
+    if period_start:
+        conditions.append(MovementDocument.shipped_at >= datetime.combine(period_start, time(0, 1)))
 
-        expected = defaultdict(float)
-        nomenclature_by_id = {}
-        for line in document.lines:
-            for item in line.box.items:
-                expected[item.nomenclature_id] += item.qty
-                nomenclature_by_id[item.nomenclature_id] = item.nomenclature
-
-        actual = dict(expected)
-        if document.received_at is not None:
-            for discrepancy in document.discrepancies:
-                # После приемки с недовозом физический остаток короба уже
-                # уменьшен. Для показателя «отправлено/в пути» восстанавливаем
-                # исходное количество из документа расхождения.
-                expected[discrepancy.nomenclature_id] = discrepancy.expected_qty
-                nomenclature_by_id[discrepancy.nomenclature_id] = discrepancy.nomenclature
-                actual[discrepancy.nomenclature_id] = discrepancy.received_qty
-
-        for nomenclature_id, expected_qty in expected.items():
-            nomenclature = nomenclature_by_id.get(nomenclature_id) or Nomenclature.query.get(
-                nomenclature_id
+    documents = {
+        doc_id: (to_warehouse_id, received_at)
+        for doc_id, to_warehouse_id, received_at in (
+            db.session.query(
+                MovementDocument.id, MovementDocument.to_warehouse_id, MovementDocument.received_at
             )
+            .join(Warehouse, Warehouse.id == MovementDocument.to_warehouse_id)
+            .filter(*conditions)
+            .all()
+        )
+    }
+    if not documents:
+        return totals
+
+    expected = defaultdict(dict)  # doc_id -> {nomenclature_id: qty}
+    for doc_id, nomenclature_id, qty in (
+        db.session.query(MovementLine.document_id, BoxItem.nomenclature_id, func.sum(BoxItem.qty))
+        .join(MovementDocument, MovementDocument.id == MovementLine.document_id)
+        .join(Warehouse, Warehouse.id == MovementDocument.to_warehouse_id)
+        .join(BoxItem, BoxItem.box_id == MovementLine.box_id)
+        .filter(*conditions)
+        .group_by(MovementLine.document_id, BoxItem.nomenclature_id)
+        .all()
+    ):
+        expected[doc_id][nomenclature_id] = qty or 0.0
+
+    actual = {doc_id: dict(items) for doc_id, items in expected.items()}
+    for doc_id, nomenclature_id, expected_qty, received_qty in (
+        db.session.query(
+            MovementReceiptDiscrepancy.document_id,
+            MovementReceiptDiscrepancy.nomenclature_id,
+            MovementReceiptDiscrepancy.expected_qty,
+            MovementReceiptDiscrepancy.received_qty,
+        )
+        .join(MovementDocument, MovementDocument.id == MovementReceiptDiscrepancy.document_id)
+        .join(Warehouse, Warehouse.id == MovementDocument.to_warehouse_id)
+        .filter(*conditions, MovementDocument.received_at.isnot(None))
+        .all()
+    ):
+        # После приемки с недовозом физический остаток короба уже
+        # уменьшен. Для показателя «отправлено/в пути» восстанавливаем
+        # исходное количество из документа расхождения.
+        expected[doc_id][nomenclature_id] = expected_qty
+        actual.setdefault(doc_id, {})[nomenclature_id] = received_qty
+
+    nomenclature_by_id = {n.id: n for n in Nomenclature.query.all()}
+    warehouse_by_id = {w.id: w for w in Warehouse.query.filter(Warehouse.marketplace.isnot(None)).all()}
+    for doc_id, items in expected.items():
+        to_warehouse_id, received_at = documents[doc_id]
+        warehouse = warehouse_by_id.get(to_warehouse_id)
+        if warehouse is None:
+            continue
+        for nomenclature_id, expected_qty in items.items():
+            nomenclature = nomenclature_by_id.get(nomenclature_id)
             if nomenclature is None:
                 continue
             key = (warehouse.id, nomenclature.id)
             totals[key]["warehouse"] = warehouse
             totals[key]["nomenclature"] = nomenclature
             totals[key]["shipped"] += expected_qty
-            if document.received_at is None:
+            if received_at is None:
                 totals[key]["in_transit"] += expected_qty
             else:
                 totals[key]["received_seen"] = True
-                totals[key]["received"] += actual.get(nomenclature_id, expected_qty)
+                totals[key]["received"] += actual.get(doc_id, {}).get(nomenclature_id, expected_qty)
     return totals
 
 
 def received_wms_totals():
     """Фактически принятые количества по складу и товару."""
     return {key: value["received"] for key, value in movement_wms_totals().items()}
+
+
+def movement_sender_totals(period_start=None):
+    """{(склад-город, склад-отправитель): кол-во} — сколько всего отгружено
+    на каждый склад-город с каждого склада-отправителя с даты начала
+    периода (та же семантика "отгружено", что и у movement_wms_totals —
+    исходное количество из коробов, без вычета недовоза при приемке, см.
+    MovementDocument.total_sent_qty). Нужно для разбивки вклада
+    складов-отправителей в «Выполнении плана» по городам (см. чат)."""
+    totals = defaultdict(float)
+    documents = MovementDocument.query.filter(
+        MovementDocument.status == "completed",
+        MovementDocument.shipped_at.isnot(None),
+    ).all()
+    for document in documents:
+        shipped_at = document.shipped_at
+        if period_start and (
+            not shipped_at or shipped_at < datetime.combine(period_start, time(0, 1))
+        ):
+            continue
+        warehouse = document.to_warehouse
+        if not warehouse.marketplace:
+            continue
+        totals[(warehouse.id, document.from_warehouse_id)] += document.total_sent_qty()
+    return totals
 
 
 def build_wms_movement_rows():

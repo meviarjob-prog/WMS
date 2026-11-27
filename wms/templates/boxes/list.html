@@ -10,8 +10,8 @@
             data-bs-placement="bottom" data-bs-content="{{ hint_boxes }}" aria-label="Подсказка">?</button>
   </h3>
   <div class="d-flex gap-2">
-    <a class="btn btn-outline-secondary" href="{{ url_for('boxes.export_boxes', warehouse_id=warehouse_id) }}">📊 Выгрузить непустые короба по складам</a>
-    <a class="btn btn-outline-secondary" href="{{ url_for('boxes.bulk_create') }}">📦 Массовое создание коробов</a>
+    {% if not current_user.is_fulfillment_only() %}<a class="btn btn-outline-secondary" href="{{ url_for('boxes.export_boxes', warehouse_id=warehouse_id) }}">📊 Выгрузить непустые короба по складам</a>{% endif %}
+    {% if not current_user.is_fulfillment_only() %}<a class="btn btn-outline-secondary" href="{{ url_for('boxes.bulk_create') }}">📦 Массовое создание коробов</a>{% endif %}
   </div>
 </div>
 

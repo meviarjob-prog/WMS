@@ -1,4 +1,4 @@
-from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
 from flask_login import current_user
 
 from ..extensions import db
@@ -23,6 +23,11 @@ def list_boxes():
 
     warehouse_id = request.args.get("warehouse_id", type=int)
     query_text = request.args.get("q", "").strip()
+    if current_user.is_fulfillment_only():
+        # Фулфилмент видит только короба своего склада (см. чат) — любой
+        # warehouse_id из адресной строки игнорируется.
+        warehouses = [current_user.warehouse] if current_user.warehouse else []
+        warehouse_id = current_user.warehouse_id
 
     query = Box.query
     if warehouse_id:
@@ -80,6 +85,8 @@ def export_boxes():
 @bp.route("/<int:box_id>")
 def detail(box_id):
     box = Box.query.get_or_404(box_id)
+    if current_user.is_fulfillment_only() and box.warehouse_id != current_user.warehouse_id:
+        abort(404)
     items = box.items.all()
     return render_template("boxes/detail.html", box=box, items=items)
 

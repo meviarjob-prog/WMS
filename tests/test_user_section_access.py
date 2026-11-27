@@ -64,6 +64,7 @@ def test_nav_hides_restricted_sections(db, client):
     _login_as(client, user)
 
     html = client.get("/movement/").get_data(as_text=True)
+    assert 'class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 sticky-top shadow-sm"' in html
     assert 'href="/movement/">Перемещение</a>' in html
     assert 'href="/receiving/">Приемка</a>' not in html
     assert 'href="/inventory/">Инвентаризация</a>' not in html

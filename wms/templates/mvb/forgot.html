@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Восстановление пароля — МВБ Логистика</title>
+<link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+</head>
+<body class="d-flex align-items-center" style="min-height:100vh;background:#f0fdf4">
+<div class="container" style="max-width:380px">
+  <div class="text-center mb-4">
+    <div style="font-size:2.5rem">🚚</div>
+    <h3>МВБ Логистика</h3>
+    <div class="text-muted">Восстановление пароля</div>
+  </div>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  <div class="card p-4">
+    <form method="post">
+      <p class="small text-muted">Укажите логин или телефон из регистрации. Оператор МВБ задаст новый пароль и сообщит его вам.</p>
+      <div class="mb-3">
+        <label class="form-label">Логин или телефон</label>
+        <input type="text" name="login" class="form-control form-control-lg" required autofocus>
+      </div>
+      <button type="submit" class="btn btn-success w-100 btn-lg">Отправить запрос</button>
+    </form>
+  </div>
+  <div class="text-center mt-3"><a href="{{ url_for('mvb.login') }}">← Ко входу</a></div>
+</div>
+</body>
+</html>

@@ -35,6 +35,17 @@ FULFILLMENT_WAREHOUSE_NAME = "Товары в пути на Фулфилмент
 DIRECT_TRANSFER_WAREHOUSE_NAMES = {"Основной склад", "Склад №2 (Шоссейная 167)"}
 
 
+def _warehouse_name_for_1c(warehouse):
+    """Название СОБСТВЕННОГО склада в 1С: то, что задано в сопоставлении на
+    странице «Склады» (Warehouse.fulfillment_1c_name), а если не задано —
+    название склада в WMS, как было раньше (см. чат: для перемещений между
+    собственными складами в сопоставлении должны быть и собственные склады,
+    чтобы в 1С подтягивался нужный склад)."""
+    if warehouse is None:
+        return ""
+    return warehouse.fulfillment_1c_name or warehouse.name
+
+
 def _to_warehouse_name_for_1c(doc):
     """Каждый документ перемещения выгружается сам по себе, как и раньше —
     здесь меняется только то, ЧЬЕ имя склада подставляется в него в поле
@@ -42,6 +53,10 @@ def _to_warehouse_name_for_1c(doc):
     собой."""
     from_name = doc.from_warehouse.name if doc.from_warehouse else ""
     to_name = doc.to_warehouse.name if doc.to_warehouse else ""
+    # Явное сопоставление получателя (и склада-города, и собственного
+    # склада) главнее любых умолчаний ниже.
+    if doc.to_warehouse and doc.to_warehouse.fulfillment_1c_name:
+        return doc.to_warehouse.fulfillment_1c_name
     if (
         from_name in DIRECT_TRANSFER_WAREHOUSE_NAMES
         and to_name in DIRECT_TRANSFER_WAREHOUSE_NAMES
@@ -164,8 +179,11 @@ def _movement_payload(doc):
         "id": doc.id,
         "number": doc.number,
         "date": (doc.completed_at or doc.created_at).isoformat(),
-        "from_warehouse": doc.from_warehouse.name if doc.from_warehouse else "",
+        "from_warehouse": _warehouse_name_for_1c(doc.from_warehouse),
         "to_warehouse": _to_warehouse_name_for_1c(doc),
+        # Передаем отдельно от комментария: обработка 1С
+        # записывает значение в реквизит документа «Номер заявки».
+        "marketplace_request_number": doc.marketplace_request_number or "",
         # Реальный склад-город WMS (например, "ОЗОН: Казань") — когда
         # to_warehouse выше подменен на общий "Товары в пути на
         # Фулфилмент" (см. _to_warehouse_name_for_1c), это единственное
@@ -180,7 +198,7 @@ def _inventory_payload(doc):
         "id": doc.id,
         "number": doc.number,
         "date": (doc.completed_at or doc.created_at).isoformat(),
-        "warehouse": doc.warehouse.name if doc.warehouse else "",
+        "warehouse": _warehouse_name_for_1c(doc.warehouse),
         "comment": f"WMS: {doc.number}",
         "lines": [
             {
@@ -254,19 +272,19 @@ def _receiving_reconciliation_payload(doc):
                 "qty": line.qty,
             }
             for line in doc.lines
+            # нулевая строка (товар не привезли) в 1С не создается — если
+            # отдать ее на сверку, получим «расхождение»: строка есть в WMS и
+            # нет в 1С
+            if line.qty and line.qty > 0
         ),
     }
 
 
 def _first_order_number(order_number):
-    """Если накладная закрывает сразу несколько заявок (см. чат — например
-    «ВБ-К11/ВБ-К10» или «ВБ-К11, ВБ-К10»), в 1С возврат все равно можно
-    привязать только к ОДНОМУ «Заказу поставщику» — берем первый из
-    перечисленных, даже если конкретная возвращаемая позиция по факту
-    относится к другой заявке из этого же списка. Разбирать возврат по
-    заявкам построчно WMS сейчас не умеет — эта привязка сугубо
-    приблизительная, для реального разделения нужно заводить накладную
-    отдельными документами приемки (по одному на заявку)."""
+    """Нормализует старые записи, где у возврата сохранилось общее ручное
+    поле приемки сразу с несколькими заказами («ВБ-К11/ВБ-К10» или через
+    запятую). Новые накладные сохраняют заказ в каждой товарной строке и
+    разделяются точно; для старых данных остается безопасный первый номер."""
     if not order_number:
         return order_number
     for sep in ("/", ","):
@@ -277,8 +295,9 @@ def _first_order_number(order_number):
 
 def _supplier_returns_export():
     """Возвраты поставщику из разбраковки приемок (см. receiving.complete) —
-    группируем по приемке в один документ на 1С с несколькими строками
-    (одна разбраковка = один возврат), а не документ на каждую позицию.
+    группируем по приемке И номеру заказа в один документ на 1С с
+    несколькими строками. Новая форма накладной может содержать позиции из
+    разных заказов, а у каждого возврата в 1С должно быть свое основание.
     Возвраты без invoice_number (ручное списание из "Размещения", либо
     разбраковка приемки, не загруженной из файла накладной — см.
     ReceivingDocument.is_from_invoice_import) не выгружаем вовсе: 1С не с
@@ -296,14 +315,15 @@ def _supplier_returns_export():
 
     groups = {}
     for ret in returns:
-        groups.setdefault(ret.receiving_document_id, []).append(ret)
+        order_number = _first_order_number(
+            ret.order_number
+            or (ret.receiving_document.order_number if ret.receiving_document else None)
+        )
+        groups.setdefault((ret.receiving_document_id, order_number), []).append(ret)
 
     payloads = []
-    for receiving_document_id, group in groups.items():
+    for (receiving_document_id, order_number), group in groups.items():
         first = group[0]
-        order_number = _first_order_number(
-            first.receiving_document.order_number if first.receiving_document else None
-        )
         # ИНН поставщика (из справочника Supplier, заполняется при загрузке
         # накладной — см. receiving._find_or_create_supplier) — надежный
         # уникальный идентификатор для поиска контрагента в 1С, в отличие
@@ -317,23 +337,33 @@ def _supplier_returns_export():
         payloads.append(
             {
                 "id": receiving_document_id,
+                # Новая версия модуля 1С подтверждает именно эти строки. id
+                # приемки выше сохранен для совместимости со старым модулем.
+                "return_ids": [ret.id for ret in group],
                 "invoice_number": first.invoice_number,
-                # Номер "Заказа поставщику" в 1С (вносится вручную в WMS при
-                # загрузке накладной, см. ReceivingDocument.order_number) —
-                # именно по нему 1С ищет основание для возврата (см.
+                # Номер "Заказа поставщику" из товарной строки накладной
+                # (ручное поле используется только для старых файлов) — именно
+                # по нему 1С ищет основание для возврата (см.
                 # SyncWMS.bsl НайтиЗаказПоставщикуПоНомеру), а не по
                 # invoice_number, который относится к документу поступления,
                 # а не к заказу поставщику.
                 "order_number": order_number or "",
                 "supplier": first.supplier_name or "",
                 "supplier_inn": supplier_inn or "",
-                "warehouse": first.warehouse.name if first.warehouse else "",
-                "comment": f"WMS: возврат по приемке {first.invoice_number}",
+                "warehouse": _warehouse_name_for_1c(first.warehouse),
+                "comment": (
+                    f"WMS: возврат по приемке {first.invoice_number}, "
+                    f"заказ {order_number or 'не указан'}"
+                ),
                 "lines": [
                     {
                         "barcode": r.nomenclature.barcode,
                         "name": r.nomenclature.name,
                         "qty": r.qty,
+                        # Дублируем номер заказа в строке для контроля на
+                        # стороне обработки 1С: один расходный документ не
+                        # должен случайно объединить возвраты разных заказов.
+                        "order_number": order_number or "",
                     }
                     for r in group
                 ],
@@ -417,6 +447,7 @@ def _receiving_adjustments_export():
                         "qty": line.qty,
                     }
                     for line in lines
+                    if line.qty and line.qty > 0
                 ],
             }
         )
@@ -440,9 +471,11 @@ def _receiving_adjustments_candidates():
     )
     result = []
     for doc in documents:
+        # Строки с нулем (товар совсем не привезли) в 1С не создаются и не
+        # правятся — расхождением для 1С они не считаются.
         diff_lines = [
             line for line in doc.lines.all()
-            if line.expected_qty is not None and line.qty != line.expected_qty
+            if line.expected_qty is not None and line.qty > 0 and line.qty != line.expected_qty
         ]
         if diff_lines:
             result.append((doc, diff_lines))
@@ -554,6 +587,7 @@ def export_confirm():
     movement_ids = data.get("movement_ids") or []
     inventory_ids = data.get("inventory_ids") or []
     supplier_return_ids = data.get("supplier_return_ids") or []
+    supplier_return_ids_are_rows = bool(data.get("supplier_return_ids_are_rows"))
     receiving_adjustment_ids = data.get("receiving_adjustment_ids") or []
     # {str(movement_id): "текст предупреждения"} — часть строк документа не
     # сопоставилась с номенклатурой в 1С и была пропущена (см. SyncWMS.bsl
@@ -630,15 +664,18 @@ def export_confirm():
     for doc in confirmed_inventories:
         doc.synced_to_1c_at = now
 
-    # supplier_return_ids — это receiving_document_id (см. _supplier_returns_export,
-    # где id документа для 1С — это id приемки, объединяющий несколько строк
-    # возврата), а не id отдельных SupplierReturn.
-    confirmed_returns = (
-        SupplierReturn.query.filter(
-            SupplierReturn.receiving_document_id.in_(supplier_return_ids),
-            SupplierReturn.synced_to_1c_at.is_(None),
-        ).all()
+    # Новый модуль 1С возвращает id конкретных строк SupplierReturn: одна
+    # приемка теперь может породить несколько документов по разным заказам.
+    # Без флага поддерживаем старый модуль, присылавший id приемки.
+    return_id_column = (
+        SupplierReturn.id
+        if supplier_return_ids_are_rows
+        else SupplierReturn.receiving_document_id
     )
+    confirmed_returns = SupplierReturn.query.filter(
+        return_id_column.in_(supplier_return_ids),
+        SupplierReturn.synced_to_1c_at.is_(None),
+    ).all()
     for ret in confirmed_returns:
         ret.synced_to_1c_at = now
 

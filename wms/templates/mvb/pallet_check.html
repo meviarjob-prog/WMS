@@ -1,0 +1,44 @@
+{% extends "mvb/base.html" %}
+{% block title %}Проверка паллеты{% endblock %}
+{% block content %}
+<h3 class="mb-3">🔎 Проверка паллеты</h3>
+<form method="post" class="card p-3 mb-3 border-primary">
+  <div class="small text-muted mb-2">Отсканируйте паллету — ниже появится полный список коробов и заявок внутри.</div>
+  <div class="input-group input-group-lg" style="max-width:560px">
+    <input name="code" id="palletCheckCode" class="form-control" value="{{ code }}" placeholder="PLT-…" autocomplete="off" required autofocus>
+    <button type="button" class="btn btn-outline-success" data-camera-scan-target="#palletCheckCode" title="Сканировать камерой">📷</button>
+    <button class="btn btn-primary">Проверить</button>
+  </div>
+</form>
+{% if pallet %}
+<div class="card p-3 mb-3">
+  <div class="d-flex flex-wrap justify-content-between gap-2">
+    <div><h4 class="mb-1">{{ pallet.number }}</h4><div>{{ pallet.marketplace_label }}{% if pallet.destination %} · {{ pallet.destination }}{% endif %}</div></div>
+    <div class="fs-5"><b>{{ pallet.boxes|length }}</b> кор.</div>
+  </div>
+  <div class="small text-muted mt-2">
+    {% if pallet.planned_trip %}Назначена в рейс <a href="{{ url_for('mvb.trip_detail', trip_id=pallet.planned_trip.id) }}">{{ pallet.planned_trip.number }}</a>
+    {% else %}В рейс не назначена{% endif %}
+  </div>
+</div>
+<div class="table-responsive">
+<table class="table table-striped align-middle">
+  <thead><tr><th>#</th><th>Штрихкод короба</th><th>Заявка</th><th>Клиент</th><th>Направление</th><th>Статус</th></tr></thead>
+  <tbody>
+  {% for b in pallet.boxes %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td class="font-monospace">{{ b.barcode }}</td>
+      <td><a href="{{ url_for('mvb.order_detail', order_id=b.order.id) }}">{{ b.order.number }}</a></td>
+      <td>{{ b.order.client.name }}</td>
+      <td>{{ b.line.label() if b.line else '—' }}</td>
+      <td>{{ b.status_label }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="text-muted">Паллета пустая</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

@@ -4,7 +4,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <div class="d-flex align-items-center gap-2 flex-wrap">
     <h3 class="mb-0">Номенклатура</h3>
-    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('nomenclature.locate') }}">📍 Где товар</a>
+    {% if not current_user.is_fulfillment_only() %}    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('nomenclature.locate') }}">📍 Где товар</a>{% endif %}
     {% if current_user.can_edit_nomenclature() %}
     <a class="btn btn-sm btn-outline-warning" href="{{ url_for('nomenclature.duplicates') }}">🧬 Дубли</a>
     {% endif %}
@@ -14,6 +14,7 @@
     <a class="btn btn-outline-secondary" href="{{ url_for('nomenclature.download_template') }}">📄 Скачать шаблон</a>
     <a class="btn btn-outline-secondary" href="{{ url_for('nomenclature.import_nomenclature') }}">📥 Импорт из Excel</a>
     {% endif %}
+    {% if not current_user.is_fulfillment_only() %}
     <form method="get" action="{{ url_for('nomenclature.export_all') }}" class="d-flex gap-1">
       <select name="warehouse_id" class="form-select form-select-sm" title="Остаток по складу">
         <option value="">Остаток: все склады</option>
@@ -23,6 +24,7 @@
       </select>
       <button type="submit" class="btn btn-outline-secondary">📤 Экспорт в Excel</button>
     </form>
+    {% endif %}
     {% if current_user.is_admin %}
     <form method="post" action="{{ url_for('nomenclature.clear_nomenclature') }}" class="d-inline" onsubmit="return confirm('Удалить всю номенклатуру, у которой нет остатков и документов? Товары, уже использованные в реальных данных, не тронет. Действие необратимо.');">
       <button type="submit" class="btn btn-outline-danger">🗑 Очистить номенклатуру</button>
@@ -146,9 +148,11 @@
             <td>{{ item.category.name if item.category else '—' }}</td>
             {% endif %}
             {% for wh in stock_warehouses %}
-            <td><a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}</a></td>
+            {% set unplaced = unplaced_by_item_warehouse.get((item.id, wh.id), 0) %}
+            <td>{% if not current_user.is_fulfillment_only() %}<a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{% endif %}{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}{% if not current_user.is_fulfillment_only() %}</a>{% endif %}
+              {% if unplaced %}<div class="small text-muted" title="Принято, но не упаковано в короб">в т.ч. неразм. {{ '%g' % unplaced }}</div>{% endif %}</td>
             {% endfor %}
-            <td><a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}">🖨 Этикетка</a></td>
+            <td>{% if not current_user.is_fulfillment_only() %}<a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}">🖨 Этикетка</a>{% endif %}</td>
             {% if current_user.is_admin %}
             <td>
               <form method="post" action="{{ url_for('nomenclature.delete_nomenclature', item_id=item.id) }}"
@@ -195,7 +199,7 @@
                   <button type="submit" class="btn btn-sm btn-outline-secondary">✓</button>
                 </form>
               </div>
-              <a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>
+              {% if not current_user.is_fulfillment_only() %}<a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>{% endif %}
             </div>
             {% else %}
             <div class="d-flex justify-content-between align-items-start gap-2">
@@ -203,7 +207,7 @@
                 <div class="fw-bold">{{ item.name }}</div>
                 <div class="small text-muted">{{ item.barcode }}{% if item.barcode2 %} / {{ item.barcode2 }}{% endif %} · арт. {{ item.sku }}</div>
               </div>
-              <a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>
+              {% if not current_user.is_fulfillment_only() %}<a target="_blank" href="{{ url_for('labels.item_label', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Этикетка">🖨</a>{% endif %}
             </div>
             {% endif %}
             {% if current_user.can_edit_nomenclature() %}
@@ -223,7 +227,7 @@
             {% endif %}
             <div class="small mt-1">
               {% for wh in stock_warehouses %}
-              {{ wh.name }}: <a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}</a>{% if not loop.last %} · {% endif %}
+              {{ wh.name }}: {% if not current_user.is_fulfillment_only() %}<a href="{{ url_for('nomenclature.locate', barcode=item.barcode) }}">{% endif %}{{ '%g' % stock_by_item_warehouse.get((item.id, wh.id), 0) }} {{ item.unit }}{% if not current_user.is_fulfillment_only() %}</a>{% endif %}{% if unplaced_by_item_warehouse.get((item.id, wh.id)) %} <span class="text-muted">(неразм. {{ '%g' % unplaced_by_item_warehouse.get((item.id, wh.id)) }})</span>{% endif %}{% if not loop.last %} · {% endif %}
               {% endfor %}
             </div>
             {% if current_user.is_admin %}

@@ -1,0 +1,75 @@
+{% extends "mvb/base.html" %}
+{% block title %}{{ mode_info.title }}{% endblock %}
+{% block content %}
+<h3 class="mb-3">📷 {{ mode_info.title }}</h3>
+<p class="text-muted">Сканируйте каждый короб — статус станет «{{ MVB_BOX_STATUS_LABELS[mode_info.to] }}».</p>
+{% set scan_url = url_for('mvb.scan_box', mode=mode) %}
+{% if mode == 'pickup' %}
+<div id="mvbPickupDone" class="card p-3 mb-3 border-success {{ '' if current else 'd-none' }}" style="max-width:560px">
+  <div class="fs-5 mb-2"><span id="mvbPickupClient">{{ current.client.name if current else '' }}</span>:
+    отсканировано <b id="mvbPickupDoneCount">{{ current_progress.order_done if current else 0 }}</b>
+    из <b id="mvbPickupTotal">{{ current_progress.order_total if current else 0 }}</b> кор.</div>
+  <form method="post" id="mvbPickupForm" action="{{ url_for('mvb.driver_pickup_done', order_id=current.id) if current else '' }}">
+    <button class="btn btn-lg w-100 {{ 'btn-success' if current and current_progress.order_done >= current_progress.order_total else 'btn-outline-secondary' }}" id="mvbPickupBtn">✓ Готово</button>
+    <button name="partial" value="1" id="mvbPickupPartial" onclick="return confirm('Забрать только отсканированные короба? Остаток вернётся в заявки на забор.')"
+      class="btn btn-outline-warning w-100 mt-2 {{ '' if current and 0 < current_progress.order_done < current_progress.order_total else 'd-none' }}">Не влезает — забрал часть</button>
+  </form>
+</div>
+{% endif %}
+{% include "mvb/_scan_widget.html" %}
+{% if mode == 'receive' %}
+<h5 class="mt-3">Ждут приемки</h5>
+<p class="text-muted small">Короба от водителей и самопривоз встают на склад только после скана приемщика.</p>
+<div class="table-responsive" style="max-width:820px">
+<table class="table table-sm align-middle">
+  <thead><tr><th>Заявка</th><th>Клиент</th><th>Откуда</th><th class="text-end">Принято</th><th class="text-end">Ждут</th></tr></thead>
+  <tbody>
+  {% for r in expected %}
+    <tr data-order-id="{{ r.order.id }}">
+      <td><a href="{{ url_for('mvb.order_detail', order_id=r.order.id) }}">{{ r.order.number }}</a></td>
+      <td>{{ r.order.client.name }}</td>
+      <td>{{ r.source }}</td>
+      <td class="text-end js-received">{{ r.received }} / {{ r.order.boxes|length }}</td>
+      <td class="text-end fw-bold js-waiting">{{ r.waiting }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="text-muted">Нет коробов, ожидающих приемки</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if mode == 'receive' %}
+<script>
+document.addEventListener("mvb:scanned", (e) => {
+  const d = e.detail;
+  if (!d.ok || d.already || !d.order_id) return;
+  const row = document.querySelector(`tr[data-order-id="${d.order_id}"]`);
+  if (!row) return;
+  row.querySelector(".js-received").textContent = `${d.order_done} / ${d.order_total}`;
+  const w = row.querySelector(".js-waiting");
+  const left = Math.max(parseInt(w.textContent, 10) - 1, 0);
+  w.textContent = left;
+  if (!left) row.classList.add("table-success");
+});
+</script>
+{% endif %}
+{% if mode == 'pickup' %}
+<script>
+document.addEventListener("mvb:scanned", (e) => {
+  const d = e.detail;
+  if (!d.order_id) return;
+  document.getElementById("mvbPickupDone").classList.remove("d-none");
+  document.getElementById("mvbPickupClient").textContent = d.client;
+  document.getElementById("mvbPickupDoneCount").textContent = d.order_done;
+  document.getElementById("mvbPickupTotal").textContent = d.order_total;
+  document.getElementById("mvbPickupForm").action = "{{ url_for('mvb.driver_pickup_done', order_id=0) }}".replace("/0/", `/${d.order_id}/`);
+  const btn = document.getElementById("mvbPickupBtn");
+  btn.className = "btn btn-lg w-100 " + (d.order_done >= d.order_total ? "btn-success" : "btn-outline-secondary");
+  document.getElementById("mvbPickupPartial").classList.toggle("d-none", !(d.order_done > 0 && d.order_done < d.order_total));
+});
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}Выработка сотрудников{% endblock %}
+{% block extra_head %}
+<style>
+/* Тёмная панель, как в макете: токены цвета в одном месте */
+body { background:#0f151b !important; color:#aab6c2; }
+footer.text-muted, .text-muted.small { color:#7f8d9a !important; }
+.eo { --eo-bg:#0f151b; --eo-surface:#17202a; --eo-ink:#e8eef3; --eo-ink2:#aab6c2; --eo-ink3:#7f8d9a; --eo-line:#28343f; --eo-grid:#212c36;
+  --eo-accent:#4cb8d6; --eo-accent-ink:#0b1217;
+  --eo-good:#5fd08f; --eo-good-bg:#17382a; --eo-warn:#f0b84a; --eo-warn-bg:#3a2f14; --eo-bad:#ff8a80; --eo-bad-bg:#40201e; --eo-plan:#e8eef3;
+  background:transparent; color:var(--eo-ink); color-scheme:dark; }
+.eo[data-mode="pick"] { --eo-accent:#f09a55; }
+.eo a { color:var(--eo-accent); }
+.eo .text-muted { color:var(--eo-ink3) !important; }
+.eo .card { background:var(--eo-surface); border-color:var(--eo-line); color:var(--eo-ink); }
+.eo .form-control, .eo .form-select { background-color:var(--eo-bg); border-color:var(--eo-line); color:var(--eo-ink); }
+.eo .form-control::placeholder { color:var(--eo-ink3); }
+.eo .form-label { color:var(--eo-ink2); }
+.eo .btn-primary { background:var(--eo-accent); border-color:var(--eo-accent); color:var(--eo-accent-ink); }
+.eo .btn-outline-secondary, .eo .btn-outline-primary { color:var(--eo-ink2); border-color:var(--eo-line); background:transparent; }
+.eo .btn-outline-secondary:hover, .eo .btn-outline-primary:hover { background:var(--eo-grid); color:var(--eo-ink); }
+.eo .table { --bs-table-bg:transparent; --bs-table-color:var(--eo-ink); --bs-table-border-color:var(--eo-grid); color:var(--eo-ink); }
+.eo .table > :not(caption) > * > * { background-color:transparent; color:inherit; border-bottom-color:var(--eo-grid); }
+.eo .seg { display:inline-flex; border:1px solid var(--eo-line); border-radius:6px; overflow:hidden; background:var(--eo-surface); }
+.eo .seg button { font:inherit; border:0; background:transparent; color:var(--eo-ink2); padding:7px 14px; cursor:pointer; }
+.eo .seg button + button { border-left:1px solid var(--eo-line); }
+.eo .seg button[aria-pressed="true"] { background:var(--eo-accent); color:var(--eo-accent-ink); font-weight:500; }
+.eo .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; margin-bottom:16px; }
+.eo .kpi { background:var(--eo-surface); border:1px solid var(--eo-line); border-radius:6px; padding:14px 16px; min-width:0; }
+.eo .kpi .lab { color:var(--eo-ink3); font-size:12px; }
+.eo .kpi .val { font-size:28px; font-weight:600; font-variant-numeric:tabular-nums; margin-top:2px; }
+.eo .kpi .val small { font-size:13px; color:var(--eo-ink2); margin-left:4px; font-weight:400; }
+.eo .kpi .note { color:var(--eo-ink2); font-size:12px; }
+.eo .kpi.hero { border-color:var(--eo-accent); } .eo .kpi.hero .val { color:var(--eo-accent); }
+.eo .chartbox { position:relative; }
+.eo svg text { fill:var(--eo-ink3); font-size:11px; }
+.eo .tip { position:absolute; pointer-events:none; background:var(--eo-ink); color:var(--eo-bg); padding:8px 10px; border-radius:4px; font-size:12px;
+  line-height:1.4; min-width:160px; z-index:5; box-shadow:0 4px 14px rgba(0,0,0,.4); }
+.eo .tip .r { display:flex; justify-content:space-between; gap:12px; }
+.eo .legend { display:flex; flex-wrap:wrap; gap:6px 16px; color:var(--eo-ink2); font-size:12px; margin-top:8px; }
+.eo .legend i { display:inline-block; width:18px; height:0; border-top:2px solid; vertical-align:middle; margin-right:6px; }
+.eo .rrow { display:grid; grid-template-columns:minmax(120px,190px) minmax(120px,1fr) 62px 74px 90px; gap:12px; align-items:center;
+  padding:9px 0; border-top:1px solid var(--eo-grid); }
+.eo .rrow.head { border-top:0; color:var(--eo-ink3); font-size:12px; padding-top:0; }
+.eo .rname { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.eo .track { position:relative; height:12px; background:var(--eo-grid); border-radius:2px; }
+.eo .fill { position:absolute; left:0; top:0; bottom:0; background:var(--eo-accent); border-radius:0 3px 3px 0; }
+.eo .ptick { position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--eo-plan); }
+.eo .num { font-variant-numeric:tabular-nums; text-align:right; }
+.eo .badge2 { display:inline-block; min-width:54px; text-align:center; padding:2px 8px; border-radius:3px; font-weight:600; font-size:12px; }
+.eo .b-good { background:var(--eo-good-bg); color:var(--eo-good); } .eo .b-warn { background:var(--eo-warn-bg); color:var(--eo-warn); }
+.eo .b-bad { background:var(--eo-bad-bg); color:var(--eo-bad); } .eo .b-none { background:var(--eo-grid); color:var(--eo-ink3); }
+.eo .matrix-wrap { overflow-x:auto; }
+.eo table.m { border-collapse:separate; border-spacing:2px; font-variant-numeric:tabular-nums; }
+.eo table.m th { font-weight:400; color:var(--eo-ink3); font-size:11px; padding:2px 4px; text-align:center; white-space:nowrap; background:transparent; }
+.eo table.m th.rowh { text-align:left; color:var(--eo-ink); font-size:13px; padding-right:12px; position:sticky; left:0; background:var(--eo-surface); }
+.eo table.m td { min-width:44px; height:32px; text-align:center; border-radius:3px; font-size:12px; border:0; }
+.eo td.c-good { background:var(--eo-good-bg); color:var(--eo-good); } .eo td.c-warn { background:var(--eo-warn-bg); color:var(--eo-warn); }
+.eo td.c-bad { background:var(--eo-bad-bg); color:var(--eo-bad); } .eo td.c-none { color:var(--eo-ink3); background:transparent; }
+.eo th.we { color:var(--eo-bad) !important; }
+.eo .keys { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:10px; font-size:12px; color:var(--eo-ink2); }
+.eo .keys .badge2 { min-width:0; margin-right:6px; font-size:11px; }
+.eo h3, .eo h5 { color:var(--eo-ink); }
+@media (max-width:720px) {
+  .eo .rrow { grid-template-columns:minmax(0,1fr) 62px 80px; }
+  .eo .rrow .track, .eo .rrow .h-track, .eo .rrow .h-tot { display:none; }
+}
+.eo .split { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; align-items:start; margin-bottom:16px; }
+@media (max-width:1000px) { .eo .split { grid-template-columns:minmax(0,1fr); } }
+.eo .panel { background:var(--eo-surface); border:1px solid var(--eo-line); border-top:3px solid var(--eo-accent); border-radius:6px; padding:14px; min-width:0; display:flex; flex-direction:column; gap:14px; }
+.eo .panel[data-mode="pick"] { --eo-accent:#f09a55; }
+.eo .panel > header { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.eo .panel h2 { font-size:16px; font-weight:600; margin:0; color:var(--eo-ink); }
+.eo .panel h2 span { color:var(--eo-accent); }
+.eo .panel .sec h3 { font-size:14px; font-weight:600; margin:0; }
+.eo .panel .sec { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.eo .mini { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.eo .mini .kpi { padding:10px 12px; background:var(--eo-bg); }
+.eo .mini .kpi .val { font-size:22px; }
+.eo .mini .kpi .lab { font-size:11.5px; } .eo .mini .kpi .note { font-size:11px; }
+.eo .panel .rrow { grid-template-columns:minmax(90px,140px) minmax(60px,1fr) 46px 62px; gap:10px; padding:7px 0; }
+.eo .panel table.m td { min-width:36px; height:26px; font-size:11px; }
+.eo .panel table.m th.rowh { font-size:12px; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@media (max-width:520px) { .eo .mini { grid-template-columns:minmax(0,1fr); } }
+</style>
+{% endblock %}
+{% block content %}
+<div class="eo" id="eo" data-mode="pack">
+<p><a href="{{ url_for('production.index') }}">&larr; Производство</a></p>
+<div class="d-flex flex-wrap justify-content-between align-items-baseline gap-2 mb-3">
+  <div>
+    <h3 class="mb-0">Выработка сотрудников</h3>
+    <div class="text-muted small" id="periodLabel">{{ date_from.strftime('%d.%m.%Y') }} – {{ date_to.strftime('%d.%m.%Y') }} · по московскому времени</div>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-6 col-md-2">
+      <label class="form-label small mb-1">С даты</label>
+      <input type="date" name="date_from" class="form-control" value="{{ date_from.isoformat() }}">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small mb-1">По дату</label>
+      <input type="date" name="date_to" class="form-control" value="{{ date_to.isoformat() }}">
+    </div>
+    <div class="col-12 col-md-4">
+      <label class="form-label small mb-1">Сотрудник</label>
+      <select name="user_id" class="form-select">
+        <option value="">Все сотрудники</option>
+        {% for u in users %}<option value="{{ u.id }}" {% if user_id == u.id %}selected{% endif %}>{{ u.display_name() }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-2"><button type="submit" class="btn btn-primary w-100">Показать</button></div>
+    <div class="col-12 col-md-2 d-flex gap-1">
+      <a class="btn btn-outline-secondary btn-sm flex-fill" href="{{ url_for('production.employee_output', date_from=(date_to - timedelta(days=6)).isoformat(), date_to=date_to.isoformat(), user_id=user_id or None) }}">7 дн.</a>
+      <a class="btn btn-outline-secondary btn-sm flex-fill" href="{{ url_for('production.employee_output', date_from=(date_to - timedelta(days=29)).isoformat(), date_to=date_to.isoformat(), user_id=user_id or None) }}">30 дн.</a>
+    </div>
+  </form>
+</div>
+
+<div class="split">
+  <section class="panel" data-mode="pack" id="p-pack" aria-label="Упаковка">
+    <header><h2><span>▍</span>Упаковка</h2><span class="text-muted small">товары в коробах</span></header>
+    <div class="mini" data-slot="kpis"></div>
+    <div class="sec"><h3>По дням</h3>
+      <div class="chartbox" data-slot="chartbox"><svg data-slot="chart" role="img" aria-label="Выработка по дням: Упаковка" style="width:100%;height:auto;display:block"></svg><div class="tip" data-slot="tip" hidden></div></div>
+      <div class="legend"><span><i style="border-color:var(--eo-accent);border-top-width:8px;width:12px"></i>Факт</span><span><i style="border-color:var(--eo-plan);border-top-style:dashed"></i>План</span><span><i style="border-color:var(--eo-ink2);border-top-style:dotted"></i>Среднее</span></div>
+    </div>
+    <div class="sec"><h3>Рейтинг, среднее в день</h3><div class="text-muted small" data-slot="rankSub"></div><div data-slot="rank"></div></div>
+    <div class="sec"><h3>План по дням</h3><div class="matrix-wrap"><table class="m" data-slot="matrix"></table></div></div>
+  </section>
+  <section class="panel" data-mode="pick" id="p-pick" aria-label="Сборка на отгрузку">
+    <header><h2><span>▍</span>Сборка на отгрузку</h2><span class="text-muted small">короба в перемещениях</span></header>
+    <div class="mini" data-slot="kpis"></div>
+    <div class="sec"><h3>По дням</h3>
+      <div class="chartbox" data-slot="chartbox"><svg data-slot="chart" role="img" aria-label="Выработка по дням: Сборка на отгрузку" style="width:100%;height:auto;display:block"></svg><div class="tip" data-slot="tip" hidden></div></div>
+      <div class="legend"><span><i style="border-color:var(--eo-accent);border-top-width:8px;width:12px"></i>Факт</span><span><i style="border-color:var(--eo-plan);border-top-style:dashed"></i>План</span><span><i style="border-color:var(--eo-ink2);border-top-style:dotted"></i>Среднее</span></div>
+    </div>
+    <div class="sec"><h3>Рейтинг, среднее в день</h3><div class="text-muted small" data-slot="rankSub"></div><div data-slot="rank"></div></div>
+    <div class="sec"><h3>План по дням</h3><div class="matrix-wrap"><table class="m" data-slot="matrix"></table></div></div>
+  </section>
+</div>
+
+<div class="card p-3 mb-3 keys" style="flex-direction:row;margin-top:0">
+  <span><span class="badge2 b-good">100%+</span>план выполнен</span>
+  <span><span class="badge2 b-warn">70–99%</span>почти</span>
+  <span><span class="badge2 b-bad">&lt;70%</span>сильно ниже</span>
+  <span><span class="badge2 b-none">·</span>не работал</span>
+  <span class="text-muted small">Выходные подсвечены красным в шапке дней. Клетки без плана не окрашиваются.</span>
+</div>
+
+<div class="card p-3 mb-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <div style="max-width:70ch">
+      <b>Данные за прошлые даты.</b>
+      <span class="text-muted small">Кто упаковывал и собирал, программа записывает только с момента обновления. Историю можно
+      восстановить приблизительно — по автору документа приёмки, размещения и перемещения (если документ вели несколько человек, всё
+      запишется на автора). Настоящие записи при этом не затрагиваются.
+      {% if history_events %}<br><b>В выбранном периоде есть восстановленные (приблизительные) данные: {{ history_events }} записей.</b>{% endif %}</span>
+    </div>
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('production.employee_output_backfill') }}"
+          onsubmit="return confirm('Восстановить историю выработки по авторам документов? Прежнее восстановление будет заменено.');">
+      <button type="submit" class="btn btn-outline-secondary">Подтянуть историю (приблизительно)</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<script type="application/json" id="eo-data">{{ payload | tojson }}</script>
+
+<h5 class="mb-2">Планы</h5>
+<div class="row g-3 mb-4">
+  <div class="col-lg-7">
+    <form method="post" action="{{ url_for('production.employee_output_save_plans') }}" class="card p-3 h-100">
+      <input type="hidden" name="date_from" value="{{ date_from.isoformat() }}">
+      <input type="hidden" name="date_to" value="{{ date_to.isoformat() }}">
+      <input type="hidden" name="user_id" value="{{ user_id or '' }}">
+      <div class="fw-semibold">План по умолчанию на рабочий день</div>
+      <div class="text-muted small mb-2">Пусто — плана нет. Действует на все дни, где нет плана на конкретную дату.</div>
+      <div class="table-responsive" style="max-height:320px;overflow:auto">
+      <table class="table table-sm align-middle mb-0">
+        <thead>
+          <tr class="small text-muted"><th>Сотрудник</th>
+            <th class="text-end">Упак., шт</th><th class="text-end">Упак., кор.</th><th class="text-end">Сборка, кор.</th></tr>
+        </thead>
+        <tbody>
+        {% for u in users %}
+          {% set pk = defaults.get(('pack', u.id)) %}
+          {% set pc = defaults.get(('pick', u.id)) %}
+          <tr>
+            <td>{{ u.display_name() }}</td>
+            {% if current_user.is_admin %}
+            <td style="width:96px"><input type="number" min="0" step="1" class="form-control form-control-sm text-end" name="def__pack__{{ u.id }}__qty" value="{{ pk.qty_plan | int if pk and pk.qty_plan is not none else '' }}"></td>
+            <td style="width:96px"><input type="number" min="0" step="1" class="form-control form-control-sm text-end" name="def__pack__{{ u.id }}__boxes" value="{{ pk.boxes_plan if pk and pk.boxes_plan is not none else '' }}"></td>
+            <td style="width:96px"><input type="number" min="0" step="1" class="form-control form-control-sm text-end" name="def__pick__{{ u.id }}__boxes" value="{{ pc.boxes_plan if pc and pc.boxes_plan is not none else '' }}"></td>
+            {% else %}
+            <td class="text-end">{{ pk.qty_plan | int if pk and pk.qty_plan is not none else '—' }}</td>
+            <td class="text-end">{{ pk.boxes_plan if pk and pk.boxes_plan is not none else '—' }}</td>
+            <td class="text-end">{{ pc.boxes_plan if pc and pc.boxes_plan is not none else '—' }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% if current_user.is_admin %}
+      <div class="mt-2"><button type="submit" class="btn btn-primary btn-sm">💾 Сохранить план</button></div>
+      {% endif %}
+    </form>
+  </div>
+
+  {% if current_user.is_admin %}
+  <div class="col-lg-5">
+    <form method="post" action="{{ url_for('production.employee_output_save_plans') }}" class="card p-3 h-100">
+      <input type="hidden" name="date_from" value="{{ date_from.isoformat() }}">
+      <input type="hidden" name="date_to" value="{{ date_to.isoformat() }}">
+      <input type="hidden" name="user_id" value="{{ user_id or '' }}">
+      <div class="fw-semibold">План на конкретный день</div>
+      <div class="text-muted small mb-2">Перекрывает план по умолчанию. Оба поля пустые — план на этот день снимается.</div>
+      <div class="row g-2">
+        <div class="col-12">
+          <select name="one_user" class="form-select form-select-sm" required>
+            <option value="">Сотрудник…</option>
+            {% for u in users %}<option value="{{ u.id }}">{{ u.display_name() }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="col-6">
+          <select name="one_kind" class="form-select form-select-sm">
+            <option value="pack">Упаковка</option><option value="pick">Сборка</option>
+          </select>
+        </div>
+        <div class="col-6"><input type="date" name="one_date" class="form-control form-control-sm" value="{{ date_to.isoformat() }}" required></div>
+        <div class="col-6"><input type="number" min="0" step="1" name="one_qty" class="form-control form-control-sm" placeholder="Товаров, шт"></div>
+        <div class="col-6"><input type="number" min="0" step="1" name="one_boxes" class="form-control form-control-sm" placeholder="Коробов"></div>
+        <div class="col-12"><button type="submit" class="btn btn-outline-primary btn-sm">Задать план на день</button></div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("eo-data").textContent);
+  var dates = D.dates.map(function (s) { var p = s.split("-"); return { iso: s, d: new Date(+p[0], +p[1] - 1, +p[2]) }; });
+  var MODES = {
+    pack: { main: 0, mainUnit: "шт", sec: 1, secUnit: "кор.", mainName: "товаров" },
+    pick: { main: 1, mainUnit: "кор.", sec: 0, secUnit: "шт", mainName: "коробов" }
+  };
+  var fmt = function (n) { return Math.round(n).toLocaleString("ru-RU"); };
+  var dd = function (d) { return ("0" + d.getDate()).slice(-2) + "." + ("0" + (d.getMonth() + 1)).slice(-2); };
+  var isWe = function (d) { return d.getDay() === 0 || d.getDay() === 6; };
+  var pct = function (v, p) { return p ? Math.round(v / p * 100) : null; };
+  var cls = function (p) { return p === null ? "b-none" : p >= 100 ? "b-good" : p >= 70 ? "b-warn" : "b-bad"; };
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+
+  function planFor(mode, uid, iso, m) {
+    var pl = (D.plans[mode] || {})[uid];
+    if (!pl) return null;
+    var v = null;
+    if (pl.days && pl.days[iso]) v = pl.days[iso][m.main];
+    if ((v === null || v === undefined) && pl.def) v = pl.def[m.main];
+    return v === undefined ? null : v;
+  }
+  function niceMax(v) { if (v <= 0) return 10; var p = Math.pow(10, Math.floor(Math.log10(v))), n = v / p;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; }
+
+  function renderPanel(mode) {
+    var root = document.getElementById("p-" + mode), slot = function (n) { return root.querySelector('[data-slot="' + n + '"]'); };
+    var m = MODES[mode], byUser = D.data[mode] || {};
+    var uids = Object.keys(byUser).sort(function (a, b) { return D.users[a].localeCompare(D.users[b], "ru"); });
+    var perDay = dates.map(function () { return { sum: 0, plan: 0, who: [] }; });
+    var perEmp = uids.map(function (uid) {
+      var s = { uid: uid, name: D.users[uid], sum: 0, sec: 0, work: 0, planDay: null };
+      dates.forEach(function (day, i) {
+        var c = byUser[uid][day.iso]; if (!c) return;
+        var plan = planFor(mode, uid, day.iso, m), v = c[m.main];
+        s.sum += v; s.sec += c[m.sec]; s.work++;
+        if (plan) { s.planDay = plan; perDay[i].plan += plan; s.planSum = (s.planSum || 0) + plan; s.planFact = (s.planFact || 0) + v; }
+        perDay[i].sum += v; perDay[i].who.push([s.name, v]);
+      });
+      s.avg = s.work ? s.sum / s.work : 0;
+      return s;
+    });
+    var total = perEmp.reduce(function (a, s) { return a + s.sum; }, 0);
+    var workDays = perDay.filter(function (d) { return d.sum > 0; }).length;
+    var empDays = perEmp.reduce(function (a, s) { return a + s.work; }, 0);
+    var avgEmp = empDays ? total / empDays : 0;
+    var planTotal = perEmp.reduce(function (a, s) { return a + (s.planSum || 0); }, 0);
+    var planFact = perEmp.reduce(function (a, s) { return a + (s.planFact || 0); }, 0);
+    var planPct = pct(planFact, planTotal);
+    var withPlan = perEmp.filter(function (s) { return s.planDay; });
+    var avgPlan = withPlan.length ? withPlan.reduce(function (a, s) { return a + s.planDay; }, 0) / withPlan.length : null;
+
+    slot("kpis").innerHTML =
+      '<div class="kpi hero"><div class="lab">Среднее на сотрудника в день</div><div class="val">' + fmt(avgEmp) + '<small>' + m.mainUnit + '</small></div><div class="note">' + (avgPlan ? 'план ~' + fmt(avgPlan) : 'план не задан') + '</div></div>' +
+      '<div class="kpi"><div class="lab">Всего за период</div><div class="val">' + fmt(total) + '<small>' + m.mainUnit + '</small></div><div class="note">' + workDays + ' раб. дн.</div></div>' +
+      '<div class="kpi"><div class="lab">Выполнение плана</div><div class="val">' + (planPct === null ? "—" : planPct + "%") + '</div><div class="note">' + (planTotal ? 'из ' + fmt(planTotal) + ' ' + m.mainUnit : '—') + '</div></div>';
+
+    var W = 560, H = 200, L = 40, R = 8, T = 8, B = 24, iw = W - L - R, ih = H - T - B;
+    var maxV = Math.max.apply(null, perDay.map(function (d) { return Math.max(d.sum, d.plan); }).concat([1]));
+    var top = niceMax(maxV * 1.05), y = function (v) { return T + ih - v / top * ih; };
+    var n = dates.length, step = iw / n, bw = Math.min(26, step * 0.62), s = "", every = n > 16 ? Math.ceil(n / 12) : (n > 8 ? 2 : 1);
+    for (var k = 0; k <= 3; k++) { var v = top / 3 * k, yy = y(v);
+      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '" stroke="var(--eo-grid)"/><text x="' + (L - 6) + '" y="' + (yy + 4) + '" text-anchor="end">' + fmt(v) + '</text>'; }
+    dates.forEach(function (day, i) {
+      var cx = L + step * i + step / 2, x = cx - bw / 2, h = perDay[i].sum / top * ih, yTop = y(perDay[i].sum);
+      if (h > 0) { var r = Math.min(3, h);
+        s += '<path d="M' + x + ' ' + (T + ih) + ' V' + (yTop + r) + ' Q' + x + ' ' + yTop + ' ' + (x + r) + ' ' + yTop + ' H' + (x + bw - r) + ' Q' + (x + bw) + ' ' + yTop + ' ' + (x + bw) + ' ' + (yTop + r) + ' V' + (T + ih) + ' Z" fill="var(--eo-accent)" opacity="' + (isWe(day.d) ? .65 : 1) + '"/>'; }
+      if (i % every === 0) s += '<text x="' + cx + '" y="' + (H - 7) + '" text-anchor="middle"' + (isWe(day.d) ? ' style="fill:var(--eo-bad)"' : '') + '>' + dd(day.d) + '</text>';
+      if (perDay[i].plan) { var yp = y(perDay[i].plan); s += '<line x1="' + (L + step * i + step * .08) + '" x2="' + (L + step * (i + 1) - step * .08) + '" y1="' + yp + '" y2="' + yp + '" stroke="var(--eo-plan)" stroke-width="2" stroke-dasharray="4 3"/>'; }
+    });
+    var avgDay = workDays ? total / workDays : 0, ya = y(avgDay);
+    s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + ya + '" y2="' + ya + '" stroke="var(--eo-ink2)" stroke-width="1.5" stroke-dasharray="1.5 4" stroke-linecap="round"/>';
+    dates.forEach(function (day, i) { s += '<rect data-i="' + i + '" x="' + (L + step * i) + '" y="' + T + '" width="' + step + '" height="' + ih + '" fill="transparent"/>'; });
+    var svg = slot("chart"); svg.setAttribute("viewBox", "0 0 " + W + " " + H); svg.innerHTML = s;
+    var tip = slot("tip"), box = slot("chartbox");
+    svg.onpointermove = function (ev) {
+      var t = ev.target; if (!t.dataset || t.dataset.i === undefined) { tip.hidden = true; return; }
+      var i = +t.dataset.i, p = perDay[i], rows = p.who.slice().sort(function (a, b) { return b[1] - a[1]; }).slice(0, 3);
+      tip.innerHTML = '<b>' + dd(dates[i].d) + (isWe(dates[i].d) ? ' · выходной' : '') + '</b><div class="r"><span>Факт</span><span>' + fmt(p.sum) + ' ' + m.mainUnit + '</span></div><div class="r"><span>План</span><span>' + (p.plan ? fmt(p.plan) + ' (' + pct(p.sum, p.plan) + '%)' : '—') + '</span></div>' +
+        (rows.length ? '<div style="margin-top:4px;opacity:.8">' + rows.map(function (r) { return esc(r[0]) + ' — ' + fmt(r[1]); }).join('<br>') + '</div>' : '');
+      tip.hidden = false; var br = box.getBoundingClientRect(), x = ev.clientX - br.left + 14;
+      if (x + 180 > br.width) x = ev.clientX - br.left - 190;
+      tip.style.left = Math.max(0, x) + "px"; tip.style.top = Math.max(0, ev.clientY - br.top - 10) + "px";
+    };
+    svg.onpointerleave = function () { tip.hidden = true; };
+
+    var rows = perEmp.slice().sort(function (a, b) { return b.avg - a.avg; });
+    var mx = Math.max.apply(null, rows.map(function (r) { return Math.max(r.avg, r.planDay || 0); }).concat([1])) * 1.05;
+    slot("rankSub").textContent = "Светлая метка — план";
+    slot("rank").innerHTML = rows.map(function (r) { var p = pct(r.avg, r.planDay);
+      return '<div class="rrow"><span class="rname" title="' + esc(r.name) + '">' + esc(r.name) + '</span><span class="track"><span class="fill" style="width:' + (r.avg / mx * 100) + '%"></span>' + (r.planDay ? '<span class="ptick" style="left:' + (r.planDay / mx * 100) + '%"></span>' : '') + '</span><span class="num">' + fmt(r.avg) + '</span><span class="num"><span class="badge2 ' + cls(p) + '" style="min-width:46px">' + (p === null ? "—" : p + "%") + '</span></span></div>'; }).join("") || '<div class="text-muted small">Нет данных за выбранный период</div>';
+
+    if (!perEmp.length) { slot("matrix").innerHTML = '<tbody><tr><td class="c-none" style="min-width:0;padding:8px">Нет данных за выбранный период</td></tr></tbody>'; return; }
+    var h = '<thead><tr><th></th>' + dates.map(function (day) { return '<th class="' + (isWe(day.d) ? 'we' : '') + '">' + ("0" + day.d.getDate()).slice(-2) + '</th>'; }).join("") + '</tr></thead><tbody>';
+    perEmp.forEach(function (s2) {
+      h += '<tr><th class="rowh" title="' + esc(s2.name) + '">' + esc(s2.name) + '</th>' + dates.map(function (day) {
+        var c = byUser[s2.uid][day.iso]; if (!c) return '<td class="c-none">·</td>';
+        var plan = planFor(mode, s2.uid, day.iso, m), p = pct(c[m.main], plan);
+        return '<td class="' + (p === null ? "c-none" : p >= 100 ? "c-good" : p >= 70 ? "c-warn" : "c-bad") + '" title="' + dd(day.d) + (p === null ? '' : ' · ' + p + '% плана') + '">' + fmt(c[m.main]) + '</td>'; }).join("") + '</tr>';
+    });
+    slot("matrix").innerHTML = h + '</tbody>';
+  }
+  renderPanel("pack"); renderPanel("pick");
+})();
+</script>
+{% endblock %}
