@@ -175,6 +175,8 @@
         <td>
           <a href="{{ url_for('boxes.detail', box_id=box.id) }}">{{ box.box_number }}</a>
           <span class="badge badge-status-{{ box.status }}">{{ 'Расставлен' if box.status == 'stored' else 'Открыт' }}</span>
+          {% set receivers = receivers_by_box.get(box.id, []) %}
+          {% if receivers %}<div class="small text-muted">{{ 'Принимал' if receivers|length == 1 else 'Принимали' }}: {% for user in receivers %}{{ user.display_name() }}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
         </td>
         <td>
           {% if not (active_box and box.id == active_box.id) %}
@@ -194,6 +196,8 @@
           <a href="{{ url_for('boxes.detail', box_id=box.id) }}" class="fw-bold text-decoration-none">{{ box.box_number }}</a>
           <span class="badge badge-status-{{ box.status }}">{{ 'Расставлен' if box.status == 'stored' else 'Открыт' }}</span>
         </div>
+        {% set receivers = receivers_by_box.get(box.id, []) %}
+        {% if receivers %}<div class="small text-muted mt-1">{{ 'Принимал' if receivers|length == 1 else 'Принимали' }}: {% for user in receivers %}{{ user.display_name() }}{% if not loop.last %}, {% endif %}{% endfor %}</div>{% endif %}
         <div class="d-flex gap-2 mt-1">
           {% if not (active_box and box.id == active_box.id) %}
           <a class="btn btn-sm btn-outline-primary" href="{{ url_for('receiving.detail', doc_id=doc.id, box=box.id) }}">Сканировать сюда</a>

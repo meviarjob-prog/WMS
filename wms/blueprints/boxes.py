@@ -2,13 +2,39 @@ from flask import Blueprint, Response, abort, flash, redirect, render_template, 
 from flask_login import current_user
 
 from ..extensions import db
-from ..models import Box, BoxItem, Nomenclature, Warehouse
+from ..models import Box, BoxItem, Nomenclature, ReceivingLine, User, Warehouse
 from ..utils.excel_io import export_boxes_to_excel, timestamp_for_filename
 from ..utils.http import content_disposition
 from ..utils.numbering import next_number
 from .movement import flag_movement_dirty_for_box
 
 bp = Blueprint("boxes", __name__)
+
+
+def _receivers_by_box(box_ids):
+    """Фактические приемщики коробов одним групповым запросом."""
+    if not box_ids:
+        return {}
+    pairs = (
+        db.session.query(ReceivingLine.box_id, ReceivingLine.received_by_id)
+        .filter(
+            ReceivingLine.box_id.in_(box_ids),
+            ReceivingLine.received_by_id.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+    user_ids = {user_id for _box_id, user_id in pairs}
+    users = User.query.filter(User.id.in_(user_ids)).all() if user_ids else []
+    users_by_id = {user.id: user for user in users}
+    result = {}
+    for box_id, user_id in pairs:
+        user = users_by_id.get(user_id)
+        if user:
+            result.setdefault(box_id, []).append(user)
+    for box_users in result.values():
+        box_users.sort(key=lambda user: user.display_name().lower())
+    return result
 
 
 @bp.route("/")
@@ -54,6 +80,7 @@ def list_boxes():
         warehouse_id=warehouse_id,
         query_text=query_text,
         item_counts=item_counts,
+        receivers_by_box=_receivers_by_box(box_ids),
     )
 
 
@@ -88,7 +115,8 @@ def detail(box_id):
     if current_user.is_fulfillment_only() and box.warehouse_id != current_user.warehouse_id:
         abort(404)
     items = box.items.all()
-    return render_template("boxes/detail.html", box=box, items=items)
+    receivers = _receivers_by_box([box.id]).get(box.id, [])
+    return render_template("boxes/detail.html", box=box, items=items, receivers=receivers)
 
 
 @bp.route("/<int:box_id>/items/add", methods=["POST"])

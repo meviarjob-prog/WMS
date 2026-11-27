@@ -16,6 +16,10 @@
   {% if box.last_scanned_at %}
     · Последнее сканирование: {{ (box.last_scanned_at|msk).strftime('%d.%m.%Y %H:%M') }}{% if box.last_scanned_by %} ({{ box.last_scanned_by.display_name() }}){% endif %}
   {% endif %}
+  {% if receivers %}
+    · {{ 'Принимал' if receivers|length == 1 else 'Принимали' }}:
+    {% for user in receivers %}{{ user.display_name() }}{% if not loop.last %}, {% endif %}{% endfor %}
+  {% endif %}
 </div>
 
 <div class="mb-4">

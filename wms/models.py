@@ -883,6 +883,11 @@ class ReceivingLine(db.Model):
     # и при завершении приемки НЕ уходит в неразмещенный остаток. Пусто —
     # обычная приемка "по количеству", разместить в короб позже вручную.
     box_id = db.Column(db.Integer, db.ForeignKey("boxes.id"), nullable=True)
+    # Фактический сотрудник, который принял эту позицию. Это не обязательно
+    # автор документа: приемку по накладной или приемку фулфилмента могут
+    # вести несколько сотрудников. Для строк, сразу уложенных в короб,
+    # поле позволяет точно показать, кто принимал конкретный короб.
+    received_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
     # Заполняется только при создании строки из накладной (см.
     # receiving.import_invoice) — сколько заявлено поставщиком, для
     # сравнения при приемке. NULL — строка добавлена вручную/сканированием,
@@ -917,6 +922,7 @@ class ReceivingLine(db.Model):
 
     nomenclature = db.relationship("Nomenclature")
     box = db.relationship("Box")
+    received_by = db.relationship("User", foreign_keys=[received_by_id])
 
     def good_qty(self):
         return max(self.qty - (self.defect_qty or 0), 0)

@@ -27,7 +27,7 @@ def test_repeated_add_request_does_not_duplicate_receiving_line(db, client_logge
     assert lines[0].qty == 4
 
 
-def test_repeated_add_to_box_does_not_increase_box_qty_twice(db, client_logged_in):
+def test_repeated_add_to_box_does_not_increase_box_qty_twice(db, client_logged_in, admin_user):
     warehouse, item, doc = _setup()
     box = Box(box_number="BOX-IDEMP", warehouse_id=warehouse.id, status="open")
     db.session.add(box)
@@ -40,7 +40,13 @@ def test_repeated_add_to_box_does_not_increase_box_qty_twice(db, client_logged_i
 
     box_item = BoxItem.query.filter_by(box_id=box.id, nomenclature_id=item.id).one()
     assert box_item.qty == 3
-    assert ReceivingLine.query.filter_by(document_id=doc.id).count() == 1
+    line = ReceivingLine.query.filter_by(document_id=doc.id).one()
+    assert line.received_by_id == admin_user.id
+
+    box_html = client_logged_in.get(f"/boxes/{box.id}").get_data(as_text=True)
+    list_html = client_logged_in.get("/boxes/").get_data(as_text=True)
+    assert "Принимал" in box_html and admin_user.display_name() in box_html
+    assert "Принимал" in list_html and admin_user.display_name() in list_html
 
 
 def test_receiving_add_form_blocks_double_submit_in_browser(db, client_logged_in):

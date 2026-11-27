@@ -699,6 +699,12 @@ def detail(doc_id):
     packed_boxes = (
         Box.query.filter(Box.id.in_(packed_box_ids)).all() if packed_box_ids else []
     )
+    receivers_by_box = {}
+    for line in lines:
+        if line.box_id and line.received_by:
+            users = receivers_by_box.setdefault(line.box_id, [])
+            if all(user.id != line.received_by.id for user in users):
+                users.append(line.received_by)
 
     warehouses = _receiving_warehouses()
 
@@ -708,6 +714,7 @@ def detail(doc_id):
         lines=lines,
         active_box=active_box,
         packed_boxes=packed_boxes,
+        receivers_by_box=receivers_by_box,
         warehouses=warehouses,
         add_request_token=secrets.token_urlsafe(24),
     )
@@ -742,6 +749,7 @@ def _add_or_increment_line(doc, nomenclature, qty, request_token=None):
         document_id=doc.id,
         nomenclature_id=nomenclature.id,
         qty=qty,
+        received_by_id=current_user.id,
         request_token=request_token or None,
     )
     db.session.add(line)
@@ -840,6 +848,7 @@ def _receive_item_into_box(doc, box, item, qty, request_token=None):
         nomenclature_id=item.id,
         qty=qty,
         box_id=box.id,
+        received_by_id=current_user.id,
         request_token=request_token or None,
     )
     db.session.add(line)

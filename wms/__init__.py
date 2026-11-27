@@ -130,6 +130,23 @@ def _ensure_columns():
                             )
                         )
                     print("[schema] boxes.warehouse_arrived_at заполнен из created_at для уже существующих коробов")
+                if table.name == "receiving_lines" and column.name == "received_by_id":
+                    # До появления точной отметки сотрудника в строке
+                    # приемки сохранялся только автор документа. Для старых
+                    # строк в коробах это наиболее надежный доступный источник.
+                    # Новые строки получают фактического пользователя прямо
+                    # в receiving._receive_item_into_box.
+                    with db.engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                "UPDATE receiving_lines SET received_by_id = ("
+                                "SELECT receiving_documents.created_by_id "
+                                "FROM receiving_documents "
+                                "WHERE receiving_documents.id = receiving_lines.document_id"
+                                ") WHERE box_id IS NOT NULL AND received_by_id IS NULL"
+                            )
+                        )
+                    print("[schema] receiving_lines.received_by_id восстановлен по автору приемки")
                 if table.name == "users" and column.name == "nomenclature_edit_allowed":
                     # ALTER TABLE ADD COLUMN не проставляет DEFAULT задним
                     # числом — у уже существующих пользователей колонка
